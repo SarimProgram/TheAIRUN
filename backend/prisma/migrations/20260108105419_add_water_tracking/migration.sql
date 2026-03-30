@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "DailySummary" ADD COLUMN     "waterMl" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "waterTarget" INTEGER NOT NULL DEFAULT 2000;

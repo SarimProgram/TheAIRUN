@@ -1,0 +1,5 @@
+-- CreateEnum
+CREATE TYPE "RunStatus" AS ENUM ('NOT_SCHEDULED', 'PENDING', 'ATTEMPTED', 'COMPLETED', 'MISSED');
+
+-- AlterTable
+ALTER TABLE "DailySummary" ADD COLUMN     "runStatus" "RunStatus" NOT NULL DEFAULT 'NOT_SCHEDULED';

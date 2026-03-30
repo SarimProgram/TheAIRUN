@@ -1,0 +1,875 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MealType {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACK
+}
+
+enum BillingAccessStatus {
+  NONE
+  TRIAL_ACTIVE
+  TRIAL_EXPIRED
+  PREMIUM_ACTIVE
+  PREMIUM_GRACE
+  MANUAL_OVERRIDE
+}
+
+enum BillingPlatform {
+  IOS
+  ANDROID
+  UNKNOWN
+}
+
+model MealLog {
+  id            String    @id @default(uuid())
+  user          User      @relation(fields: [userId], references: [id])
+  userId        String
+  clientMealId  String?
+
+  mealType      MealType
+  loggedAt      DateTime  @default(now())
+
+  inputText     String?
+  hadImage      Boolean   @default(false)
+
+  totalCalories Int       @default(0)
+  totalProteinG Float?
+  totalCarbsG   Float?
+  totalFatG     Float?
+
+  modelName     String?
+  confidence    Float?
+
+  items         MealItem[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId, loggedAt])
+  @@unique([userId, clientMealId])
+}
+
+model MealItem {
+  id          String   @id @default(uuid())
+  meal        MealLog  @relation(fields: [mealId], references: [id])
+  mealId      String
+
+  foodName    String
+  servingQty  Float?
+  servingUnit String?
+  grams       Float?
+
+  calories    Int
+  proteinG    Float?
+  carbsG      Float?
+  fatG        Float?
+
+  confidence  Float?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([mealId])
+}
+
+enum GoalType {
+  WEIGHT_LOSS
+  ENDURANCE
+  MAINTENANCE
+}
+
+enum TimeHorizon {
+  RELAXED
+  STANDARD
+  AGGRESSIVE
+  SPECIFIC_DATE
+}
+
+enum ActivityPreference {
+  MOSTLY_WALKING
+  WALKING_RUNNING
+  MOSTLY_RUNNING
+}
+
+enum IntensityLevel {
+  STEADY
+  ACTIVE
+  PRO
+}
+
+model UserPlan {
+  id                  String             @id @default(uuid())
+  user                User               @relation(fields: [userId], references: [id])
+  userId              String             @unique
+  
+  // Basics collected in step 1
+  weightKg            Float
+  heightCm            Int
+  ageYears            Int
+  
+  // Goal selected in step 2
+  goalType            GoalType
+  
+  // Weight Loss specific (Path A) - optional
+  targetWeightKg      Float?
+  weightToLoseKg      Float?
+  timeHorizon         TimeHorizon?
+  targetDate          DateTime?
+  activityPreference  ActivityPreference?
+  
+  // Strategy from step 3
+  intensityLevel      IntensityLevel     @default(ACTIVE)
+  availableDays       Json?
+  
+  // Generated plan output (shown in summary)
+  dailyCalorieTarget  Int?
+  dailyActivityMins   Int?
+
+  // Running Branch Specifics
+  runGoal             String?     // 5k, 10k, halfMarathon, speedImprovement
+  runExperience       String?     // beginner, intermediate, advanced
+  runDietFocus        String?     // performance, weightloss
+  runPriority         String?     // faster, longer, form
+  runRaceDate         DateTime?
+  hasRaceGoal         Boolean?    @default(false)
+
+  // Weight Branch Specifics
+  bodyType            String?     // hourglass, pear, apple, athletic
+  trainingStyle       String?     // walkOnly, runOnly, walkAndRun
+  
+  // Current week tracking (resets when new plan generated)
+  currentWeek         Int              @default(1)
+  weekStartedAt       DateTime         @default(now())
+  
+  // Generated weekly plans from AI
+  weeklyPlans         GeneratedWeekPlan[]
+  
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+}
+
+model GeneratedWeekPlan {
+  id             String   @id @default(cuid())
+  userPlanId     String
+
+  week           Int
+  caloriesPerDay Int
+  proteinPerDay  Int
+  stepsPerDay    Int
+  runKmPerWeek   Float
+  expectedWeight Float
+  weekName       String
+
+  // ✅ JSON storage for Week Dailys metadata
+  weekDailys     Json?
+
+  // Generated daily targets
+  dailyTargets   DailyTarget[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userPlan       UserPlan @relation(fields: [userPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([userPlanId, week])
+}
+
+enum DayType {
+  STEP
+  RUN
+  RECOVERY
+}
+
+model DailyTarget {
+  id              String   @id @default(cuid())
+  weekPlanId      String
+  weekPlan        GeneratedWeekPlan @relation(fields: [weekPlanId], references: [id], onDelete: Cascade)
+  
+  dayOfWeek       Int      // 0=Mon, 1=Tue, ... 6=Sun
+  dayType         DayType
+  
+  // Targets for this day
+  calorieTarget   Int
+  proteinTarget   Int
+  stepsTarget     Int
+  runKm           Float    @default(0)  // 0 if not a run day
+  runType         String?  // "Easy Run", "Long Run", etc.
+  
+  // Time-of-day step breakdown (targets)
+  morningSteps    Int      @default(0)
+  eveningSteps    Int      @default(0)
+  nightSteps      Int      @default(0)
+  
+  // Step completion tracking (current progress)
+  morningCompleted Int     @default(0)
+  eveningCompleted Int     @default(0)
+  nightCompleted   Int     @default(0)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@unique([weekPlanId, dayOfWeek])
+  @@index([weekPlanId])
+}
+
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String?
+  googleSub    String?  @unique
+  appleSub     String?  @unique
+  displayName  String
+  
+  // Partner connection (one-to-one, bidirectional)
+  partnerId    String?  @unique
+  partner      User?    @relation("PartnerLink", fields: [partnerId], references: [id])
+  linkedBy     User?    @relation("PartnerLink")
+
+  age       Int?
+  gender    String?
+  heightCm  Int?
+  weightKg  Float?
+  timezone  String?  @default("UTC")
+  units     String?  @default("metric")
+
+  goalType   String?
+  goalTarget Float?
+  goalStart  Float?
+  goalUnit   String?
+
+  // Imperial unit fields
+  heightFt      Int?
+  heightIn      Int?
+  weightLbs     Float?
+  goalTargetLbs Float?
+  goalStartLbs  Float?
+  
+  // Running baseline pace (seconds per km) from onboarding
+  baselinePaceSecPerKm Int?
+  expoPushToken        String?
+  expoPushTokenUpdatedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  dailySteps DailyStep[]
+  meals MealLog[]
+  
+  // Partner invitations
+  invitesSent     PartnerInvite[] @relation("InvitesSent")
+  invitesReceived PartnerInvite[] @relation("InvitesReceived")
+  
+  // Fitness plan
+  plan            UserPlan?
+  
+  // Training plans (generated run sessions)
+  trainingPlans   TrainingPlan[]
+
+  dailySummaries  DailySummary[]
+  workoutSessions WorkoutSession[]
+  
+  // Points for marketplace
+  points          UserPoints?
+  walletItems     WalletItem[]
+  createdMarketplaceItems MarketplaceItem[] @relation("MarketplaceItemCreator")
+  
+  // Quests
+  userQuests      UserQuest[]
+  
+  // Weight tracking history
+  weightHistory   WeightHistory[]
+  
+  // Daily points tracking (per category per day)
+  dailyPointsLedger DailyPointsLedger[]
+  
+  // Scheduled runs (RunTogether)
+  scheduledRunsSent      RunTogether[] @relation("ScheduledRunsSent")
+  scheduledRunsReceived  RunTogether[] @relation("ScheduledRunsReceived")
+  raceHistoryAsUserA     RaceResult[]  @relation("RaceResultUserA")
+  raceHistoryAsUserB     RaceResult[]  @relation("RaceResultUserB")
+  racesWon              RaceResult[]  @relation("RaceResultWinner")
+  
+  // Chat messages
+  messagesSent      ChatMessage[] @relation("MessagesSent")
+  messagesReceived  ChatMessage[] @relation("MessagesReceived")
+  
+  // Wagers
+  wagersSent      Wager[] @relation("WagersSent")
+  wagersReceived  Wager[] @relation("WagersReceived")
+
+  // Billing / paywall
+  billingProfile       BillingProfile?
+  billingWebhookEvents BillingWebhookEvent[]
+  onboardingRewardPreference OnboardingRewardPreference?
+}
+
+model BillingProfile {
+  id                     String            @id @default(uuid())
+  user                   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                 String            @unique
+  revenueCatAppUserId    String            @unique
+
+  trialStartedAt         DateTime?
+  trialEndsAt            DateTime?
+  trialConsumed          Boolean           @default(false)
+
+  premiumEntitlementActive Boolean         @default(false)
+  premiumAccessStatus    BillingAccessStatus @default(NONE)
+  premiumProductId       String?
+  premiumPlatform        BillingPlatform?
+  premiumPurchasedAt     DateTime?
+  premiumExpiresAt       DateTime?
+  premiumWillRenew       Boolean?
+  premiumIsLifetime      Boolean           @default(false)
+  gracePeriodEndsAt      DateTime?
+
+  lastRevenueCatEventId  String?
+  lastRevenueCatEventAt  DateTime?
+  lastSyncedAt           DateTime?
+
+  manualAccessOverride   Boolean           @default(false)
+  manualOverrideEndsAt   DateTime?
+
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  @@index([premiumAccessStatus])
+  @@index([trialEndsAt])
+}
+
+model BillingWebhookEvent {
+  id              String   @id @default(uuid())
+  provider        String
+  externalEventId String   @unique
+  eventType       String
+  appUserId       String?
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  payload         Json
+  processed       Boolean  @default(false)
+  processedAt     DateTime?
+  processingError String?
+  createdAt       DateTime @default(now())
+
+  @@index([provider, createdAt])
+  @@index([userId])
+  @@index([appUserId])
+}
+
+// ============================================
+// WEIGHT HISTORY - Track user weight logs
+// ============================================
+model WeightHistory {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  
+  weightKg  Float
+  loggedAt  DateTime @default(now())
+  
+  createdAt DateTime @default(now())
+  
+  @@index([userId, loggedAt])
+}
+
+model DailyStep {
+  id        Int      @id @default(autoincrement())
+  user      User   @relation(fields: [userId], references: [id])
+  userId    String
+  date      DateTime
+  steps     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+}
+
+// Track processed step sync events for idempotent deduplication
+model StepSyncEvent {
+  id        String   @id @default(uuid())
+  eventId   String   // UUID from client, used for dedupe
+  userId    String
+  dayKey    String   // YYYY-MM-DD from client's local timezone
+  delta     Int
+  createdAt DateTime @default(now())
+
+  @@unique([userId, eventId]) // Prevent duplicate processing
+  @@index([userId, dayKey])
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+model PartnerInvite {
+  id          String       @id @default(uuid())
+  
+  fromUser    User         @relation("InvitesSent", fields: [fromUserId], references: [id])
+  fromUserId  String
+  
+  toEmail     String       // Email of person being invited
+  toUser      User?        @relation("InvitesReceived", fields: [toUserId], references: [id])
+  toUserId    String?      // Set once they register/login
+  
+  status      InviteStatus @default(PENDING)
+  
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([fromUserId, toEmail])
+  @@index([toEmail])
+  @@index([toUserId, status])
+}
+
+// ============================================
+// RUN STATUS - Track run completion per day
+// ============================================
+enum RunStatus {
+  NOT_SCHEDULED   // Not a run day
+  PENDING         // Run day, hasn't happened yet (future or today)
+  ATTEMPTED       // User started a run but didn't hit target
+  COMPLETED       // User completed the run target
+  MISSED          // Run day passed without any attempt
+}
+
+// ============================================
+// DAILY SUMMARY - Dashboard data for each day
+// ============================================
+model DailySummary {
+  id              String   @id @default(uuid())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+
+  dayKey          String   // YYYY-MM-DD in user's local timezone
+  timezone        String?  // Snapshot of user's timezone when created
+
+  // ---- TARGET SNAPSHOTS (from plan) ----
+  calorieTarget   Int      @default(0)
+  proteinTarget   Int      @default(0)
+  stepsTarget     Int      @default(0)
+  runKmTarget     Float    @default(0)
+
+  // ---- INTAKE (from meals) ----
+  consumedCalories Int     @default(0)
+  proteinG        Float    @default(0)
+  carbsG          Float    @default(0)
+  fatG            Float    @default(0)
+
+  // ---- ACTIVITY ----
+  steps           Int      @default(0)
+  activeCalories  Int      @default(0)    // Burned from exercise
+  exerciseMinutes Int      @default(0)
+  distanceKm      Float    @default(0)
+
+  // ---- ENERGY MATH ----
+  restingCalories Int      @default(0)    // BMR for the day
+  totalBurnedCalories Int  @default(0)    // resting + active
+  caloriesRemaining Int    @default(0)    // target - consumed (+ activeCalories if credit)
+
+  // ---- NET BALANCE ----
+  netCalories     Int      @default(0)    // consumed - totalBurned (negative = deficit)
+
+  // ---- HYDRATION ----
+  waterMl         Int      @default(0)    // Total ml consumed
+  waterTarget     Int      @default(2000) // Target ml (8 glasses × 250ml)
+  lastWaterAt     DateTime?              // Last time water was logged
+
+  // ---- RUN TRACKING ----
+  runStatus       RunStatus @default(NOT_SCHEDULED)  // Status of scheduled run for this day
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, dayKey])
+  @@index([userId, dayKey])
+}
+
+// ============================================
+// WORKOUT SESSION - Individual workout records
+// ============================================
+enum WorkoutType {
+  RUN
+  WALK
+  INTERVAL
+  GYM
+  CYCLING
+  SWIMMING
+  OTHER
+}
+
+enum WorkoutSource {
+  MANUAL
+  APP_TRACKED     // Tracked via the app's run screen
+  APPLE_HEALTH
+  GOOGLE_FIT
+}
+
+model WorkoutSession {
+  id              String        @id @default(uuid())
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+
+  dayKey          String        // YYYY-MM-DD for quick daily fetch
+  
+  type            WorkoutType
+  source          WorkoutSource @default(MANUAL)
+
+  // ---- SESSION DATA ----
+  title           String?       // "Easy Run", "Morning Walk", etc.
+  caloriesBurned  Int           @default(0)
+  distanceKm      Float         @default(0)
+  durationMinutes Int           @default(0)
+  avgPaceSecPerKm Int?          // For runs
+
+  // ---- TIMING ----
+  startedAt       DateTime
+  endedAt         DateTime?
+
+  // ---- GPS DATA (optional) ----
+  routeJson       Json?         // Store route points if needed
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([userId, dayKey])
+  @@index([userId, startedAt])
+}
+
+// ============================================
+// USER POINTS - Currency for marketplace
+// ============================================
+model UserPoints {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String   @unique
+  
+  balance   Int      @default(0)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+// ============================================
+// DAILY POINTS LEDGER - Track earned points per category per day
+// ============================================
+model DailyPointsLedger {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  
+  dayKey    String   // YYYY-MM-DD in user's local timezone
+  category  String   // "WALK_RUN", "STEPS", "CALORIES", "MOBILITY", "HYDRATION"
+  
+  earnedPoints  Int      // Points awarded for this category this day
+  maxPoints     Int      // Max possible for this category (after normalization)
+  progress      Float    // 0-1 completion when points were awarded
+  
+  awardedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  
+  @@unique([userId, dayKey, category]) // Prevents duplicate awards
+  @@index([userId, dayKey])
+}
+
+// ============================================
+// MARKETPLACE - Store items and user wallet
+// ============================================
+model MarketplaceItem {
+  id        String   @id @default(uuid())
+  title     String
+  description String?
+  cost      Int
+  category  String   // "Romantic", "Fun", "Chore", "Spicy"
+  emoji     String
+  colorFrom String   // Gradient start color
+  colorTo   String   // Gradient end color
+  pairKey   String?
+  isCustom  Boolean  @default(false)
+  source    MarketplaceItemSource @default(DEFAULT)
+  createdByUserId String?
+  createdByUser User? @relation("MarketplaceItemCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  
+  createdAt   DateTime     @default(now())
+  walletItems WalletItem[]
+  
+  @@index([category])
+  @@index([pairKey, isActive])
+  @@index([createdByUserId])
+  @@index([source, pairKey, isActive])
+}
+
+enum MarketplaceItemSource {
+  DEFAULT
+  USER_CUSTOM
+  ONBOARDING
+}
+
+model OnboardingRewardPreference {
+  id            String   @id @default(uuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String   @unique
+  week1RewardId String?
+  week2RewardId String?
+  week3RewardId String?
+  skipped       Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+enum WalletStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+}
+
+model WalletItem {
+  id         String          @id @default(uuid())
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  item       MarketplaceItem @relation(fields: [itemId], references: [id])
+  itemId     String
+  
+  redeemedBy String          // "me" | "partner"
+  status     WalletStatus    @default(ACTIVE)
+  
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  
+  @@index([userId])
+}
+
+
+enum QuestType {
+  DISTANCE        // Run X km
+  TIME            // Run before/after certain time
+  CALORIES        // Burn X calories
+  STREAK          // Complete X days in a row
+  PACE            // Achieve certain pace
+}
+
+enum QuestDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+// Template quests - the 10 available quests in the system
+model Quest {
+  id              String          @id @default(uuid())
+  title           String
+  description     String
+  
+  type            QuestType
+  difficulty      QuestDifficulty @default(EASY)
+  
+  // Requirements
+  targetValue     Float           // Target distance(km), time(minutes), calories, streak days, or pace(sec/km)
+  timeConstraint  String?         // e.g., "before_9am", "after_6pm", "weekend"
+  
+  // Rewards
+  xpReward        Int             @default(50)
+  pointsReward    Int             @default(0)
+  
+  // Duration the quest stays active once assigned
+  durationHours   Int             @default(24)
+  
+  isActive        Boolean         @default(true)
+  sortOrder       Int             @default(0)
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  userQuests      UserQuest[]
+}
+
+enum UserQuestStatus {
+  AVAILABLE       // Quest is assigned and active
+  COMPLETED       // Quest was completed successfully
+  EXPIRED         // Quest expired without completion
+  ABANDONED       // User abandoned the quest
+}
+
+
+model UserQuest {
+  id              String          @id @default(uuid())
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+  quest           Quest           @relation(fields: [questId], references: [id])
+  questId         String
+  
+  status          UserQuestStatus @default(AVAILABLE)
+  
+  // Progress tracking
+  currentProgress Float           @default(0)    // Current value toward target
+  
+  // Timing
+  assignedAt      DateTime        @default(now())
+  expiresAt       DateTime                        // When the quest expires
+  completedAt     DateTime?                       // When user completed it
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@index([userId, status])
+  @@index([userId, expiresAt])
+}
+
+// ============================================
+// SCHEDULED RUNS - Partner run scheduling
+// ============================================
+enum RunTogetherStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+model RunTogether {
+  id             String            @id @default(uuid())
+  
+  // Creator of the scheduled run
+  fromUser       User              @relation("ScheduledRunsSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  fromUserId     String
+  
+  // Partner receiving the invite
+  toUser         User              @relation("ScheduledRunsReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+  toUserId       String
+  
+  // Schedule details
+  scheduledTime  DateTime          // The proposed run time
+  distanceKm     Float             // Race distance in km
+  
+  status         RunTogetherStatus @default(PENDING)
+  
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  
+  @@index([fromUserId, status])
+  @@index([toUserId, status])
+}
+
+model RaceResult {
+  id               String   @id @default(uuid())
+
+  userA            User     @relation("RaceResultUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userAId          String
+  userB            User     @relation("RaceResultUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  userBId          String
+
+  winnerUser       User     @relation("RaceResultWinner", fields: [winnerUserId], references: [id], onDelete: Cascade)
+  winnerUserId     String
+  winnerName       String
+
+  distanceKm       Float
+  durationMs       Int
+  finishedAt       DateTime @default(now())
+
+  createdAt        DateTime @default(now())
+
+  @@index([userAId, finishedAt])
+  @@index([userBId, finishedAt])
+  @@index([winnerUserId, finishedAt])
+}
+
+// ============================================
+// TRAINING PLAN - Generated training plan with sessions
+// ============================================
+model TrainingPlan {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Metadata
+  goal         String   // "5k", "10k", "halfMarathon", "weightLoss"
+  totalWeeks   Int
+  version      Int      @default(1)
+  
+  // Generated plan structure (weeks with sessionIds and targetKm)
+  planJson     Json
+  
+  sessions     RunSession[]
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+// ============================================
+// RUN SESSION - Individual run session with UI steps
+// ============================================
+model RunSession {
+  id           String        @id @default(cuid())
+  planId       String
+  plan         TrainingPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  
+  week         Int
+  dayOfWeek    Int?          // 0=Mon, 1=Tue, ... 6=Sun (optional)
+  runType      String        // "Easy Run", "Long Run", "Interval Run", etc.
+  targetKm     Float
+  
+  // UI-renderable steps array
+  // Each step: { type, label, distanceKm, target: { effort, paceSecPerKm? } }
+  stepsJson    Json
+  
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  
+  @@index([planId, week])
+}
+
+// ============================================
+// CHAT MESSAGES - Real-time partner messaging
+// ============================================
+model ChatMessage {
+  id          String   @id @default(uuid())
+  fromUser    User     @relation("MessagesSent", fields: [fromUserId], references: [id])
+  fromUserId  String
+  toUser      User     @relation("MessagesReceived", fields: [toUserId], references: [id])
+  toUserId    String
+  content     String
+  createdAt   DateTime @default(now())
+
+  @@index([fromUserId, toUserId, createdAt])
+}
+
+// ============================================
+// WAGER - Weekly partner wagers
+// ============================================
+enum WagerStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  DECLINED
+}
+
+model Wager {
+  id          String       @id @default(uuid())
+  fromUser    User         @relation("WagersSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  fromUserId  String
+  toUser      User         @relation("WagersReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+  toUserId    String
+  title       String       // e.g. "Laundry Duty", "Cook Dinner", custom text
+  status      WagerStatus  @default(PENDING)
+  weekStart   DateTime     // Monday 00:00 of the wager week
+  weekEnd     DateTime     // Sunday 23:59 of the wager week
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([fromUserId, status])
+  @@index([toUserId, status])
+}

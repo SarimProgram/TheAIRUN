@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "goalStartLbs" DOUBLE PRECISION,
+ADD COLUMN     "goalTargetLbs" DOUBLE PRECISION,
+ADD COLUMN     "heightFt" INTEGER,
+ADD COLUMN     "heightIn" INTEGER,
+ADD COLUMN     "weightLbs" DOUBLE PRECISION;
