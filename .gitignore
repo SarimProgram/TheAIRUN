@@ -12,8 +12,11 @@ backend/.env
 
 *.p8
 *.ipa
+app/GoogleService-Info.plist
+app/google-services.json
 
 backend/dist/
 app/dist/
 
 .DS_Store
+
