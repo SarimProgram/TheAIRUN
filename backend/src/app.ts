@@ -38,7 +38,7 @@ app.use("/nutrition", authMiddleware, premiumRequired, nutritionRoutes);
 app.use('/profile', authMiddleware, profileRouter);
 app.use('/activity', authMiddleware, premiumRequired, stepsRouter);
 app.use('/partner', authMiddleware, premiumRequired, partnerRouter);
-app.use('/plan', authMiddleware, premiumRequired, planRouter);
+app.use('/plan', authMiddleware, planRouter);
 app.use('/summary', authMiddleware, premiumRequired, summaryRouter);
 app.use('/points', authMiddleware, premiumRequired, pointsRouter);
 app.use('/marketplace', authMiddleware, premiumRequired, marketplaceRouter);
@@ -48,7 +48,7 @@ app.use('/hydration', authMiddleware, premiumRequired, hydrationRouter);
 app.use('/runtogether', authMiddleware, premiumRequired, runtogetherRouter);
 app.use('/training-plan', authMiddleware, premiumRequired, trainingPlanRouter);
 app.use('/wager', authMiddleware, premiumRequired, wagerRouter);
-app.use('/onboarding', authMiddleware, premiumRequired, onboardingRouter);
+app.use('/onboarding', authMiddleware, onboardingRouter);
 
 
 app.use(notFoundHandler);

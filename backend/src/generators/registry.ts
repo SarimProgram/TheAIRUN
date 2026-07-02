@@ -13,6 +13,7 @@ import { runWalkGenerator } from "./runs/runWalk";
 import { intervalWalkGenerator } from "./runs/intervalWalk";
 import { powerWalkGenerator, longWalkGenerator, inclineWalkGenerator, recoveryWalkGenerator } from "./runs/walks";
 import { steadyRunGenerator, fartlekRunGenerator, hillRunGenerator, progressionRunGenerator, timeTrialGenerator } from "./runs/additional";
+import { goalPracticeRunGenerator } from "./runs/goalPracticeRun";
 
 /**
  * Generator registry - maps run type names to generator functions
@@ -31,6 +32,7 @@ export const GENERATOR_REGISTRY: Record<string, RunGenerator> = {
     "Hill Run": hillRunGenerator,
     "Progression Run": progressionRunGenerator,
     "Time Trial": timeTrialGenerator,
+    "Goal Practice Run": goalPracticeRunGenerator,
 
     // Walking types
     "Power Walk": powerWalkGenerator,

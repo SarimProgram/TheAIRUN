@@ -5,7 +5,11 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
 import { prisma } from './db/prisma';
 import { tokenService } from './lib/tokens';
-import { sendChatMessagePush } from './lib/pushNotifications';
+import {
+    sendChatMessagePush,
+    sendRaceInvitePush,
+    sendRaceUpdatePush,
+} from './lib/pushNotifications';
 
 // Store io instance for access from routes
 let ioInstance: SocketServer | null = null;
@@ -20,6 +24,20 @@ const activeRaceSessions = new Map<string, ActiveRaceSession>();
 
 function getRacePairKey(a: string, b: string): string {
     return [a, b].sort().join(':');
+}
+
+async function hasBlockRelationship(userId: string, otherUserId: string): Promise<boolean> {
+    const block = await prisma.userBlock.findFirst({
+        where: {
+            OR: [
+                { blockerId: userId, blockedId: otherUserId },
+                { blockerId: otherUserId, blockedId: userId },
+            ],
+        },
+        select: { id: true },
+    });
+
+    return !!block;
 }
 
 export function getIO(): SocketServer {
@@ -195,6 +213,15 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                     distance: data.distance
                 });
 
+                sendRaceInvitePush({
+                    toUserId: user.partnerId,
+                    fromUserId: userId,
+                    fromName: user.displayName,
+                    distance: data.distance,
+                }).catch((pushErr) => {
+                    console.error('[Race] Invite push error:', pushErr);
+                });
+
                 console.log(`[Race] ${userId} invited partner ${user.partnerId} for ${data.distance}m`);
             } catch (err) {
                 console.error('[Race] Invite error:', err);
@@ -231,6 +258,15 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                 socket.emit('race:accepted', {
                     acceptedBy: userId,
                     acceptedByName: user?.displayName
+                });
+
+                sendRaceUpdatePush({
+                    toUserId: data.initiatorId,
+                    actorName: user.displayName,
+                    updateType: 'accepted',
+                    distance: data.distance,
+                }).catch((pushErr) => {
+                    console.error('[Race] Accept push error:', pushErr);
                 });
 
                 console.log(`[Race] ${userId} accepted race from ${data.initiatorId} - starting countdown for ${data.distance}m`);
@@ -286,6 +322,19 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
             io.to(`user:${data.initiatorId}`).emit('race:declined', {
                 declinedBy: userId
             });
+            const decliningUser = await prisma.user.findUnique({
+                where: { id: userId },
+                select: { displayName: true },
+            });
+            if (decliningUser?.displayName) {
+                sendRaceUpdatePush({
+                    toUserId: data.initiatorId,
+                    actorName: decliningUser.displayName,
+                    updateType: 'declined',
+                }).catch((pushErr) => {
+                    console.error('[Race] Decline push error:', pushErr);
+                });
+            }
             console.log(`[Race] ${userId} declined race from ${data.initiatorId}`);
         });
 
@@ -400,6 +449,18 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                 io.to(`user:${user.partnerId}`).emit('race:winner', winnerData);
                 activeRaceSessions.delete(pairKey);
 
+                const pushTargets = [userId, user.partnerId];
+                await Promise.all(pushTargets.map((targetUserId) =>
+                    sendRaceUpdatePush({
+                        toUserId: targetUserId,
+                        actorName: user.displayName,
+                        updateType: 'winner',
+                        distance: activeSession?.distanceM ?? data.finalDistance,
+                    }).catch((pushErr) => {
+                        console.error('[Race] Winner push error:', pushErr);
+                    })
+                ));
+
                 console.log(`[Race] Winner: ${user.displayName} - ${data.finalDistance}m in ${data.duration}ms`);
             } catch (err) {
                 console.error('[Race] Finish error:', err);
@@ -461,6 +522,11 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                     return;
                 }
 
+                if (await hasBlockRelationship(userId, user.partnerId)) {
+                    socket.emit('chat:error', { message: 'Chat is unavailable for this partner' });
+                    return;
+                }
+
                 // Save message to DB
                 const message = await prisma.chatMessage.create({
                     data: {
@@ -495,7 +561,7 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                 });
 
                 sendChatMessagePush({
-                    to: user.partner?.expoPushToken,
+                    toUserId: user.partnerId,
                     fromName: user.displayName,
                     content: message.content,
                 }).catch((pushErr) => {
@@ -521,6 +587,11 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                 });
 
                 if (!user?.partnerId) {
+                    socket.emit('chat:history:response', { messages: [] });
+                    return;
+                }
+
+                if (await hasBlockRelationship(userId, user.partnerId)) {
                     socket.emit('chat:history:response', { messages: [] });
                     return;
                 }

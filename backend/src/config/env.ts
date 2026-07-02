@@ -15,6 +15,12 @@ const envSchema = z.object({
   PAYWALL_TRIAL_DAYS: z.coerce.number().int().positive().default(7),
   PAYWALL_ENABLED: z.coerce.boolean().default(true),
   REVENUECAT_ENTITLEMENT_ID: z.string().min(1).default('RunTogether Pro'),
+  APNS_KEY_ID: z.string().optional().default(''),
+  APNS_TEAM_ID: z.string().optional().default(''),
+  APNS_BUNDLE_ID: z.string().optional().default(''),
+  APNS_AUTH_KEY: z.string().optional().default(''),
+  APNS_AUTH_KEY_PATH: z.string().optional().default(''),
+  APNS_USE_SANDBOX: z.coerce.boolean().default(false),
 });
 
 export const env = envSchema.parse({
@@ -29,4 +35,10 @@ export const env = envSchema.parse({
   PAYWALL_TRIAL_DAYS: process.env.PAYWALL_TRIAL_DAYS,
   PAYWALL_ENABLED: process.env.PAYWALL_ENABLED,
   REVENUECAT_ENTITLEMENT_ID: process.env.REVENUECAT_ENTITLEMENT_ID,
+  APNS_KEY_ID: process.env.APNS_KEY_ID,
+  APNS_TEAM_ID: process.env.APNS_TEAM_ID,
+  APNS_BUNDLE_ID: process.env.APNS_BUNDLE_ID,
+  APNS_AUTH_KEY: process.env.APNS_AUTH_KEY,
+  APNS_AUTH_KEY_PATH: process.env.APNS_AUTH_KEY_PATH,
+  APNS_USE_SANDBOX: process.env.APNS_USE_SANDBOX,
 });

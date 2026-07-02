@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "eas:build": "npm --prefix app run eas:build",
+    "eas:build:ios": "npm --prefix app run eas:build:ios"
+  },
   "dependencies": {
     "react-native-purchases": "^9.10.4",
     "react-native-purchases-ui": "^9.10.4"

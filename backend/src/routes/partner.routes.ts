@@ -3,7 +3,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db/prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { beginPartnerSharedGraceForPair, syncPartnerSharedAccessForPair } from '../services/billing';
 import { promoteToPairOnboardingRewards } from '../services/onboardingRewards';
+import { sendPartnerInviteAcceptedPush } from '../lib/pushNotifications';
+import { pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
 
 const router = Router();
 
@@ -92,6 +95,14 @@ function getPartnerJourneySnapshot(user: {
     };
 }
 
+const PARTNER_POINTS_CATEGORY_LABELS: Record<string, string> = {
+    WALK_RUN: 'Walk / Run',
+    STEPS: 'Steps',
+    CALORIES: 'Nutrition',
+    MOBILITY: 'Mobility',
+    HYDRATION: 'Hydration',
+};
+
 /**
  * POST /partner/invite
  * Send a partner invitation by email
@@ -99,6 +110,32 @@ function getPartnerJourneySnapshot(user: {
 const InviteSchema = z.object({
     email: z.string().email().toLowerCase(),
 });
+
+const ReportChatSchema = z.object({
+    messageId: z.string().uuid().optional(),
+    reason: z.string().trim().min(1).max(80).optional(),
+    details: z.string().trim().min(1).max(500).optional(),
+});
+
+const BlockPartnerSchema = z.object({
+    reason: z.string().trim().min(1).max(120).optional(),
+});
+
+async function findBlockRelationship(userId: string, otherUserId: string) {
+    return prisma.userBlock.findFirst({
+        where: {
+            OR: [
+                { blockerId: userId, blockedId: otherUserId },
+                { blockerId: otherUserId, blockedId: userId },
+            ],
+        },
+        select: {
+            id: true,
+            blockerId: true,
+            blockedId: true,
+        },
+    });
+}
 
 router.post('/invite', async (req, res, next) => {
     try {
@@ -134,6 +171,13 @@ router.post('/invite', async (req, res, next) => {
         // If target already has a partner
         if (targetUser?.partnerId) {
             return res.status(400).json({ error: 'This user already has a partner' });
+        }
+
+        if (targetUser?.id) {
+            const blockRelationship = await findBlockRelationship(userId, targetUser.id);
+            if (blockRelationship) {
+                return res.status(403).json({ error: 'Partner invites are not available for this user' });
+            }
         }
 
         // Check for existing pending invite from the other person first
@@ -371,28 +415,36 @@ router.post('/invites/:id/accept', async (req, res, next) => {
             return res.status(400).json({ error: 'The inviter already has a partner' });
         }
 
-        // Accept: link both users as partners
-        await prisma.$transaction([
-            // Update invite status and link toUserId if not set
-            prisma.partnerInvite.update({
+        const blockRelationship = await findBlockRelationship(userId, invite.fromUserId);
+        if (blockRelationship) {
+            await prisma.partnerInvite.update({
+                where: { id: inviteId },
+                data: { status: 'DECLINED' },
+            });
+            return res.status(403).json({ error: 'You cannot accept an invite from this user' });
+        }
+
+        // Accept: link both users as partners and sync shared premium metadata.
+        await prisma.$transaction(async (tx) => {
+            await tx.partnerInvite.update({
                 where: { id: inviteId },
                 data: {
                     status: 'ACCEPTED',
                     toUserId: userId,
                 },
-            }),
-            // Set partner on current user
-            prisma.user.update({
+            });
+
+            await tx.user.update({
                 where: { id: userId },
                 data: { partnerId: invite.fromUserId },
-            }),
-            // Set partner on inviter
-            prisma.user.update({
+            });
+
+            await tx.user.update({
                 where: { id: invite.fromUserId },
                 data: { partnerId: userId },
-            }),
-            // Decline any other pending invites for both users
-            prisma.partnerInvite.updateMany({
+            });
+
+            await tx.partnerInvite.updateMany({
                 where: {
                     id: { not: inviteId },
                     status: 'PENDING',
@@ -405,8 +457,10 @@ router.post('/invites/:id/accept', async (req, res, next) => {
                     ],
                 },
                 data: { status: 'DECLINED' },
-            }),
-        ]);
+            });
+
+            await syncPartnerSharedAccessForPair(userId, invite.fromUserId, tx);
+        });
 
         const [accepterPref, inviterPref] = await Promise.all([
             prisma.onboardingRewardPreference.findUnique({
@@ -438,11 +492,23 @@ router.post('/invites/:id/accept', async (req, res, next) => {
             });
         }
 
+        sendPartnerInviteAcceptedPush({
+            toUserId: invite.fromUserId,
+            partnerName: invite.fromUser.displayName,
+        }).catch((pushErr) => {
+            console.error('[Partner] Invite accepted push error:', pushErr);
+        });
+
         res.json({
             success: true,
             partnerId: invite.fromUserId,
             partnerName: invite.fromUser.displayName,
         });
+
+        void Promise.allSettled([
+            pushPartnerSurfaceUpdateForChangedUser(userId, 'partner_connected'),
+            pushPartnerSurfaceUpdateForChangedUser(invite.fromUserId, 'partner_connected'),
+        ]);
     } catch (err) {
         next(err);
     }
@@ -565,6 +631,11 @@ router.get('/', async (req, res, next) => {
                                 },
                             },
                         },
+                        points: {
+                            select: {
+                                balance: true,
+                            },
+                        },
                     },
                 },
             },
@@ -610,9 +681,216 @@ router.get('/', async (req, res, next) => {
                 weightUnit: partnerJourney.unit,
                 weightLost: partnerJourney.weightLost,
                 primaryGoal: partnerJourney.primaryGoal,
+                points: user.partner.points?.balance ?? 0,
+                pointsBalance: user.partner.points?.balance ?? 0,
             },
             partnerHasOnboardingRewards,
         });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * GET /partner/points-history
+ * Get recent points ledger entries for the current user's partner
+ */
+router.get('/points-history', async (req, res, next) => {
+    try {
+        const userId = (req as AuthRequest).user!.id;
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                partner: {
+                    select: {
+                        id: true,
+                        displayName: true,
+                    },
+                },
+            },
+        });
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (!user.partner) {
+            return res.json({
+                partnerId: null,
+                partnerDisplayName: null,
+                entries: [],
+            });
+        }
+
+        const entries = await prisma.dailyPointsLedger.findMany({
+            where: { userId: user.partner.id },
+            orderBy: [{ awardedAt: 'desc' }, { dayKey: 'desc' }],
+        });
+
+        res.json({
+            partnerId: user.partner.id,
+            partnerDisplayName: user.partner.displayName,
+            entries: entries.map((entry) => ({
+                dayKey: entry.dayKey,
+                awardedAt: entry.awardedAt,
+                category: entry.category,
+                categoryLabel: PARTNER_POINTS_CATEGORY_LABELS[entry.category] ?? entry.category,
+                earnedPoints: entry.earnedPoints,
+                maxPoints: entry.maxPoints,
+                progress: entry.progress,
+            })),
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * POST /partner/chat/report
+ * Report the current partner chat for moderation review
+ */
+router.post('/chat/report', async (req, res, next) => {
+    try {
+        const userId = (req as AuthRequest).user!.id;
+        const { messageId, reason, details } = ReportChatSchema.parse(req.body);
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { partnerId: true },
+        });
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (!user.partnerId) {
+            return res.status(400).json({ error: 'You do not have a partner to report' });
+        }
+
+        if (messageId) {
+            const message = await prisma.chatMessage.findFirst({
+                where: {
+                    id: messageId,
+                    OR: [
+                        { fromUserId: userId, toUserId: user.partnerId },
+                        { fromUserId: user.partnerId, toUserId: userId },
+                    ],
+                },
+                select: { id: true },
+            });
+
+            if (!message) {
+                return res.status(404).json({ error: 'Message not found for this partner chat' });
+            }
+        }
+
+        await prisma.chatReport.create({
+            data: {
+                reporterId: userId,
+                reportedUserId: user.partnerId,
+                messageId: messageId ?? null,
+                reason: reason ?? 'partner_chat_report',
+                details: details
+                    ? {
+                        source: 'partner_chat_header',
+                        text: details,
+                    }
+                    : {
+                        source: 'partner_chat_header',
+                    },
+            },
+        });
+
+        res.json({ success: true });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * POST /partner/chat/block
+ * Block the current partner and immediately disconnect the relationship
+ */
+router.post('/chat/block', async (req, res, next) => {
+    try {
+        const userId = (req as AuthRequest).user!.id;
+        const { reason } = BlockPartnerSchema.parse(req.body);
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                email: true,
+                partnerId: true,
+                partner: {
+                    select: {
+                        email: true,
+                    },
+                },
+            },
+        });
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (!user.partnerId || !user.partner?.email) {
+            return res.status(400).json({ error: 'You do not have a partner to block' });
+        }
+
+        const partnerId = user.partnerId;
+        const userEmail = user.email.toLowerCase();
+        const partnerEmail = user.partner.email.toLowerCase();
+
+        await prisma.$transaction(async (tx) => {
+            await beginPartnerSharedGraceForPair(userId, partnerId, tx);
+
+            await tx.userBlock.upsert({
+                where: {
+                    blockerId_blockedId: {
+                        blockerId: userId,
+                        blockedId: partnerId,
+                    },
+                },
+                create: {
+                    blockerId: userId,
+                    blockedId: partnerId,
+                    reason: reason ?? 'partner_chat_blocked',
+                },
+                update: {
+                    reason: reason ?? 'partner_chat_blocked',
+                },
+            });
+
+            await tx.user.update({
+                where: { id: userId },
+                data: { partnerId: null },
+            });
+
+            await tx.user.update({
+                where: { id: partnerId },
+                data: { partnerId: null },
+            });
+
+            await tx.partnerInvite.updateMany({
+                where: {
+                    status: 'PENDING',
+                    OR: [
+                        { fromUserId: userId, toUserId: partnerId },
+                        { fromUserId: partnerId, toUserId: userId },
+                        { fromUserId: userId, toEmail: partnerEmail },
+                        { fromUserId: partnerId, toEmail: userEmail },
+                    ],
+                },
+                data: { status: 'DECLINED' },
+            });
+        });
+
+        res.json({ success: true, blockedUserId: partnerId });
+        void Promise.allSettled([
+            pushPartnerSurfaceUpdateForChangedUser(userId, 'partner_blocked'),
+            pushPartnerSurfaceUpdateForChangedUser(partnerId, 'partner_blocked'),
+        ]);
     } catch (err) {
         next(err);
     }
@@ -641,19 +919,25 @@ router.post('/disconnect', async (req, res, next) => {
 
         const partnerId = user.partnerId;
 
-        // Clear partnerId on both users
-        await prisma.$transaction([
-            prisma.user.update({
+        await prisma.$transaction(async (tx) => {
+            await beginPartnerSharedGraceForPair(userId, partnerId, tx);
+
+            await tx.user.update({
                 where: { id: userId },
                 data: { partnerId: null },
-            }),
-            prisma.user.update({
+            });
+
+            await tx.user.update({
                 where: { id: partnerId },
                 data: { partnerId: null },
-            }),
-        ]);
+            });
+        });
 
         res.json({ success: true });
+        void Promise.allSettled([
+            pushPartnerSurfaceUpdateForChangedUser(userId, 'partner_disconnected'),
+            pushPartnerSurfaceUpdateForChangedUser(partnerId, 'partner_disconnected'),
+        ]);
     } catch (err) {
         next(err);
     }

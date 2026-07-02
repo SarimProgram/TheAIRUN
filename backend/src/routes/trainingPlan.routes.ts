@@ -25,6 +25,7 @@ router.post("/generate", async (req: AuthRequest, res, next) => {
                 runs: z.array(z.object({
                     runType: z.string(),
                     sessions: z.number().int().min(0),
+                    targetKm: z.number().min(0).optional(),
                 })),
                 stepDays: z.number().int().default(0),
                 runDays: z.number().int().default(0),

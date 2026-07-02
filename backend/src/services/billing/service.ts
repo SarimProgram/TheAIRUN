@@ -2,6 +2,7 @@ import { env } from '../../config/env';
 import prisma from '../../db/prisma';
 
 type BillingProfileRecord = any;
+type DbClient = any;
 type BillingSnapshot = {
   accessStatus: string;
   hasAccess: boolean;
@@ -11,9 +12,31 @@ type BillingSnapshot = {
   premiumIsLifetime: boolean;
   premiumExpiresAt: string | null;
   lastSyncedAt: string | null;
+  accessSource: 'self' | 'partner';
+  sharedByPartnerId?: string | null;
+  sharedByPartnerName?: string | null;
+  sharedAccessEndsAt?: string | null;
   paywallReason?: string | null;
   revenueCatAppUserId?: string | null;
 };
+
+type BillingAccessComputation = {
+  accessStatus: string;
+  hasAccess: boolean;
+  paywallReason: string | null;
+  accessSource: 'self' | 'partner';
+  sharedByPartnerId: string | null;
+  sharedByPartnerName: string | null;
+  sharedAccessEndsAt: string | null;
+};
+
+type LinkedUserRecord = {
+  id: string;
+  displayName: string | null;
+  partnerId: string | null;
+};
+
+const PARTNER_SHARED_GRACE_DAYS = 3;
 
 export class BillingError extends Error {
   status: number;
@@ -48,24 +71,50 @@ function addDays(date: Date, days: number) {
   return next;
 }
 
-export function getRevenueCatAppUserId(userId: string) {
-  return `user_${userId}`;
+function hasAccessForStatus(status: string | null | undefined) {
+  return new Set([
+    'MANUAL_OVERRIDE',
+    'PREMIUM_ACTIVE',
+    'PREMIUM_GRACE',
+    'TRIAL_ACTIVE',
+    'PARTNER_INCLUDED_ACTIVE',
+    'PARTNER_INCLUDED_GRACE',
+  ]).has(String(status || 'NONE'));
 }
 
-export function resolveUserIdFromRevenueCatAppUserId(appUserId?: string | null): string | null {
-  if (!appUserId) return null;
-  return appUserId.startsWith('user_') ? appUserId.slice(5) : null;
+function isPartnerIncludedStatus(status: string | null | undefined) {
+  return String(status || '').startsWith('PARTNER_INCLUDED');
 }
 
-function mapStoreToPlatform(store?: string | null): 'IOS' | 'ANDROID' | 'UNKNOWN' | null {
-  if (!store) return null;
-  const s = store.toLowerCase();
-  if (s.includes('app_store') || s.includes('ios')) return 'IOS';
-  if (s.includes('play_store') || s.includes('android')) return 'ANDROID';
-  return 'UNKNOWN';
+function isShareableSelfPremiumStatus(status: string | null | undefined) {
+  return status === 'PREMIUM_ACTIVE' || status === 'PREMIUM_GRACE';
 }
 
-function getCachedOrComputedPremiumStatus(
+function getStoredPaywallReason(
+  status: string | null | undefined,
+  profile: BillingProfileRecord | null | undefined,
+  now: Date
+) {
+  switch (status) {
+    case 'TRIAL_EXPIRED':
+      return 'trial_expired';
+    case 'PARTNER_INCLUDED_GRACE': {
+      const endsAt = toDate(profile?.sharedAccessEndsAt);
+      return endsAt && endsAt > now ? null : 'partner_access_expired';
+    }
+    case 'NONE': {
+      const premiumExpiresAt = toDate(profile?.premiumExpiresAt);
+      if (premiumExpiresAt && premiumExpiresAt <= now) {
+        return 'subscription_expired';
+      }
+      return 'trial_not_started';
+    }
+    default:
+      return null;
+  }
+}
+
+function getSelfBillingStatus(
   profile: BillingProfileRecord | null,
   now: Date
 ): { accessStatus: string; hasAccess: boolean; paywallReason: string | null } {
@@ -114,37 +163,68 @@ function getCachedOrComputedPremiumStatus(
   return { accessStatus: 'NONE', hasAccess: false, paywallReason: 'trial_not_started' };
 }
 
-export function presentBillingSnapshot(profile?: BillingProfileRecord | null): BillingSnapshot {
+function buildBillingSnapshot(
+  profile?: BillingProfileRecord | null,
+  computed?: BillingAccessComputation | null
+): BillingSnapshot {
   const now = new Date();
-  const computed = getCachedOrComputedPremiumStatus(profile ?? null, now);
+  const storedStatus = String(profile?.premiumAccessStatus || 'NONE');
+  const storedGraceEndsAt = toIso(profile?.sharedAccessEndsAt);
+
   return {
-    accessStatus: computed.accessStatus,
-    hasAccess: computed.hasAccess,
+    accessStatus: computed?.accessStatus ?? storedStatus,
+    hasAccess:
+      computed?.hasAccess ??
+      (storedStatus === 'PARTNER_INCLUDED_GRACE'
+        ? !!(toDate(profile?.sharedAccessEndsAt) && toDate(profile?.sharedAccessEndsAt)! > now)
+        : hasAccessForStatus(storedStatus)),
     trialStartedAt: toIso(profile?.trialStartedAt),
     trialEndsAt: toIso(profile?.trialEndsAt),
     premiumEntitlementActive: !!profile?.premiumEntitlementActive,
     premiumIsLifetime: !!profile?.premiumIsLifetime,
     premiumExpiresAt: toIso(profile?.premiumExpiresAt),
     lastSyncedAt: toIso(profile?.lastSyncedAt),
+    accessSource: computed?.accessSource ?? (isPartnerIncludedStatus(storedStatus) ? 'partner' : 'self'),
+    sharedByPartnerId: computed?.sharedByPartnerId ?? profile?.sharedAccessSourceUserId ?? null,
+    sharedByPartnerName: computed?.sharedByPartnerName ?? null,
+    sharedAccessEndsAt: computed?.sharedAccessEndsAt ?? storedGraceEndsAt,
+    paywallReason: computed?.paywallReason ?? getStoredPaywallReason(storedStatus, profile, now),
+    revenueCatAppUserId: profile?.revenueCatAppUserId ?? null,
   };
 }
 
-async function persistComputedStatus(profile: BillingProfileRecord) {
-  const computed = getCachedOrComputedPremiumStatus(profile, new Date());
-  if (profile.premiumAccessStatus !== computed.accessStatus) {
-    await db.billingProfile.update({
-      where: { id: profile.id },
-      data: { premiumAccessStatus: computed.accessStatus },
-    });
-  }
-  return computed;
+function mapStoreToPlatform(store?: string | null): 'IOS' | 'ANDROID' | 'UNKNOWN' | null {
+  if (!store) return null;
+  const s = store.toLowerCase();
+  if (s.includes('app_store') || s.includes('ios')) return 'IOS';
+  if (s.includes('play_store') || s.includes('android')) return 'ANDROID';
+  return 'UNKNOWN';
 }
 
-export async function getOrCreateBillingProfile(userId: string): Promise<BillingProfileRecord> {
-  let profile = await db.billingProfile.findUnique({ where: { userId } });
+async function getLinkedUser(userId: string, client: DbClient = db): Promise<LinkedUserRecord | null> {
+  const user = await client.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      displayName: true,
+      partnerId: true,
+    },
+  });
+
+  return user
+    ? {
+        id: user.id,
+        displayName: user.displayName ?? null,
+        partnerId: user.partnerId ?? null,
+      }
+    : null;
+}
+
+async function getOrCreateBillingProfileWithClient(client: DbClient, userId: string): Promise<BillingProfileRecord> {
+  let profile = await client.billingProfile.findUnique({ where: { userId } });
   if (profile) return profile;
 
-  return db.billingProfile.create({
+  return client.billingProfile.create({
     data: {
       userId,
       revenueCatAppUserId: getRevenueCatAppUserId(userId),
@@ -153,23 +233,319 @@ export async function getOrCreateBillingProfile(userId: string): Promise<Billing
   });
 }
 
-export async function getBillingAccessForUser(userId: string): Promise<{ profile: BillingProfileRecord; billing: BillingSnapshot }> {
-  const profile = await getOrCreateBillingProfile(userId);
-  const computed = await persistComputedStatus(profile);
-  return {
-    profile,
-    billing: {
-      ...presentBillingSnapshot(profile),
-      accessStatus: computed.accessStatus,
-      hasAccess: computed.hasAccess,
-      paywallReason: computed.paywallReason,
-      revenueCatAppUserId: profile.revenueCatAppUserId,
+async function getOrCreateBillingProfileByAppUserIdWithClient(
+  client: DbClient,
+  appUserId: string
+): Promise<BillingProfileRecord | null> {
+  let profile = await client.billingProfile.findUnique({ where: { revenueCatAppUserId: appUserId } });
+  if (profile) return profile;
+
+  const userId = resolveUserIdFromRevenueCatAppUserId(appUserId);
+  if (!userId) return null;
+
+  return client.billingProfile.create({
+    data: {
+      userId,
+      revenueCatAppUserId: appUserId,
+      premiumAccessStatus: 'NONE',
     },
+  });
+}
+
+async function computeBillingAccessForUser(
+  userId: string,
+  profile: BillingProfileRecord | null,
+  client: DbClient = db,
+  now = new Date()
+): Promise<BillingAccessComputation> {
+  const self = getSelfBillingStatus(profile, now);
+  const sharedAccessEndsAt = toIso(profile?.sharedAccessEndsAt);
+
+  if (self.hasAccess) {
+    return {
+      ...self,
+      accessSource: 'self',
+      sharedByPartnerId: profile?.sharedAccessSourceUserId ?? null,
+      sharedByPartnerName: null,
+      sharedAccessEndsAt,
+    };
+  }
+
+  if (!profile?.sharedAccessSourceUserId) {
+    return {
+      ...self,
+      accessSource: 'self',
+      sharedByPartnerId: null,
+      sharedByPartnerName: null,
+      sharedAccessEndsAt,
+    };
+  }
+
+  const [user, sourceUser, sourceProfile] = await Promise.all([
+    getLinkedUser(userId, client),
+    getLinkedUser(profile.sharedAccessSourceUserId, client),
+    client.billingProfile.findUnique({ where: { userId: profile.sharedAccessSourceUserId } }),
+  ]);
+
+  const isMutuallyLinked =
+    !!user?.partnerId &&
+    user.partnerId === sourceUser?.id &&
+    !!sourceUser?.partnerId &&
+    sourceUser.partnerId === user.id;
+  const sourceSelf = getSelfBillingStatus(sourceProfile, now);
+
+  if (isMutuallyLinked && isShareableSelfPremiumStatus(sourceSelf.accessStatus)) {
+    return {
+      accessStatus: 'PARTNER_INCLUDED_ACTIVE',
+      hasAccess: true,
+      paywallReason: null,
+      accessSource: 'partner',
+      sharedByPartnerId: sourceUser?.id ?? profile.sharedAccessSourceUserId,
+      sharedByPartnerName: sourceUser?.displayName ?? null,
+      sharedAccessEndsAt: null,
+    };
+  }
+
+  const graceEndsAt = toDate(profile.sharedAccessEndsAt);
+  if (graceEndsAt && graceEndsAt > now) {
+    return {
+      accessStatus: 'PARTNER_INCLUDED_GRACE',
+      hasAccess: true,
+      paywallReason: null,
+      accessSource: 'partner',
+      sharedByPartnerId: profile.sharedAccessSourceUserId,
+      sharedByPartnerName: sourceUser?.displayName ?? null,
+      sharedAccessEndsAt: toIso(graceEndsAt),
+    };
+  }
+
+  return {
+    ...self,
+    accessSource: 'self',
+    sharedByPartnerId: profile.sharedAccessSourceUserId,
+    sharedByPartnerName: null,
+    sharedAccessEndsAt,
   };
 }
 
+async function persistComputedStatus(
+  userId: string,
+  profile: BillingProfileRecord,
+  client: DbClient = db,
+  now = new Date()
+) {
+  const computed = await computeBillingAccessForUser(userId, profile, client, now);
+  let nextProfile = profile;
+
+  if (profile.premiumAccessStatus !== computed.accessStatus) {
+    nextProfile = await client.billingProfile.update({
+      where: { id: profile.id },
+      data: { premiumAccessStatus: computed.accessStatus },
+    });
+  }
+
+  return { profile: nextProfile, computed };
+}
+
+async function markSharedAccessRevoked(
+  client: DbClient,
+  profile: BillingProfileRecord | null,
+  now: Date
+) {
+  if (!profile?.sharedAccessSourceUserId) return;
+
+  await client.billingProfile.update({
+    where: { id: profile.id },
+    data: {
+      sharedAccessEndsAt: profile.sharedAccessEndsAt ?? now,
+      sharedAccessRevokedAt: profile.sharedAccessRevokedAt ?? now,
+    },
+  });
+}
+
+async function grantSharedAccess(
+  client: DbClient,
+  coveredProfile: BillingProfileRecord,
+  sourceUserId: string,
+  now: Date
+) {
+  await client.billingProfile.update({
+    where: { id: coveredProfile.id },
+    data: {
+      sharedAccessSourceUserId: sourceUserId,
+      sharedAccessStartedAt: coveredProfile.sharedAccessStartedAt ?? now,
+      sharedAccessEndsAt: null,
+      sharedAccessRevokedAt: null,
+    },
+  });
+}
+
+async function startSharedAccessGrace(
+  client: DbClient,
+  coveredProfile: BillingProfileRecord,
+  sourceUserId: string,
+  now: Date
+) {
+  await client.billingProfile.update({
+    where: { id: coveredProfile.id },
+    data: {
+      sharedAccessSourceUserId: sourceUserId,
+      sharedAccessStartedAt: coveredProfile.sharedAccessStartedAt ?? now,
+      sharedAccessEndsAt: addDays(now, PARTNER_SHARED_GRACE_DAYS),
+      sharedAccessRevokedAt: now,
+    },
+  });
+}
+
+export async function syncPartnerSharedAccessForPair(
+  userAId: string,
+  userBId: string,
+  client: DbClient = db,
+  now = new Date()
+) {
+  if (!userAId || !userBId || userAId === userBId) return;
+
+  const [userA, userB, profileA, profileB] = await Promise.all([
+    getLinkedUser(userAId, client),
+    getLinkedUser(userBId, client),
+    getOrCreateBillingProfileWithClient(client, userAId),
+    getOrCreateBillingProfileWithClient(client, userBId),
+  ]);
+
+  const isMutuallyLinked =
+    !!userA?.partnerId &&
+    userA.partnerId === userBId &&
+    !!userB?.partnerId &&
+    userB.partnerId === userAId;
+  if (!isMutuallyLinked) return;
+
+  const statusA = getSelfBillingStatus(profileA, now);
+  const statusB = getSelfBillingStatus(profileB, now);
+  const aShareable = isShareableSelfPremiumStatus(statusA.accessStatus);
+  const bShareable = isShareableSelfPremiumStatus(statusB.accessStatus);
+
+  if (aShareable && !bShareable) {
+    await Promise.all([
+      grantSharedAccess(client, profileB, userAId, now),
+      markSharedAccessRevoked(client, profileA, now),
+    ]);
+    return;
+  }
+
+  if (bShareable && !aShareable) {
+    await Promise.all([
+      grantSharedAccess(client, profileA, userBId, now),
+      markSharedAccessRevoked(client, profileB, now),
+    ]);
+    return;
+  }
+
+  await Promise.all([
+    markSharedAccessRevoked(client, profileA, now),
+    markSharedAccessRevoked(client, profileB, now),
+  ]);
+}
+
+export async function beginPartnerSharedGraceForPair(
+  userAId: string,
+  userBId: string,
+  client: DbClient = db,
+  now = new Date()
+) {
+  if (!userAId || !userBId || userAId === userBId) return;
+
+  const [profileA, profileB] = await Promise.all([
+    getOrCreateBillingProfileWithClient(client, userAId),
+    getOrCreateBillingProfileWithClient(client, userBId),
+  ]);
+
+  const statusA = getSelfBillingStatus(profileA, now);
+  const statusB = getSelfBillingStatus(profileB, now);
+  const aShareable = isShareableSelfPremiumStatus(statusA.accessStatus);
+  const bShareable = isShareableSelfPremiumStatus(statusB.accessStatus);
+
+  if (aShareable && !bShareable) {
+    await Promise.all([
+      startSharedAccessGrace(client, profileB, userAId, now),
+      markSharedAccessRevoked(client, profileA, now),
+    ]);
+    return;
+  }
+
+  if (bShareable && !aShareable) {
+    await Promise.all([
+      startSharedAccessGrace(client, profileA, userBId, now),
+      markSharedAccessRevoked(client, profileB, now),
+    ]);
+    return;
+  }
+
+  await Promise.all([
+    markSharedAccessRevoked(client, profileA, now),
+    markSharedAccessRevoked(client, profileB, now),
+  ]);
+}
+
+async function syncPartnerSharedAccessWithLinkedPartner(
+  userId: string,
+  client: DbClient = db,
+  now = new Date()
+) {
+  const user = await getLinkedUser(userId, client);
+  if (!user?.partnerId) return;
+  await syncPartnerSharedAccessForPair(user.id, user.partnerId, client, now);
+}
+
+async function getBillingAccessForUserInternal(
+  userId: string,
+  opts?: { allowLiveRevenueCatSync?: boolean }
+): Promise<{ profile: BillingProfileRecord; billing: BillingSnapshot }> {
+  let profile = await getOrCreateBillingProfileWithClient(db, userId);
+  let persisted = await persistComputedStatus(userId, profile, db);
+  profile = persisted.profile;
+  let computed = persisted.computed;
+
+  if (opts?.allowLiveRevenueCatSync !== false && !computed.hasAccess && env.REVENUECAT_SECRET_API_KEY) {
+    try {
+      await syncFromRevenueCat(userId);
+      profile = await getOrCreateBillingProfileWithClient(db, userId);
+      persisted = await persistComputedStatus(userId, profile, db);
+      profile = persisted.profile;
+      computed = persisted.computed;
+    } catch (err) {
+      console.warn('[Billing] Failed to live-sync locked profile before returning access snapshot', err);
+    }
+  }
+
+  return {
+    profile,
+    billing: buildBillingSnapshot(profile, computed),
+  };
+}
+
+export function getRevenueCatAppUserId(userId: string) {
+  return `user_${userId}`;
+}
+
+export function resolveUserIdFromRevenueCatAppUserId(appUserId?: string | null): string | null {
+  if (!appUserId) return null;
+  return appUserId.startsWith('user_') ? appUserId.slice(5) : null;
+}
+
+export function presentBillingSnapshot(profile?: BillingProfileRecord | null): BillingSnapshot {
+  return buildBillingSnapshot(profile ?? null);
+}
+
+export async function getOrCreateBillingProfile(userId: string): Promise<BillingProfileRecord> {
+  return getOrCreateBillingProfileWithClient(db, userId);
+}
+
+export async function getBillingAccessForUser(userId: string): Promise<{ profile: BillingProfileRecord; billing: BillingSnapshot }> {
+  return getBillingAccessForUserInternal(userId);
+}
+
 export async function startTrial(profile: BillingProfileRecord, now = new Date(), days = env.PAYWALL_TRIAL_DAYS) {
-  const current = getCachedOrComputedPremiumStatus(profile, now);
+  const current = getSelfBillingStatus(profile, now);
   if (current.accessStatus === 'TRIAL_ACTIVE') {
     return profile;
   }
@@ -279,14 +655,16 @@ function normalizeRevenueCatPremiumState(customerInfo: any) {
   const premiumEntitlementActive =
     !!ent &&
     (premiumIsLifetime ||
-      !!gracePeriodEndsAt && gracePeriodEndsAt > now ||
-      !!premiumExpiresAt && premiumExpiresAt > now);
+      (!!gracePeriodEndsAt && gracePeriodEndsAt > now) ||
+      (!!premiumExpiresAt && premiumExpiresAt > now));
 
   const premiumPurchasedAt = toDate(ent?.purchase_date ?? sub?.purchase_date ?? latestNonSub?.purchase_date);
   const premiumWillRenew =
     typeof sub?.will_renew === 'boolean'
       ? sub.will_renew
-      : (typeof ent?.will_renew === 'boolean' ? ent.will_renew : null);
+      : typeof ent?.will_renew === 'boolean'
+        ? ent.will_renew
+        : null;
 
   const premiumPlatform = mapStoreToPlatform(ent?.store ?? sub?.store ?? latestNonSub?.store);
 
@@ -302,17 +680,15 @@ function normalizeRevenueCatPremiumState(customerInfo: any) {
   };
 }
 
-async function applyRevenueCatStateToProfile(profile: BillingProfileRecord, customerInfo: any, sourceEventId?: string | null) {
+async function applyRevenueCatStateToProfile(
+  profile: BillingProfileRecord,
+  customerInfo: any,
+  sourceEventId?: string | null,
+  client: DbClient = db
+) {
   const normalized = normalizeRevenueCatPremiumState(customerInfo);
-  const tempProfile = {
-    ...profile,
-    ...normalized,
-    lastSyncedAt: new Date(),
-    lastRevenueCatEventId: sourceEventId ?? profile.lastRevenueCatEventId,
-  };
-  const computed = getCachedOrComputedPremiumStatus(tempProfile, new Date());
 
-  const updated = await db.billingProfile.update({
+  return client.billingProfile.update({
     where: { id: profile.id },
     data: {
       premiumEntitlementActive: normalized.premiumEntitlementActive,
@@ -324,34 +700,22 @@ async function applyRevenueCatStateToProfile(profile: BillingProfileRecord, cust
       premiumIsLifetime: normalized.premiumIsLifetime,
       gracePeriodEndsAt: normalized.gracePeriodEndsAt ?? null,
       lastSyncedAt: new Date(),
-      premiumAccessStatus: computed.accessStatus,
       ...(sourceEventId ? { lastRevenueCatEventId: sourceEventId, lastRevenueCatEventAt: new Date() } : {}),
     },
   });
-
-  return { profile: updated, billing: { ...presentBillingSnapshot(updated), paywallReason: computed.paywallReason } };
 }
 
 export async function syncFromRevenueCat(userId: string) {
-  const profile = await getOrCreateBillingProfile(userId);
+  const profile = await getOrCreateBillingProfileWithClient(db, userId);
   const customerInfo = await fetchRevenueCatCustomer(profile.revenueCatAppUserId);
-  return applyRevenueCatStateToProfile(profile, customerInfo);
-}
 
-async function getOrCreateBillingProfileByAppUserId(appUserId: string): Promise<BillingProfileRecord | null> {
-  let profile = await db.billingProfile.findUnique({ where: { revenueCatAppUserId: appUserId } });
-  if (profile) return profile;
-
-  const userId = resolveUserIdFromRevenueCatAppUserId(appUserId);
-  if (!userId) return null;
-
-  return db.billingProfile.create({
-    data: {
-      userId,
-      revenueCatAppUserId: appUserId,
-      premiumAccessStatus: 'NONE',
-    },
+  await db.$transaction(async (tx: DbClient) => {
+    const txProfile = await getOrCreateBillingProfileWithClient(tx, userId);
+    await applyRevenueCatStateToProfile(txProfile, customerInfo, null, tx);
+    await syncPartnerSharedAccessWithLinkedPartner(userId, tx);
   });
+
+  return getBillingAccessForUserInternal(userId, { allowLiveRevenueCatSync: false });
 }
 
 function getWebhookEventCore(payload: any) {
@@ -393,12 +757,20 @@ export async function applyRevenueCatWebhook(payload: any) {
   }
 
   try {
-    const profile = appUserId ? await getOrCreateBillingProfileByAppUserId(appUserId) : null;
+    const profile = appUserId ? await getOrCreateBillingProfileByAppUserIdWithClient(db, appUserId) : null;
     if (profile && env.REVENUECAT_SECRET_API_KEY) {
       const customerInfo = await fetchRevenueCatCustomer(profile.revenueCatAppUserId);
-      await applyRevenueCatStateToProfile(profile, customerInfo, externalEventId);
+      await db.$transaction(async (tx: DbClient) => {
+        const txProfile = await getOrCreateBillingProfileByAppUserIdWithClient(tx, appUserId!);
+        if (txProfile) {
+          await applyRevenueCatStateToProfile(txProfile, customerInfo, externalEventId, tx);
+        }
+        if (userId) {
+          await syncPartnerSharedAccessWithLinkedPartner(userId, tx);
+        }
+      });
     } else if (profile) {
-      const computed = getCachedOrComputedPremiumStatus(profile, new Date());
+      const computed = getSelfBillingStatus(profile, new Date());
       await db.billingProfile.update({
         where: { id: profile.id },
         data: {

@@ -1,5 +1,6 @@
 import { User, UserPlan } from '@prisma/client';
 import { presentBillingSnapshot } from '../services/billing';
+import { normalizeNotificationPreferences } from '../lib/notificationPreferences';
 
 export function presentUser(user: User & { billingProfile?: any | null }) {
   return {
@@ -13,7 +14,9 @@ export function presentUser(user: User & { billingProfile?: any | null }) {
     weightKg: user.weightKg,
     timezone: user.timezone,
     units: user.units,
+    baselinePaceSecPerKm: user.baselinePaceSecPerKm,
     billing: presentBillingSnapshot((user as any).billingProfile),
+    notificationPreferences: normalizeNotificationPreferences((user as any).notificationPreferences),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };

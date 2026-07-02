@@ -23,6 +23,7 @@ export const RUN_TYPE_MULTIPLIERS: Record<string, number> = {
     "Long Walk": 0.8,
     "Incline Walk": 0.6,
     "Recovery Walk": 0.5,
+    "Goal Practice Run": 1.4,
 };
 
 /**

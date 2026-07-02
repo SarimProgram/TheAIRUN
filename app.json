@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "04da95ac-054f-4823-8bef-1ab78f243d94"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.msarim010.theaicoach",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}

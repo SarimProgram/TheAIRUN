@@ -174,13 +174,13 @@ function validateInputs(input: GeneratePlanInput): void {
 /**
  * Step 3: Expand schedule into individual session placeholders
  */
-function expandSchedule(schedule: WeeklySchedule): Array<{ runType: string; sessionIndex: number }> {
-    const sessions: Array<{ runType: string; sessionIndex: number }> = [];
+function expandSchedule(schedule: WeeklySchedule): Array<{ runType: string; sessionIndex: number; targetKm?: number }> {
+    const sessions: Array<{ runType: string; sessionIndex: number; targetKm?: number }> = [];
     let index = 0;
 
     for (const run of schedule.runs) {
         for (let i = 0; i < run.sessions; i++) {
-            sessions.push({ runType: run.runType, sessionIndex: index++ });
+            sessions.push({ runType: run.runType, sessionIndex: index++, targetKm: run.targetKm });
         }
     }
 
@@ -191,13 +191,27 @@ function expandSchedule(schedule: WeeklySchedule): Array<{ runType: string; sess
  * Step 4: Allocate km using weighted multipliers
  */
 function allocateKm(
-    sessions: Array<{ runType: string; sessionIndex: number }>,
+    sessions: Array<{ runType: string; sessionIndex: number; targetKm?: number }>,
     weeklyKm: number
 ): AllocatedSession[] {
     if (sessions.length === 0 || weeklyKm <= 0) return [];
 
     // Calculate weights
-    const weights = sessions.map((s) => {
+    const fixedSessions = sessions.filter((s) => s.runType === "Goal Practice Run" && typeof s.targetKm === "number" && s.targetKm > 0);
+    const weightedSessions = sessions.filter((s) => !(s.runType === "Goal Practice Run" && typeof s.targetKm === "number" && s.targetKm > 0));
+    const fixedAllocated = fixedSessions.map((s) => ({
+        runType: s.runType,
+        sessionIndex: s.sessionIndex,
+        targetKm: s.targetKm as number,
+    }));
+    const remainingKm = Math.max(
+        weeklyKm - fixedAllocated.reduce((sum, session) => sum + session.targetKm, 0),
+        0
+    );
+
+    if (weightedSessions.length === 0) return fixedAllocated;
+
+    const weights = weightedSessions.map((s) => {
         const normalized = s.runType.replace(/-/g, "–");
         return RUN_TYPE_MULTIPLIERS[normalized] || RUN_TYPE_MULTIPLIERS[s.runType] || 1.0;
     });
@@ -205,10 +219,10 @@ function allocateKm(
     const totalWeight = weights.reduce((sum, w) => sum + w, 0);
 
     // Allocate proportionally
-    const allocated = sessions.map((s, i) => ({
+    const allocated = weightedSessions.map((s, i) => ({
         runType: s.runType,
         sessionIndex: s.sessionIndex,
-        targetKm: (weights[i] / totalWeight) * weeklyKm,
+        targetKm: (weights[i] / totalWeight) * remainingKm,
     }));
 
     // Apply rounding
@@ -224,7 +238,7 @@ function allocateKm(
 
     // Distribute remainder
     const roundedSum = rounded.reduce((sum, a) => sum + a.targetKm, 0);
-    const remainder = roundToNearest(weeklyKm - roundedSum, ROUNDING_RULES.precision);
+    const remainder = roundToNearest(remainingKm - roundedSum, ROUNDING_RULES.precision);
 
     if (remainder !== 0 && rounded.length > 0) {
         if (ROUNDING_RULES.remainderRule === "largest") {
@@ -242,7 +256,7 @@ function allocateKm(
         }
     }
 
-    return rounded;
+    return [...fixedAllocated, ...rounded];
 }
 
 /**

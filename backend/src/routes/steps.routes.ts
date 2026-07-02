@@ -3,6 +3,7 @@ import { prisma } from '../db/prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { getTodayUtcMidnight } from '../utils/date';
 import { emitStepUpdateToPartner } from '../socket';
+import { pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
 
 const router = Router();
 
@@ -437,6 +438,8 @@ router.post('/steps/sync', authMiddleware, async (req, res, next) => {
       // Don't fail the request if socket emit fails
       console.error('[Steps] Socket emit error:', socketErr);
     }
+
+    void pushPartnerSurfaceUpdateForChangedUser(userId, 'steps_synced');
   } catch (err) {
     next(err);
   }
@@ -496,6 +499,8 @@ router.put('/steps/correct', authMiddleware, async (req, res, next) => {
     } catch (socketErr) {
       console.error('[Steps] Socket emit error:', socketErr);
     }
+
+    void pushPartnerSurfaceUpdateForChangedUser(userId, 'steps_corrected');
   } catch (err) {
     next(err);
   }

@@ -4,6 +4,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { buildPartnerLivePayloadForUser, pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
 
 const router = Router();
 import { prisma } from '../db/prisma';
@@ -587,9 +588,32 @@ router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Respon
         });
 
         res.json(updatedSummary);
+        void pushPartnerSurfaceUpdateForChangedUser(userId, 'summary_recalculated');
     } catch (error) {
         console.error('Error recalculating summary:', error);
         res.status(500).json({ error: 'Failed to recalculate summary' });
+    }
+});
+
+router.get('/partner-live', authMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+        const userId = req.user!.id;
+        const payload = await buildPartnerLivePayloadForUser(userId);
+
+        if (!payload || payload.status === 'no_partner') {
+            return res.json({
+                hasPartner: false,
+                payload,
+            });
+        }
+
+        return res.json({
+            hasPartner: true,
+            payload,
+        });
+    } catch (error) {
+        console.error('Error fetching partner live payload:', error);
+        res.status(500).json({ error: 'Failed to fetch partner live payload' });
     }
 });
 
@@ -809,6 +833,7 @@ router.post('/workouts', authMiddleware, async (req: AuthRequest, res: Response)
         });
 
         res.status(201).json(workout);
+        void pushPartnerSurfaceUpdateForChangedUser(userId, 'workout_created');
     } catch (error) {
         console.error('Error creating workout:', error);
         res.status(500).json({ error: 'Failed to create workout' });
@@ -845,6 +870,7 @@ router.delete('/workouts/:id', authMiddleware, async (req: AuthRequest, res: Res
         });
 
         res.json({ success: true });
+        void pushPartnerSurfaceUpdateForChangedUser(userId, 'workout_deleted');
     } catch (error) {
         console.error('Error deleting workout:', error);
         res.status(500).json({ error: 'Failed to delete workout' });

@@ -44,7 +44,7 @@ export interface PlanScope {
  */
 export interface WeeklySchedule {
   week: number;
-  runs: Array<{ runType: string; sessions: number }>;
+  runs: Array<{ runType: string; sessions: number; targetKm?: number }>;
   stepDays: number;
   runDays: number;
   recoveryDays: number;
