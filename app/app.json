@@ -1,0 +1,216 @@
+{
+  "expo": {
+    "name": "Runtogether",
+    "slug": "app",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "icon": "./assets/iosicon.png",
+    "scheme": "app",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "au.com.msarim.theaicoach",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "buildNumber": "7",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSHealthShareUsageDescription": "We use your step count to sync and compare progress with your partner.",
+        "NSHealthUpdateUsageDescription": "We may write workouts or activity sessions to your Health data to track progress.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location in the background to track your running route and distance.",
+        "NSLocationWhenInUseUsageDescription": "We need your location to track your running route and distance.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "com.expo.modules.backgroundtask.processing"
+        ],
+        "UIBackgroundModes": [
+          "processing",
+          "location",
+          "remote-notification"
+        ]
+      },
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
+    },
+    "android": {
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "backgroundColor": "#FF6B6B",
+        "foregroundImage": "./assets/iosicon.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.BODY_SENSORS",
+        "android.permission.HIGH_SAMPLING_RATE_SENSORS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.WAKE_LOCK",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.BODY_SENSORS",
+        "android.permission.HIGH_SAMPLING_RATE_SENSORS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.WAKE_LOCK",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "package": "au.com.msarim.theaicoach",
+      "runtimeVersion": "1.0.1"
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "@react-native-firebase/app",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "extraPods": [
+              {
+                "name": "GoogleUtilities",
+                "modular_headers": true
+              },
+              {
+                "name": "FirebaseCoreInternal",
+                "modular_headers": true
+              }
+            ]
+          }
+        }
+      ],
+      "expo-apple-authentication",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#FF6B6B"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/couple.png",
+          "imageWidth": 240,
+          "resizeMode": "contain",
+          "backgroundColor": "#0D1117",
+          "dark": {
+            "backgroundColor": "#0D1117"
+          }
+        }
+      ],
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "We use your step count to sync and compare progress with your partner.",
+          "NSHealthUpdateUsageDescription": "We may write workouts or activity sessions to your Health data to track progress.",
+          "background": true
+        }
+      ],
+      "expo-background-task",
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use your camera to scan and log meals."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location to track your running route.",
+          "locationAlwaysPermission": "Allow $(PRODUCT_NAME) to use your location in the background for run tracking.",
+          "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location to track your run.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "react-native-maps",
+        {
+          "androidGoogleMapsApiKey": "YOUR_GOOGLE_MAPS_API_KEY_HERE"
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-font",
+      "expo-image",
+      "expo-web-browser",
+      [
+        "expo-widgets",
+        {
+          "groupIdentifier": "group.au.com.msarim.theaicoach.widgets",
+          "enablePushNotifications": true,
+          "frequentUpdates": true,
+          "widgets": [
+            {
+              "name": "PartnerKcalsWidget",
+              "displayName": "Partner Kcals",
+              "description": "View your and your partner's calories",
+              "contentMarginsDisabled": true,
+              "supportedFamilies": ["systemMedium"]
+            },
+            {
+              "name": "LogActionWidget",
+              "displayName": "Quick Log",
+              "description": "Quickly log a meal or workout",
+              "contentMarginsDisabled": true,
+              "supportedFamilies": ["systemSmall"]
+            }
+          ]
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "apiPort": 4000,
+      "apiBaseUrl": "https://backend-staging-17ea.up.railway.app",
+      "apiUrls": {
+        "production": "https://backend-staging-17ea.up.railway.app",
+        "staging": "https://backend-staging-17ea.up.railway.app"
+      },
+      "oauth": {
+        "google": {
+          "expoClientId": "567019979955-en2t73n02lbthvs86psrt2lvv9vg3669.apps.googleusercontent.com",
+          "iosClientId": "567019979955-gcm4n135048sqo7upqf0k0mmp5puid0l.apps.googleusercontent.com",
+          "androidClientId": "567019979955-c1pk9sd9cjt309futq8npdm7ffoblcpr.apps.googleusercontent.com",
+          "webClientId": "567019979955-en2t73n02lbthvs86psrt2lvv9vg3669.apps.googleusercontent.com"
+        }
+      },
+      "paywallEnabled": true,
+      "revenueCat": {
+        "iosApiKey": "appl_WtYTyxWiqqBOQMRjPwNDNcCidNO",
+        "androidApiKey": "test_vuEfmcbjVCLnDJbpNsxlyMeyxuJ",
+        "entitlementId": "RunTogether Pro",
+        "packageIds": {
+          "weekly": "weekly",
+          "yearly": "yearly"
+        },
+        "productIds": {
+          "weekly": "com.runtogether.premium.weekly",
+          "yearly": "com.runtogether.premium.yearly"
+        }
+      },
+      "eas": {
+        "projectId": "27dddfc1-9c17-45bc-a4d8-99ba04b8790e"
+      }
+    },
+    "owner": "msarim010",
+    "updates": {
+      "url": "https://u.expo.dev/27dddfc1-9c17-45bc-a4d8-99ba04b8790e"
+    }
+  }
+}
