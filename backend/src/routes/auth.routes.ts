@@ -120,19 +120,27 @@ async function verifyAppleIdToken(idToken: string): Promise<SocialIdentity> {
 
   const email = String(payload?.email || '').toLowerCase().trim();
 
-  const emailVerified =
-    payload?.email_verified === true ||
-    String(payload?.email_verified || '').toLowerCase() === 'true';
+  // Apple only returns the email claim on the first sign-in (or after user revokes access).
+  // On subsequent sign-ins the token may omit email/email_verified entirely, which is expected.
+  // Only reject when Apple explicitly says email_verified is false.
+  const emailVerifiedClaim = payload?.email_verified;
+  const emailVerifiedExplicitlyFalse =
+    emailVerifiedClaim === false ||
+    String(emailVerifiedClaim ?? '').toLowerCase() === 'false';
 
-  if (!emailVerified) {
+  if (email && emailVerifiedExplicitlyFalse) {
     throw new Error('Apple email is not verified');
   }
+
+  const emailVerified =
+    emailVerifiedClaim === true ||
+    String(emailVerifiedClaim ?? '').toLowerCase() === 'true';
 
   return {
     provider: 'apple',
     subject: String(payload.sub),
     email: email || undefined,
-    emailVerified: true,
+    emailVerified: emailVerified || !email,
   };
 }
 
