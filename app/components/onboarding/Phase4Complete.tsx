@@ -9,16 +9,23 @@ import {
   Dimensions,
   StatusBar,
   Platform,
+  StyleProp,
+  ViewStyle,
 } from 'react-native';
-import { ChevronLeft, ArrowRight, Calendar } from 'lucide-react-native';
+import { ChevronLeft, ArrowRight } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const { width } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
 
 // Picker settings
-const ITEM_HEIGHT = 70;
+const ITEM_HEIGHT = useCompactLayout ? 58 : 70;
 const VISIBLE_ITEMS = 3;
 const PICKER_HEIGHT = ITEM_HEIGHT * VISIBLE_ITEMS;
+const titleSize = useCompactLayout ? 32 : 36;
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -43,6 +50,7 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
   const [selectedIndex, setSelectedIndex] = useState(20);
+  const selectedAge = currentYear - years[selectedIndex];
 
   useEffect(() => {
     Animated.parallel([
@@ -100,6 +108,14 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
     );
   };
 
+  const renderAgeDisplay = (extraStyle?: StyleProp<ViewStyle>) => (
+    <View style={[styles.ageDisplay, useCompactLayout && styles.ageDisplayCompact, extraStyle]}>
+      <Text style={styles.ageLabel}>Estimated Age</Text>
+      <Text style={styles.ageValue}>{selectedAge}</Text>
+      <Text style={styles.ageUnit}>Years</Text>
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
@@ -110,9 +126,10 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.main}>
+        <View style={[styles.main, useCompactLayout && styles.mainCompact]}>
           <Animated.View style={[
             styles.topSection,
+            useCompactLayout && styles.topSectionCompact,
             { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
           ]}>
            
@@ -122,9 +139,12 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
 
           <Animated.View style={[
             styles.pickerSection,
+            useCompactLayout && styles.pickerSectionCompact,
             { opacity: fadeAnim }
           ]}>
-            <View style={styles.pickerContainer}>
+            {useCompactLayout && renderAgeDisplay(styles.ageDisplayTopCompact)}
+
+            <View style={[styles.pickerContainer, useCompactLayout && styles.pickerContainerCompact]}>
               <View style={styles.indicator} pointerEvents="none" />
 
               <Animated.FlatList
@@ -148,18 +168,14 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
               />
             </View>
 
-            <View style={styles.ageDisplay}>
-              <Text style={styles.ageLabel}>Estimated Age</Text>
-              <Text style={styles.ageValue}>{currentYear - years[selectedIndex]}</Text>
-              <Text style={styles.ageUnit}>Years</Text>
-            </View>
+            {!useCompactLayout && renderAgeDisplay()}
           </Animated.View>
         </View>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
           <TouchableOpacity
             style={styles.mainButton}
-            onPress={() => onComplete(currentYear - years[selectedIndex])}
+            onPress={() => onComplete(selectedAge)}
             activeOpacity={0.9}
           >
             <LinearGradient
@@ -200,8 +216,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     paddingTop: 30,
   },
+  mainCompact: {
+    flex: 0,
+    paddingTop: 4,
+  },
   topSection: {
     marginBottom: 40,
+  },
+  topSectionCompact: {
+    marginBottom: 12,
   },
   badge: {
     backgroundColor: '#FFF0F0',
@@ -221,10 +244,10 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
   title: {
-    fontSize: 36,
+    fontSize: titleSize,
     fontWeight: '900',
     color: COLORS.black,
-    lineHeight: 42,
+    lineHeight: titleSize + 6,
     letterSpacing: -1,
     marginBottom: 12,
   },
@@ -237,12 +260,19 @@ const styles = StyleSheet.create({
   pickerSection: {
     alignItems: 'center',
   },
+  pickerSectionCompact: {
+    flexShrink: 1,
+  },
   pickerContainer: {
     height: PICKER_HEIGHT,
     width: '100%',
     justifyContent: 'center',
     alignItems: 'center',
     marginVertical: 20,
+  },
+  pickerContainerCompact: {
+    marginTop: 2,
+    marginBottom: 4,
   },
   indicator: {
     position: 'absolute',
@@ -259,13 +289,22 @@ const styles = StyleSheet.create({
     width: width - 80,
   },
   yearText: {
-    fontSize: 32,
+    fontSize: useCompactLayout ? 28 : 32,
     fontWeight: '800',
     letterSpacing: -1,
   },
   ageDisplay: {
     alignItems: 'center',
     marginTop: 10,
+    minHeight: 78,
+  },
+  ageDisplayCompact: {
+    marginTop: 0,
+    minHeight: 62,
+  },
+  ageDisplayTopCompact: {
+    marginTop: 0,
+    marginBottom: 0,
   },
   ageLabel: {
     fontSize: 12,
@@ -276,7 +315,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   ageValue: {
-    fontSize: 48,
+    fontSize: useCompactLayout ? 40 : 48,
     fontWeight: '900',
     color: COLORS.black,
     letterSpacing: -2,
@@ -290,6 +329,11 @@ const styles = StyleSheet.create({
   footer: {
     padding: 32,
     paddingBottom: Platform.OS === 'ios' ? 20 : 30,
+  },
+  footerCompact: {
+    marginTop: 'auto',
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 24,
   },
   mainButton: {
     height: 64,
@@ -310,7 +354,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: -0.5,
   },

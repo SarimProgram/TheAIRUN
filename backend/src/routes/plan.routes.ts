@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import prisma from "../db/prisma";
 import { AuthRequest } from "../middleware/auth";
 import { presentPlan } from "./presenters";
+import { requireStringParam } from "../utils/params";
 
 const router = Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -1593,7 +1594,7 @@ router.get("/daily/:weekNumber", async (req: AuthRequest, res, next) => {
     try {
         if (!req.user) return res.status(401).json({ message: "Unauthorized" });
 
-        const weekNumber = parseInt(req.params.weekNumber, 10);
+        const weekNumber = parseInt(requireStringParam(req.params.weekNumber, "weekNumber"), 10);
         if (isNaN(weekNumber) || weekNumber < 1) {
             return res.status(400).json({ message: "Invalid week number" });
         }

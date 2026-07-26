@@ -8,11 +8,17 @@ import {
   Animated,
   StatusBar,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { Quote, ChevronRight, Heart } from 'lucide-react-native';
 import { Image } from 'expo-image';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -41,13 +47,14 @@ export default function SocialProofScreen({ onContinue }: any) {
       <SafeAreaView style={styles.safeArea}>
         <Animated.View style={[
           styles.content,
+          useCompactLayout && styles.contentCompact,
           { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
         ]}>
           
           {/* Visual Area (Couple Image goes here) */}
-          <View style={styles.imageContainer}>
+          <View style={[styles.imageContainer, useCompactLayout && styles.imageContainerCompact]}>
              {/* This represents your "Couple walking/running" visual */}
-             <View style={styles.illustrationPlaceholder}>
+             <View style={[styles.illustrationPlaceholder, useCompactLayout && styles.illustrationPlaceholderCompact]}>
                 <View style={styles.imageClip}>
                   <Image
                     source={require('../../assets/promo.jpg')}
@@ -57,44 +64,44 @@ export default function SocialProofScreen({ onContinue }: any) {
                 </View>
              </View>
              {/* Tag is now sibling to give it better overflow visibility */}
-             <View style={styles.floatingTag}>
+             <View style={[styles.floatingTag, useCompactLayout && styles.floatingTagCompact]}>
                 <Heart size={14} color={COLORS.coral} fill={COLORS.coral} />
-                <Text style={styles.tagText}>Built for Couples</Text>
+                <Text style={[styles.tagText, useCompactLayout && styles.tagTextCompact]}>Built for Couples</Text>
              </View>
           </View>
 
           {/* Testimonial Section */}
-          <View style={styles.testimonialCard}>
-            <View style={styles.quoteCircle}>
-              <Quote size={24} color={COLORS.white} fill={COLORS.white} />
+          <View style={[styles.testimonialCard, useCompactLayout && styles.testimonialCardCompact]}>
+            <View style={[styles.quoteCircle, useCompactLayout && styles.quoteCircleCompact]}>
+              <Quote size={useCompactLayout ? 20 : 24} color={COLORS.white} fill={COLORS.white} />
             </View>
             
-            <Text style={styles.bodyText}>
+            <Text style={[styles.bodyText, useCompactLayout && styles.bodyTextCompact]}>
               “I always quit by week 3. Running with my partner and earning <Text style={styles.highlight}>date nights</Text> kept me consistent for the first time.”
             </Text>
 
-            <View style={styles.authorSection}>
+            <View style={[styles.authorSection, useCompactLayout && styles.authorSectionCompact]}>
                 <View>
-                  <Text style={styles.authorName}>Sarah & James</Text>
-                  <Text style={styles.authorSub}>Earning rewards since 2026</Text>
+                  <Text style={[styles.authorName, useCompactLayout && styles.authorNameCompact]}>Sarah & James</Text>
+                  <Text style={[styles.authorSub, useCompactLayout && styles.authorSubCompact]}>Earning rewards since 2026</Text>
                </View>
             </View>
           </View>
 
           {/* Footer Info */}
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>
+          <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
+            <Text style={[styles.footerText, useCompactLayout && styles.footerTextCompact]}>
               Thousands of couples and solo runners are building habits together.
             </Text>
 
             <TouchableOpacity 
               activeOpacity={0.9} 
-              style={styles.ctaButton}
+              style={[styles.ctaButton, useCompactLayout && styles.ctaButtonCompact]}
               onPress={onContinue}
             >
-              <Text style={styles.buttonText}>Continue</Text>
-              <View style={styles.iconBox}>
-                <ChevronRight color={COLORS.coral} size={24} strokeWidth={3} />
+              <Text style={[styles.buttonText, useCompactLayout && styles.buttonTextCompact]}>Continue</Text>
+              <View style={[styles.iconBox, useCompactLayout && styles.iconBoxCompact]}>
+                <ChevronRight color={COLORS.coral} size={useCompactLayout ? 22 : 24} strokeWidth={3} />
               </View>
             </TouchableOpacity>
           </View>
@@ -119,11 +126,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 20,
   },
+  contentCompact: {
+    paddingHorizontal: 28,
+    paddingVertical: 10,
+  },
   imageContainer: {
     height: height * 0.35, // More room for the half-on/half-off tag
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 50,
+  },
+  imageContainerCompact: {
+    height: 218,
   },
   illustrationPlaceholder: {
     width: width * 0.8,
@@ -134,6 +148,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.3)',
+  },
+  illustrationPlaceholderCompact: {
+    width: width * 0.72,
+    height: 150,
+    borderRadius: 32,
   },
   imageClip: {
     width: '100%',
@@ -162,10 +181,19 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 5,
   },
+  floatingTagCompact: {
+    bottom: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+  },
   tagText: {
     fontSize: 13,
     fontWeight: '700',
     color: COLORS.dark,
+  },
+  tagTextCompact: {
+    fontSize: 12,
   },
   testimonialCard: {
     backgroundColor: COLORS.white,
@@ -176,6 +204,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 30,
     elevation: 10,
+  },
+  testimonialCardCompact: {
+    borderRadius: 28,
+    padding: 24,
   },
   quoteCircle: {
     width: 48,
@@ -188,12 +220,23 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: COLORS.white,
   },
+  quoteCircleCompact: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    marginTop: -45,
+  },
   bodyText: {
     fontSize: 20,
     lineHeight: 32,
     color: COLORS.dark,
     fontWeight: '600',
     marginVertical: 20,
+  },
+  bodyTextCompact: {
+    fontSize: 17,
+    lineHeight: 26,
+    marginVertical: 14,
   },
   highlight: {
     color: COLORS.coral,
@@ -204,6 +247,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     marginTop: 10,
+  },
+  authorSectionCompact: {
+    marginTop: 4,
   },
   avatar: {
     width: 40,
@@ -216,21 +262,35 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.dark,
   },
+  authorNameCompact: {
+    fontSize: 15,
+  },
   authorSub: {
     fontSize: 13,
     color: COLORS.textMuted,
   },
+  authorSubCompact: {
+    fontSize: 12,
+  },
   footer: {
     gap: 24,
+  },
+  footerCompact: {
+    gap: 12,
   },
   footerText: {
     color: COLORS.white,
     textAlign: 'center',
-    fontSize: 15,
+    fontSize: 16,
     lineHeight: 22,
-    opacity: 0.9,
+    opacity: 1,
     paddingHorizontal: 10,
-    fontWeight: '500',
+    fontWeight: '700',
+  },
+  footerTextCompact: {
+    fontSize: 14,
+    lineHeight: 20,
+    paddingHorizontal: 18,
   },
   ctaButton: {
     backgroundColor: COLORS.white,
@@ -241,11 +301,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingLeft: 32,
   },
+  ctaButtonCompact: {
+    height: 58,
+    borderRadius: 20,
+    paddingLeft: 26,
+  },
   buttonText: {
     flex: 1,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: COLORS.coral,
+  },
+  buttonTextCompact: {
+    fontSize: 15,
   },
   iconBox: {
     width: 56,
@@ -254,5 +322,10 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  iconBoxCompact: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
   },
 });

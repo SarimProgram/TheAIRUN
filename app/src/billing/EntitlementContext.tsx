@@ -52,6 +52,30 @@ function getPurchasesModule(): PurchasesModule | null {
   return purchasesModuleCache;
 }
 
+function configureRevenueCatLogHandler(purchases: PurchasesModule) {
+  if (typeof purchases?.setLogHandler !== 'function') return;
+
+  purchases.setLogHandler((level: any, message: string) => {
+    const normalizedMessage = String(message || '');
+    const isPurchaseCancelled = /purchase was cancelled/i.test(normalizedMessage);
+
+    if (isPurchaseCancelled) {
+      console.debug(`[RevenueCat] ${normalizedMessage}`);
+      return;
+    }
+
+    if (level === purchases?.LOG_LEVEL?.ERROR) {
+      console.error(`[RevenueCat] ${normalizedMessage}`);
+    } else if (level === purchases?.LOG_LEVEL?.WARN) {
+      console.warn(`[RevenueCat] ${normalizedMessage}`);
+    } else if (level === purchases?.LOG_LEVEL?.INFO) {
+      console.info(`[RevenueCat] ${normalizedMessage}`);
+    } else {
+      console.debug(`[RevenueCat] ${normalizedMessage}`);
+    }
+  });
+}
+
 function getRevenueCatApiKey() {
   const extra: any = Constants.expoConfig?.extra ?? (Constants as any).manifest2?.extra ?? {};
   const rc = extra.revenueCat ?? {};
@@ -222,6 +246,52 @@ function summarizeRevenueCatOfferings(offerings: any) {
   };
 }
 
+function summarizePurchaseTarget(pkgOrProduct: any) {
+  if (!pkgOrProduct) return null;
+
+  return {
+    packageIdentifier: pkgOrProduct?.identifier ?? null,
+    packageType: pkgOrProduct?.packageType ?? null,
+    productIdentifier:
+      pkgOrProduct?.product?.identifier ??
+      pkgOrProduct?.product?.productIdentifier ??
+      pkgOrProduct?.storeProduct?.identifier ??
+      pkgOrProduct?.storeProduct?.productIdentifier ??
+      pkgOrProduct?.identifier ??
+      null,
+    title:
+      pkgOrProduct?.product?.title ??
+      pkgOrProduct?.storeProduct?.title ??
+      null,
+    price:
+      pkgOrProduct?.product?.priceString ??
+      pkgOrProduct?.storeProduct?.priceString ??
+      null,
+    subscriptionPeriod:
+      pkgOrProduct?.product?.subscriptionPeriod ??
+      pkgOrProduct?.storeProduct?.subscriptionPeriod ??
+      null,
+    introPrice:
+      pkgOrProduct?.product?.introPrice ??
+      pkgOrProduct?.storeProduct?.introPrice ??
+      pkgOrProduct?.product?.introductoryPrice ??
+      pkgOrProduct?.storeProduct?.introductoryPrice ??
+      null,
+  };
+}
+
+function summarizePurchaseError(error: any) {
+  return {
+    name: error?.name ?? null,
+    code: error?.code ?? null,
+    message: error?.message ?? null,
+    readableErrorCode: error?.readableErrorCode ?? error?.userInfo?.readableErrorCode ?? null,
+    underlyingErrorMessage: error?.underlyingErrorMessage ?? error?.userInfo?.underlyingErrorMessage ?? null,
+    userCancelled: error?.userCancelled ?? error?.userInfo?.userCancelled ?? null,
+    userInfo: error?.userInfo ?? null,
+  };
+}
+
 function getActiveRunTogetherProEntitlement(customerInfo: any, entitlementId: string) {
   const active = customerInfo?.entitlements?.active ?? {};
   return active?.[entitlementId] || active?.['RunTogether Pro'] || active?.runtogether_pro || active?.premium || null;
@@ -291,6 +361,7 @@ export function EntitlementProvider({ children }: { children: React.ReactNode })
       console.warn('[Entitlement] RevenueCat configure skipped: missing RevenueCat API key');
       return false;
     }
+    configureRevenueCatLogHandler(purchases);
     if (configuredForUserRef.current === userId) return true;
 
     try {
@@ -300,6 +371,7 @@ export function EntitlementProvider({ children }: { children: React.ReactNode })
 
       if (typeof purchases.configure === 'function') {
         await Promise.resolve(purchases.configure({ apiKey, appUserID: `user_${userId}` }));
+        configureRevenueCatLogHandler(purchases);
       } else {
         console.warn('[Entitlement] RevenueCat configure skipped: configure() unavailable on SDK module');
         return false;
@@ -446,20 +518,38 @@ export function EntitlementProvider({ children }: { children: React.ReactNode })
       throw new Error('RevenueCat purchasePackage is unavailable');
     }
     try {
+      console.log('[Entitlement] Starting RevenueCat purchase', summarizePurchaseTarget(pkg));
       const result = await purchases.purchasePackage(pkg);
       if (result?.customerInfo) {
         setCustomerInfo(result.customerInfo);
+        const activeEntitlement = getActiveRunTogetherProEntitlement(result.customerInfo, rcConfig.entitlementId);
+        if (activeEntitlement) {
+          syncRevenueCatAndRefresh().catch((e) => {
+            console.warn('[Entitlement] Purchased entitlement is active, but backend RevenueCat sync failed', e);
+          });
+          return;
+        }
       }
     } catch (e: any) {
       const cancelled =
         e?.userCancelled === true ||
         e?.code === purchases?.PURCHASES_ERROR_CODE?.PURCHASE_CANCELLED_ERROR ||
         e?.code === '1';
-      if (cancelled) return;
+      if (cancelled) {
+        console.warn('[Entitlement] RevenueCat purchase cancelled', {
+          target: summarizePurchaseTarget(pkg),
+          error: summarizePurchaseError(e),
+        });
+        return;
+      }
+      console.warn('[Entitlement] RevenueCat purchase failed', {
+        target: summarizePurchaseTarget(pkg),
+        error: summarizePurchaseError(e),
+      });
       throw e;
     }
     await syncRevenueCatAndRefresh();
-  }, [ensureRevenueCatConfigured, syncRevenueCatAndRefresh]);
+  }, [ensureRevenueCatConfigured, rcConfig.entitlementId, syncRevenueCatAndRefresh]);
 
   const purchaseByProductId = useCallback(async (productId: string) => {
     const purchases = getPurchasesModule();
@@ -474,11 +564,31 @@ export function EntitlementProvider({ children }: { children: React.ReactNode })
 
     try {
       if (typeof purchases.purchaseProduct === 'function') {
+        console.log('[Entitlement] Starting RevenueCat product purchase', { productId: normalized });
         const result = await purchases.purchaseProduct(normalized);
-        if (result?.customerInfo) setCustomerInfo(result.customerInfo);
+        if (result?.customerInfo) {
+          setCustomerInfo(result.customerInfo);
+          const activeEntitlement = getActiveRunTogetherProEntitlement(result.customerInfo, rcConfig.entitlementId);
+          if (activeEntitlement) {
+            syncRevenueCatAndRefresh().catch((e) => {
+              console.warn('[Entitlement] Purchased entitlement is active, but backend RevenueCat sync failed', e);
+            });
+            return;
+          }
+        }
       } else if (typeof purchases.purchaseStoreProduct === 'function') {
+        console.log('[Entitlement] Starting RevenueCat store product purchase', { productId: normalized });
         const result = await purchases.purchaseStoreProduct(normalized);
-        if (result?.customerInfo) setCustomerInfo(result.customerInfo);
+        if (result?.customerInfo) {
+          setCustomerInfo(result.customerInfo);
+          const activeEntitlement = getActiveRunTogetherProEntitlement(result.customerInfo, rcConfig.entitlementId);
+          if (activeEntitlement) {
+            syncRevenueCatAndRefresh().catch((e) => {
+              console.warn('[Entitlement] Purchased entitlement is active, but backend RevenueCat sync failed', e);
+            });
+            return;
+          }
+        }
       } else {
         throw new Error('RevenueCat purchaseProduct API is unavailable');
       }
@@ -487,12 +597,22 @@ export function EntitlementProvider({ children }: { children: React.ReactNode })
         e?.userCancelled === true ||
         e?.code === purchases?.PURCHASES_ERROR_CODE?.PURCHASE_CANCELLED_ERROR ||
         e?.code === '1';
-      if (cancelled) return;
+      if (cancelled) {
+        console.warn('[Entitlement] RevenueCat product purchase cancelled', {
+          productId: normalized,
+          error: summarizePurchaseError(e),
+        });
+        return;
+      }
+      console.warn('[Entitlement] RevenueCat product purchase failed', {
+        productId: normalized,
+        error: summarizePurchaseError(e),
+      });
       throw e;
     }
 
     await syncRevenueCatAndRefresh();
-  }, [ensureRevenueCatConfigured, syncRevenueCatAndRefresh]);
+  }, [ensureRevenueCatConfigured, rcConfig.entitlementId, syncRevenueCatAndRefresh]);
 
   const runRevenueCatDiagnostics = useCallback(async () => {
     const purchases = getPurchasesModule();

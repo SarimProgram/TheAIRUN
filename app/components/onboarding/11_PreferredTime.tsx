@@ -15,7 +15,10 @@ import {
 import { ChevronLeft, ArrowRight, Sun, Sunset, Moon } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const { height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
 
 const COLORS = {
   brand: '#FF6B6B',
@@ -79,9 +82,13 @@ export default function PreferredTime({ onContinue, onBack, initialValue = 'morn
       <StatusBar barStyle="dark-content" />
       
       {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
-          <View style={styles.backCircle}>
+      <View style={[styles.header, useCompactLayout && styles.headerCompact]}>
+        <TouchableOpacity
+          onPress={onBack}
+          style={[styles.backBtn, useCompactLayout && styles.backBtnCompact]}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.backCircle, useCompactLayout && styles.backCircleCompact]}>
             <ChevronLeft color={COLORS.ink} size={24} />
           </View>
         </TouchableOpacity>
@@ -95,15 +102,15 @@ export default function PreferredTime({ onContinue, onBack, initialValue = 'morn
       >
         <ScrollView 
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, useCompactLayout && styles.scrollContentCompact]}
         >
-          <View style={styles.textGroup}>
-            <Text style={styles.preTitle}>YOUR ROUTINE</Text>
-            <Text style={styles.mainTitle}>When do you{"\n"}<Text style={{ color: COLORS.brand }}>move best?</Text></Text>
-            <Text style={styles.subtitle}>We'll schedule your coaching sessions at a time that fits your lifestyle.</Text>
+          <View style={[styles.textGroup, useCompactLayout && styles.textGroupCompact]}>
+            <Text style={[styles.preTitle, useCompactLayout && styles.preTitleCompact]}>YOUR ROUTINE</Text>
+            <Text style={[styles.mainTitle, useCompactLayout && styles.mainTitleCompact]}>When do you{"\n"}<Text style={{ color: COLORS.brand }}>move best?</Text></Text>
+            <Text style={[styles.subtitle, useCompactLayout && styles.subtitleCompact]}>We'll schedule your coaching sessions at a time that fits your lifestyle.</Text>
           </View>
 
-          <View style={styles.optionsList}>
+          <View style={[styles.optionsList, useCompactLayout && styles.optionsListCompact]}>
             {OPTIONS.map((item) => {
               const isSelected = selected === item.id;
               const Icon = item.icon;
@@ -115,23 +122,24 @@ export default function PreferredTime({ onContinue, onBack, initialValue = 'morn
                   activeOpacity={0.9}
                   style={[
                     styles.choiceCard,
+                    useCompactLayout && styles.choiceCardCompact,
                     isSelected && styles.choiceCardActive
                   ]}
                 >
-                  <View style={[styles.iconBox, { backgroundColor: item.bgColor }]}>
-                    <Icon color={item.color} size={24} strokeWidth={2.5} />
+                  <View style={[styles.iconBox, useCompactLayout && styles.iconBoxCompact, { backgroundColor: item.bgColor }]}>
+                    <Icon color={item.color} size={useCompactLayout ? 21 : 24} strokeWidth={2.5} />
                   </View>
                   
-                  <View style={styles.cardContent}>
-                    <Text style={[styles.cardLabel, isSelected && { color: COLORS.ink }]}>
+                  <View style={[styles.cardContent, useCompactLayout && styles.cardContentCompact]}>
+                    <Text style={[styles.cardLabel, useCompactLayout && styles.cardLabelCompact, isSelected && { color: COLORS.ink }]}>
                       {item.label}
                     </Text>
-                    <Text style={styles.cardSub}>
+                    <Text style={[styles.cardSub, useCompactLayout && styles.cardSubCompact]}>
                       {item.sub}
                     </Text>
                   </View>
 
-                  <View style={[styles.radio, isSelected && styles.radioActive]}>
+                  <View style={[styles.radio, useCompactLayout && styles.radioCompact, isSelected && styles.radioActive]}>
                     {isSelected && <View style={styles.radioInner} />}
                   </View>
                 </TouchableOpacity>
@@ -140,9 +148,9 @@ export default function PreferredTime({ onContinue, onBack, initialValue = 'morn
           </View>
         </ScrollView>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
           <TouchableOpacity 
-            style={styles.cta} 
+            style={[styles.cta, useCompactLayout && styles.ctaCompact]} 
             onPress={() => onContinue(selected)}
             activeOpacity={0.9}
           >
@@ -152,8 +160,8 @@ export default function PreferredTime({ onContinue, onBack, initialValue = 'morn
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
             >
-              <Text style={styles.ctaText}>Continue</Text>
-              <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
+              <Text style={[styles.ctaText, useCompactLayout && styles.ctaTextCompact]}>Continue</Text>
+              <ArrowRight color={COLORS.white} size={useCompactLayout ? 18 : 20} strokeWidth={3} />
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -170,12 +178,20 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingTop: 10,
-    height: 60,
+    height: 54,
     justifyContent: 'center',
+  },
+  headerCompact: {
+    paddingTop: 0,
+    height: 42,
   },
   backBtn: {
     width: 44,
     height: 44,
+  },
+  backBtnCompact: {
+    width: 38,
+    height: 38,
   },
   backCircle: {
     width: 44,
@@ -187,6 +203,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
+  backCircleCompact: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
   content: {
     flex: 1,
   },
@@ -195,8 +216,16 @@ const styles = StyleSheet.create({
     paddingTop: 15,
     paddingBottom: 20,
   },
+  scrollContentCompact: {
+    paddingHorizontal: 30,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
   textGroup: {
     marginBottom: 35,
+  },
+  textGroupCompact: {
+    marginBottom: 18,
   },
   preTitle: {
     fontSize: 13,
@@ -204,6 +233,10 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
     letterSpacing: 2,
     marginBottom: 10,
+  },
+  preTitleCompact: {
+    fontSize: 11,
+    marginBottom: 6,
   },
   mainTitle: {
     fontSize: 48,
@@ -213,14 +246,26 @@ const styles = StyleSheet.create({
     lineHeight: 52,
     marginBottom: 12,
   },
+  mainTitleCompact: {
+    fontSize: 36,
+    lineHeight: 39,
+    marginBottom: 8,
+  },
   subtitle: {
     fontSize: 16,
     color: COLORS.muted,
     fontWeight: '500',
     lineHeight: 24,
   },
+  subtitleCompact: {
+    fontSize: 13,
+    lineHeight: 19,
+  },
   optionsList: {
     gap: 12,
+  },
+  optionsListCompact: {
+    gap: 8,
   },
   choiceCard: {
     height: 90,
@@ -231,6 +276,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderWidth: 1,
     borderColor: COLORS.border,
+  },
+  choiceCardCompact: {
+    height: 72,
+    borderRadius: 20,
+    paddingHorizontal: 16,
   },
   choiceCardActive: {
     backgroundColor: COLORS.white,
@@ -247,9 +297,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  iconBoxCompact: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+  },
   cardContent: {
     flex: 1,
     marginLeft: 16,
+  },
+  cardContentCompact: {
+    marginLeft: 12,
   },
   cardLabel: {
     fontSize: 18,
@@ -257,10 +315,16 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
     marginBottom: 2,
   },
+  cardLabelCompact: {
+    fontSize: 16,
+  },
   cardSub: {
     fontSize: 14,
     color: COLORS.muted,
     fontWeight: '500',
+  },
+  cardSubCompact: {
+    fontSize: 12,
   },
   radio: {
     width: 24,
@@ -270,6 +334,11 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  radioCompact: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
   },
   radioActive: {
     borderColor: COLORS.brand,
@@ -286,6 +355,10 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 40 : 30,
     paddingTop: 10,
   },
+  footerCompact: {
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 18 : 16,
+  },
   cta: {
     height: 68,
     borderRadius: 34,
@@ -294,6 +367,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 15,
     elevation: 8,
+  },
+  ctaCompact: {
+    height: 56,
+    borderRadius: 20,
   },
   ctaGradient: {
     flex: 1,
@@ -307,5 +384,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     letterSpacing: -0.5,
+  },
+  ctaTextCompact: {
+    fontSize: 16,
   },
 });

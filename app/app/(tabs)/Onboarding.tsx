@@ -51,7 +51,10 @@ import WeightBranch from '../../components/onboarding/Weight_Branch';
 import RunningBranch from '../../components/onboarding/Running_Branch';
 import Phase20RunningHabits from '../../components/onboarding/Phase20RunningHabits';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const isTablet = Platform.OS === 'ios' ? Platform.isPad : windowWidth >= 600;
+const width = isTablet ? 480 : windowWidth;
+const height = isTablet ? 800 : windowHeight;
 
 const COLORS = {
     coral: '#FF6B6B',
@@ -61,7 +64,36 @@ const COLORS = {
     iconBg: '#FFF0F0',   // Light Coral Wash
 };
 const TOTAL_PHASES = 24;
+const DEV_LAST_PHASE = 24;
+const DEV_PHASE_FILE_NAMES: Record<number, string> = {
+    0: 'Phase0Welcome.tsx',
+    1: 'Phase0Auth.tsx',
+    2: 'Phase1HealthConsent.tsx',
+    3: 'Phase2Goals.tsx',
+    4: 'Phase3Profile.tsx',
+    5: '5_PrimaryGoal.tsx',
+    6: 'Phase4Complete.tsx',
+    7: '6_Weight&Height.tsx',
+    8: '7_TargetWeight.tsx',
+    9: '8_StartingPoint.tsx',
+    10: 'Phase19PlanTimeline.tsx',
+    11: 'Phase18PlanSetup.tsx',
+    12: '10_AvailableDays.tsx',
+    13: '9_PromoCouple.tsx',
+    14: '11_PreferredTime.tsx',
+    15: '12_PromoHowto.tsx',
+    16: '13_OwnReward.tsx',
+    17: 'Phase16Dummy.tsx',
+    18: 'Phase17Dummy.tsx',
+    19: 'Weight_Branch.tsx',
+    20: 'Running_Branch.tsx',
+    21: 'Phase20RunningHabits.tsx',
+    22: 'Phase0ManualAuth.tsx',
+    23: 'Phase4PartnerCode.tsx',
+    24: 'Phase0ManualLogin.tsx',
+};
 const TRAINING_TIME_PREFERENCE_KEY = 'plans_training_time_preference_v1';
+const APPLE_DISPLAY_NAME_KEY = 'apple_display_name_v1';
 
 function getDeviceTimezone() {
     try {
@@ -171,7 +203,7 @@ export default function OnboardingGreeting() {
         }
     }, [authFetch]);
 
-    const continueAfterAuth = useCallback(async () => {
+    const continueAfterAuth = useCallback(async (_prefilledName?: string) => {
         const shouldSkipOnboarding = await hasExistingPlan();
 
         if (shouldSkipOnboarding) {
@@ -215,8 +247,26 @@ export default function OnboardingGreeting() {
                 .join(' ')
                 .trim();
 
-            await socialLogin('apple', credential.identityToken, appleName || userName.trim() || undefined);
-            await continueAfterAuth();
+            // Apple only returns fullName on the FIRST sign-in for a given Apple ID.
+            // Persist it so we never re-prompt the user for their name (App Store Guideline 4).
+            let resolvedName = appleName;
+            if (!resolvedName) {
+                try {
+                    const stored = await AsyncStorage.getItem(APPLE_DISPLAY_NAME_KEY);
+                    if (stored) resolvedName = stored;
+                } catch {}
+            } else {
+                try {
+                    await AsyncStorage.setItem(APPLE_DISPLAY_NAME_KEY, resolvedName);
+                } catch {}
+            }
+
+            if (resolvedName) {
+                setUserName(resolvedName);
+            }
+
+            await socialLogin('apple', credential.identityToken, resolvedName || userName.trim() || undefined);
+            await continueAfterAuth(resolvedName);
         } catch (err: any) {
             if (err?.code === 'ERR_REQUEST_CANCELED') return;
             Alert.alert('Apple Login Failed', err?.message || 'Unable to continue with Apple.');
@@ -373,6 +423,10 @@ export default function OnboardingGreeting() {
 
     const goToPrevPhase = () => {
         if (currentPhase > 0) setCurrentPhase(prev => prev - 1);
+    };
+
+    const goToDevPhase = (direction: -1 | 1) => {
+        setCurrentPhase(prev => Math.max(0, Math.min(DEV_LAST_PHASE, prev + direction)));
     };
 
     const generateOnboardingWeeklyPlan = useCallback(async () => {
@@ -589,7 +643,11 @@ export default function OnboardingGreeting() {
                 onSuccess={continueAfterAuth}
             />;
             case 2: return <Phase1HealthConsent onNext={goToNextPhase} onBack={goToPrevPhase} />;
-            case 3: return <Phase2Goals onNext={handlePhase2Identity} onBack={goToPrevPhase} />;
+            case 3: return <Phase2Goals
+                onNext={handlePhase2Identity}
+                onBack={goToPrevPhase}
+                prefilledName={userName}
+            />;
             case 4: return <Phase3Profile
                 userName={userName}
                 onBack={goToPrevPhase}
@@ -811,6 +869,46 @@ export default function OnboardingGreeting() {
         }
     };
 
+    const renderDevPhaseControls = () => {
+        if (!__DEV__) return null;
+
+        const isFirstPhase = currentPhase <= 0;
+        const isLastPhase = currentPhase >= DEV_LAST_PHASE;
+        const phaseFileName = DEV_PHASE_FILE_NAMES[currentPhase] ?? `Phase ${currentPhase}`;
+
+        return (
+            <View style={styles.devControls} pointerEvents="box-none">
+                <TouchableOpacity
+                    style={[styles.devButton, isFirstPhase && styles.devButtonDisabled]}
+                    onPress={() => goToDevPhase(-1)}
+                    disabled={isFirstPhase}
+                    activeOpacity={0.75}
+                >
+                    <Text style={[styles.devButtonText, isFirstPhase && styles.devButtonTextDisabled]}>
+                        Prev
+                    </Text>
+                </TouchableOpacity>
+
+                <View style={styles.devPhasePill}>
+                    <Text style={styles.devPhaseText} numberOfLines={1}>
+                        {phaseFileName}
+                    </Text>
+                </View>
+
+                <TouchableOpacity
+                    style={[styles.devButton, isLastPhase && styles.devButtonDisabled]}
+                    onPress={() => goToDevPhase(1)}
+                    disabled={isLastPhase}
+                    activeOpacity={0.75}
+                >
+                    <Text style={[styles.devButtonText, isLastPhase && styles.devButtonTextDisabled]}>
+                        Next
+                    </Text>
+                </TouchableOpacity>
+            </View>
+        );
+    };
+
     return (
         <View style={styles.container}>
             <StatusBar barStyle={isSplashVisible ? "light-content" : "dark-content"} />
@@ -818,6 +916,8 @@ export default function OnboardingGreeting() {
             <View style={styles.safeArea}>
                 {renderPhaseContent()}
             </View>
+
+            {renderDevPhaseControls()}
 
             {isSplashVisible && renderSplash()}
         </View>
@@ -828,9 +928,14 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: COLORS.white,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     safeArea: {
-        flex: 1,
+        width: width,
+        height: height,
+        alignSelf: 'center',
+        overflow: 'hidden',
     },
 
     // --- Splash ---
@@ -852,5 +957,67 @@ const styles = StyleSheet.create({
         fontWeight: '900',
         letterSpacing: -1,
         marginTop: -20,
+    },
+    devControls: {
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        bottom: Platform.OS === 'ios' ? 18 : 12,
+        zIndex: 900,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+    },
+    devButton: {
+        minWidth: 52,
+        height: 28,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: COLORS.textMain,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.28)',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.14,
+        shadowRadius: 5,
+        elevation: 3,
+    },
+    devButtonDisabled: {
+        backgroundColor: '#D1D5DB',
+        shadowOpacity: 0,
+        elevation: 0,
+    },
+    devButtonText: {
+        color: COLORS.white,
+        fontSize: 11,
+        fontWeight: '800',
+    },
+    devButtonTextDisabled: {
+        color: COLORS.textSub,
+    },
+    devPhasePill: {
+        height: 28,
+        minWidth: 128,
+        maxWidth: 190,
+        paddingHorizontal: 10,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.94)',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 5,
+        elevation: 2,
+    },
+    devPhaseText: {
+        color: COLORS.textMain,
+        fontSize: 10,
+        fontWeight: '900',
+        flexShrink: 1,
     },
 });

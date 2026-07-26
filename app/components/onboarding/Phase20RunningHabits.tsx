@@ -17,7 +17,8 @@ import {
     ChevronRight
 } from 'lucide-react-native';
 
-const { width } = Dimensions.get('window');
+const { width: windowWidth } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
 
 const COLORS = {
     bg: '#FFFFFF',
@@ -302,7 +303,7 @@ const styles = StyleSheet.create({
     },
     buttonText: {
         color: COLORS.white,
-        fontSize: 17,
+        fontSize: 16,
         fontWeight: '800',
     },
     buttonTextDisabled: {

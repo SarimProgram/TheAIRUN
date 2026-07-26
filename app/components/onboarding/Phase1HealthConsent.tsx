@@ -6,7 +6,6 @@ import {
     TouchableOpacity,
     SafeAreaView,
     Animated,
-    Dimensions,
     StatusBar,
     Platform,
     Alert,
@@ -16,8 +15,6 @@ import {
 } from 'react-native';
 import { Lock, CheckCircle2 } from 'lucide-react-native';
 import { requestStepPermissions } from '../../lib/requestStepPermissions';
-
-const { height } = Dimensions.get('window');
 
 const COLORS = {
     brand: '#FF6B6B',
@@ -81,28 +78,28 @@ export default function Phase1HealthConsent({ onNext, onBack }: Phase1Props) {
 
         try {
             setRequestingPermission(true);
-            const granted = await requestStepPermissions();
-            if (granted) {
-                onNext();
-            }
+            await requestStepPermissions();
         } catch (err: any) {
-            Alert.alert('Permission Error', err?.message || 'Failed to request health permissions.');
+            // Log but do not block progression. Apple requires that tapping the
+            // primary CTA after a custom pre-prompt always proceeds past the screen.
+            console.warn('Health permission request error:', err?.message);
         } finally {
             setRequestingPermission(false);
+            onNext();
         }
     };
 
     return (
         <View style={styles.container}>
             <StatusBar barStyle="dark-content" />
-            <SafeAreaView style={{ flex: 1 }}>
+            <SafeAreaView style={styles.safeArea}>
                 <Animated.View
                     style={[
                         styles.content,
                         { opacity: fadeAnim, transform: [{ translateY: Animated.add(slideAnim, keyboardOffset) }] }
                     ]}
                 >
-                    
+
                     {/* Visual Asset Section */}
                     <View style={styles.imageContainer}>
                         <View style={styles.glowEffect} />
@@ -117,7 +114,7 @@ export default function Phase1HealthConsent({ onNext, onBack }: Phase1Props) {
                     <View style={styles.header}>
                         <Text style={styles.title}>Your Body, Your Data</Text>
                         <Text style={styles.subtitle}>
-                             We never share your health data with anyone, and you can delete it anytime.
+                            We never share your health data with anyone, and you can delete it anytime.
                         </Text>
                     </View>
 
@@ -155,12 +152,8 @@ export default function Phase1HealthConsent({ onNext, onBack }: Phase1Props) {
                         {requestingPermission ? (
                             <ActivityIndicator color={COLORS.white} />
                         ) : (
-                            <Text style={styles.buttonText}>Enable Access</Text>
+                            <Text style={styles.buttonText}>Continue</Text>
                         )}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.skipButton} onPress={onNext}>
-                        <Text style={styles.skipText}>Maybe later</Text>
                     </TouchableOpacity>
                 </View>
             </SafeAreaView>
@@ -170,56 +163,60 @@ export default function Phase1HealthConsent({ onNext, onBack }: Phase1Props) {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.background },
+    safeArea: {
+        flex: 1,
+        justifyContent: 'center',
+        paddingVertical: 16,
+    },
     content: { 
-        flex: 1, 
-        paddingHorizontal: 40, 
-        paddingTop: height * 0.08,
-        alignItems: 'center'
+        paddingHorizontal: 24, 
+        alignItems: 'center',
     },
     imageContainer: {
-        width: 140,
-        height: 140,
-        marginBottom: 48,
+        width: 88,
+        height: 88,
+        marginBottom: 14,
         justifyContent: 'center',
         alignItems: 'center',
     },
     healthImage: {
-        width: 120,
-        height: 120,
+        width: 70,
+        height: 70,
         zIndex: 2,
     },
     glowEffect: {
         position: 'absolute',
-        width: 160,
-        height: 160,
-        borderRadius: 80,
+        width: 104,
+        height: 104,
+        borderRadius: 52,
         backgroundColor: COLORS.brand,
         opacity: 0.05,
         zIndex: 1,
     },
     header: { 
         alignItems: 'center',
-        marginBottom: 40 
+        marginBottom: 16 
     },
     title: {
-        fontSize: 32,
+        fontSize: 26,
         fontWeight: '800',
         color: COLORS.textPrimary,
-        letterSpacing: -1,
-        marginBottom: 16,
+        letterSpacing: -0.5,
+        marginBottom: 8,
         textAlign: 'center',
     },
     subtitle: {
-        fontSize: 17,
+        fontSize: 14,
         color: COLORS.textSecondary,
-        lineHeight: 24,
+        lineHeight: 20,
         fontWeight: '400',
         textAlign: 'center',
+        paddingHorizontal: 10,
     },
     benefitsContainer: {
         width: '100%',
-        gap: 24,
-        marginBottom: 40,
+        gap: 12,
+        marginBottom: 14,
     },
     benefitRow: {
         flexDirection: 'row',
@@ -252,13 +249,13 @@ const styles = StyleSheet.create({
         fontWeight: '500' 
     },
     footer: { 
-        paddingHorizontal: 40, 
-        paddingBottom: 40, 
-        gap: 12 
+        paddingHorizontal: 30, 
+        paddingTop: 18,
+        gap: 8 
     },
     primaryButton: {
         backgroundColor: COLORS.brand,
-        height: 60,
+        height: 54,
         borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
@@ -270,16 +267,7 @@ const styles = StyleSheet.create({
     },
     buttonText: { 
         color: COLORS.white, 
-        fontSize: 18, 
+        fontSize: 16, 
         fontWeight: '700' 
-    },
-    skipButton: { 
-        alignItems: 'center', 
-        paddingVertical: 12 
-    },
-    skipText: { 
-        color: COLORS.textSecondary, 
-        fontSize: 15, 
-        fontWeight: '600' 
     },
 });

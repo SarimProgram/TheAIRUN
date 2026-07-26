@@ -17,7 +17,9 @@ import {
 import { ArrowRight, ChevronLeft } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
 
 const COLORS = {
     brand: '#FF3B3B', // Vibrant high-energy red
@@ -30,8 +32,10 @@ const COLORS = {
     border: '#F0F0F0',
 };
 
-export default function Phase2Goals({ onNext, onBack }: any) {
-    const [name, setName] = useState('');
+export default function Phase2Goals({ onNext, onBack, prefilledName }: any) {
+    const trimmedPrefilled = typeof prefilledName === 'string' ? prefilledName.trim() : '';
+    const hasPrefilledName = trimmedPrefilled.length > 0;
+    const [name, setName] = useState(trimmedPrefilled);
     const [gender, setGender] = useState<string | null>(null);
     const genderOptions = [
         { label: 'Male', value: 'male' },
@@ -142,18 +146,20 @@ export default function Phase2Goals({ onNext, onBack }: any) {
                     </View>
 
                     <View style={styles.formArea}>
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.fieldLabel}>FULL NAME</Text>
-                            <TextInput
-                                style={styles.mainInput}
-                                placeholder="Type here..."
-                                placeholderTextColor={COLORS.muted}
-                                value={name}
-                                onChangeText={setName}
-                                selectionColor={COLORS.brand}
-                            />
-                            <View style={styles.underline} />
-                        </View>
+                        {!hasPrefilledName && (
+                            <View style={styles.inputGroup}>
+                                <Text style={styles.fieldLabel}>FULL NAME</Text>
+                                <TextInput
+                                    style={styles.mainInput}
+                                    placeholder="Type here..."
+                                    placeholderTextColor={COLORS.muted}
+                                    value={name}
+                                    onChangeText={setName}
+                                    selectionColor={COLORS.brand}
+                                />
+                                <View style={styles.underline} />
+                            </View>
+                        )}
 
                         <View style={styles.inputGroup}>
                             <Text style={styles.fieldLabel}>GENDER</Text>
@@ -203,6 +209,10 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.white,
     },
     hero: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
         height: height * 0.4,
         overflow: 'hidden',
     },
@@ -259,7 +269,7 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        marginTop: -height * 0.1, 
+        marginTop: height * 0.25, 
         backgroundColor: COLORS.white,
         borderTopLeftRadius: 40,
         borderTopRightRadius: 40,
@@ -270,49 +280,49 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
     scrollContent: {
-        paddingHorizontal: 30,
-        paddingTop: 40,
-        paddingBottom: 40,
+        paddingHorizontal: 24,
+        paddingTop: 30,
+        paddingBottom: 30,
     },
     textGroup: {
-        marginBottom: 40,
+        marginBottom: 25,
     },
     welcomeText: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '600',
         color: COLORS.brand,
         marginBottom: 4,
     },
     mainTitle: {
-        fontSize: 34,
+        fontSize: 30,
         fontWeight: '900',
         color: COLORS.ink,
         letterSpacing: -1,
     },
     subTitle: {
-        fontSize: 16,
+        fontSize: 14,
         color: COLORS.muted,
-        marginTop: 10,
-        lineHeight: 24,
+        marginTop: 6,
+        lineHeight: 20,
     },
     formArea: {
         flex: 1,
     },
     inputGroup: {
-        marginBottom: 40,
+        marginBottom: 25,
     },
     fieldLabel: {
         fontSize: 12,
         fontWeight: '700',
         color: COLORS.muted,
         letterSpacing: 1.5,
-        marginBottom: 15,
+        marginBottom: 10,
     },
     mainInput: {
-        fontSize: 24,
+        fontSize: 20,
         fontWeight: '600',
         color: COLORS.ink,
-        paddingVertical: 10,
+        paddingVertical: 8,
     },
     underline: {
         height: 1.5,
@@ -345,16 +355,16 @@ const styles = StyleSheet.create({
         color: COLORS.brand,
     },
     footer: {
-        marginTop: 40,
+        marginTop: 20,
     },
     nextBtn: {
         backgroundColor: COLORS.ink,
-        height: 70,
-        borderRadius: 24,
+        height: 54,
+        borderRadius: 20,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 25,
+        paddingHorizontal: 20,
         shadowColor: COLORS.ink,
         shadowOffset: { width: 0, height: 10 },
         shadowOpacity: 0.2,
@@ -368,13 +378,13 @@ const styles = StyleSheet.create({
     },
     nextBtnText: {
         color: COLORS.white,
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '700',
     },
     nextIconWrap: {
-        width: 44,
-        height: 44,
-        borderRadius: 14,
+        width: 36,
+        height: 36,
+        borderRadius: 12,
         backgroundColor: COLORS.brand,
         alignItems: 'center',
         justifyContent: 'center',

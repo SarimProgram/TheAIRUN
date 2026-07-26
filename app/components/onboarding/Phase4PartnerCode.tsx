@@ -33,7 +33,8 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
     UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-const { width } = Dimensions.get('window');
+const { width: windowWidth } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
 
 const COLORS = {
     paper: '#FAFAF8',
@@ -481,7 +482,7 @@ const styles = StyleSheet.create({
     },
     iconCircle: {
         width: 60,
-        height: 60,
+        height: 54,
         borderRadius: 22,
         backgroundColor: COLORS.accent,
         justifyContent: 'center',

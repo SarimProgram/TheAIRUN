@@ -6,6 +6,7 @@ import { z } from "zod";
 import prisma from "../db/prisma";
 import { AuthRequest } from "../middleware/auth";
 import { generateTrainingPlan, UserContext, WeeklySchedule } from "../generators";
+import { requireStringParam } from "../utils/params";
 
 const router = Router();
 
@@ -82,8 +83,9 @@ router.get("/:planId", async (req: AuthRequest, res, next) => {
     try {
         if (!req.user) return res.status(401).json({ message: "Unauthorized" });
 
+        const planId = requireStringParam(req.params.planId, "planId");
         const plan = await prisma.trainingPlan.findFirst({
-            where: { id: req.params.planId, userId: req.user.id },
+            where: { id: planId, userId: req.user.id },
             include: { sessions: { orderBy: [{ week: "asc" }, { id: "asc" }] } },
         });
 
@@ -103,14 +105,15 @@ router.get("/:planId/week/:weekNum", async (req: AuthRequest, res, next) => {
     try {
         if (!req.user) return res.status(401).json({ message: "Unauthorized" });
 
-        const weekNum = parseInt(req.params.weekNum, 10);
+        const planId = requireStringParam(req.params.planId, "planId");
+        const weekNum = parseInt(requireStringParam(req.params.weekNum, "weekNum"), 10);
         if (isNaN(weekNum) || weekNum < 1) {
             return res.status(400).json({ message: "Invalid week number" });
         }
 
         const sessions = await prisma.runSession.findMany({
             where: {
-                plan: { id: req.params.planId, userId: req.user.id },
+                plan: { id: planId, userId: req.user.id },
                 week: weekNum,
             },
             orderBy: { id: "asc" },
@@ -132,7 +135,7 @@ router.get("/session/:sessionId", async (req: AuthRequest, res, next) => {
 
         const session = await prisma.runSession.findFirst({
             where: {
-                id: req.params.sessionId,
+                id: requireStringParam(req.params.sessionId, "sessionId"),
                 plan: { userId: req.user.id },
             },
         });

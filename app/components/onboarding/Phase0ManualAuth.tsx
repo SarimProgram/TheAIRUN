@@ -18,8 +18,6 @@ import {
 import { ChevronLeft, ArrowRight, User, Mail, Lock } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const { height } = Dimensions.get('window');
-
 const COLORS = {
     brand: '#FF6B6B', 
     ink: '#0F172A',
@@ -208,7 +206,7 @@ const styles = StyleSheet.create({
     header: {
         paddingHorizontal: 20,
         paddingTop: 10,
-        height: 60,
+        height: 54,
         justifyContent: 'center',
     },
     backBtn: {
@@ -229,37 +227,37 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     scrollContent: {
-        paddingHorizontal: 30,
-        paddingTop: 15,
+        paddingHorizontal: 24,
+        paddingTop: 10,
         paddingBottom: 20,
     },
     textGroup: {
-        marginBottom: 35,
+        marginBottom: 25,
     },
     mainTitle: {
-        fontSize: 48,
+        fontSize: 38,
         fontWeight: '900',
         color: COLORS.ink,
-        letterSpacing: -2,
-        lineHeight: 52,
-        marginBottom: 12,
+        letterSpacing: -1.5,
+        lineHeight: 44,
+        marginBottom: 8,
     },
     subtitle: {
-        fontSize: 16,
+        fontSize: 15,
         color: COLORS.muted,
         fontWeight: '500',
-        lineHeight: 22,
+        lineHeight: 20,
     },
     form: {
-        gap: 12,
+        gap: 10,
     },
     inputWrapper: {
-        height: 68,
-        borderRadius: 20,
+        height: 54,
+        borderRadius: 16,
         backgroundColor: COLORS.soft,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 18,
+        paddingHorizontal: 16,
         borderWidth: 1,
         borderColor: COLORS.border,
     },
@@ -279,20 +277,20 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
     encryptionNote: {
-        marginTop: 25,
+        marginTop: 20,
         fontSize: 12,
         color: COLORS.muted,
         fontWeight: '600',
         textAlign: 'center',
     },
     footer: {
-        paddingHorizontal: 30,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 30,
+        paddingHorizontal: 24,
+        paddingBottom: Platform.OS === 'ios' ? 20 : 15,
         paddingTop: 10,
     },
     cta: {
-        height: 68,
-        borderRadius: 34,
+        height: 54,
+        borderRadius: 27,
         overflow: 'hidden',
         shadowColor: COLORS.brand,
         shadowOpacity: 0.3,
@@ -304,13 +302,12 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 12,
+        gap: 10,
     },
     ctaText: {
         color: COLORS.white,
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '800',
         letterSpacing: -0.5,
     },
 });
-

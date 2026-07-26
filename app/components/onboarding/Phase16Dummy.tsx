@@ -27,7 +27,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '@/src/auth/authContext';
 import { API_BASE_URL } from '../../config/api';
 
-const { width } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -143,24 +147,24 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
       <LinearGradient colors={['#FFFFFF', '#FDFCFB', '#FEF9F9']} style={StyleSheet.absoluteFill} />
 
       <SafeAreaView style={styles.flex}>
-        <View style={styles.content}>
+        <View style={[styles.content, useCompactLayout && styles.contentCompact]}>
 
           {/* Header Section */}
-          <View style={styles.header}>
-            <View style={styles.miniTag}>
+          <View style={[styles.header, useCompactLayout && styles.headerCompact]}>
+            <View style={[styles.miniTag, useCompactLayout && styles.miniTagCompact]}>
               <Smile size={12} color={COLORS.coral} fill={COLORS.coral} />
-              <Text style={styles.miniTagText}>
+              <Text style={[styles.miniTagText, useCompactLayout && styles.miniTagTextCompact]}>
                 {setupStep === 4 ? 'SETUP COMPLETE' : shouldShowPartnerStoreStory ? 'STORE ALREADY SET' : 'PARTNER SURPRISE'}
               </Text>
             </View>
-            <Text style={styles.title}>
+            <Text style={[styles.title, useCompactLayout && styles.titleCompact]}>
               {setupStep === 4 ? 'Rewards' : shouldShowPartnerStoreStory ? 'Store for' : 'Let\'s treat your'}{"\n"}
               <Text style={{ color: COLORS.coral }}>
                 {setupStep === 4 ? 'Overview' : shouldShowPartnerStoreStory ? 'Them Too' : 'Favorite Person'}
               </Text>
             </Text>
             {setupStep !== 4 && (
-              <Text style={styles.subtitle}>
+              <Text style={[styles.subtitle, useCompactLayout && styles.subtitleCompact]}>
                 {shouldShowPartnerStoreStory
                   ? `${partnerName} has already set up the store for you. Do you want to add anything for them too? You can always fine-tune it in the store later.`
                   : 'Small rewards keep the motivation high!'}
@@ -169,7 +173,7 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
           </View>
 
           {setupStep < 4 && (
-            <View style={styles.progressTracker}>
+            <View style={[styles.progressTracker, useCompactLayout && styles.progressTrackerCompact]}>
               <View style={styles.trackLine}>
                 <View style={[styles.trackFill, { width: setupStep === 1 ? '15%' : setupStep === 2 ? '50%' : '100%' }]} />
               </View>
@@ -181,26 +185,27 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
             </View>
           )}
 
-          <Animated.View style={[styles.mainArea, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+          <Animated.View style={[styles.mainArea, useCompactLayout && styles.mainAreaCompact, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
             {setupStep === 4 ? (
-              <View style={styles.summaryContainer}>
+              <View style={[styles.summaryContainer, useCompactLayout && styles.summaryContainerCompact]}>
                 {summaryData.map((item, index) => (
                   <Animated.View
                     key={index}
                     style={[
                       styles.summaryCard,
+                      useCompactLayout && styles.summaryCardCompact,
                       { opacity: itemFades[index], transform: [{ scale: itemFades[index] }] }
                     ]}
                   >
                     <View style={styles.summaryLeft}>
-                      <View style={styles.weekIndicator}>
-                        <Text style={styles.weekText}>{item.week}</Text>
-                        <Text style={styles.pointText}>{item.points} PTS</Text>
+                      <View style={[styles.weekIndicator, useCompactLayout && styles.weekIndicatorCompact]}>
+                        <Text style={[styles.weekText, useCompactLayout && styles.weekTextCompact]}>{item.week}</Text>
+                        <Text style={[styles.pointText, useCompactLayout && styles.pointTextCompact]}>{item.points} PTS</Text>
                       </View>
                     </View>
-                    <View style={styles.summaryRight}>
-                      <item.icon size={24} color={COLORS.coral} />
-                      <Text style={styles.summaryLabel}>{item.label}</Text>
+                    <View style={[styles.summaryRight, useCompactLayout && styles.summaryRightCompact]}>
+                      <item.icon size={useCompactLayout ? 20 : 24} color={COLORS.coral} />
+                      <Text style={[styles.summaryLabel, useCompactLayout && styles.summaryLabelCompact]}>{item.label}</Text>
                     </View>
                   </Animated.View>
                 ))}
@@ -208,7 +213,7 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
                 <TouchableOpacity
                   activeOpacity={0.85}
                   onPress={handleConfirmAction}
-                  style={styles.finalFinishBtn}
+                  style={[styles.finalFinishBtn, useCompactLayout && styles.finalFinishBtnCompact]}
                 >
                   <LinearGradient
                     colors={[COLORS.coral, COLORS.coralDark]}
@@ -220,9 +225,9 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
                 </TouchableOpacity>
               </View>
             ) : !isCommiting ? (
-              <View style={styles.questionCard}>
-                <View style={styles.integratedQuestion}>
-                  <Text style={styles.unifiedQuestionText}>
+              <View style={[styles.questionCard, useCompactLayout && styles.questionCardCompact]}>
+                <View style={[styles.integratedQuestion, useCompactLayout && styles.integratedQuestionCompact]}>
+                  <Text style={[styles.unifiedQuestionText, useCompactLayout && styles.unifiedQuestionTextCompact]}>
                     {shouldShowPartnerStoreStory ? (
                       <>
                         <Text style={styles.boldCoral}>{partnerName}</Text> has already set up the store for you. In{' '}
@@ -240,22 +245,22 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
                 </View>
 
                 <TouchableOpacity
-                  style={styles.actionBtn}
+                  style={[styles.actionBtn, useCompactLayout && styles.actionBtnCompact]}
                   activeOpacity={0.9}
                   onPress={() => setIsCommiting(true)}
                 >
                   <LinearGradient colors={[COLORS.coral, COLORS.coralDark]} style={styles.btnGradient}>
-                    <Text style={styles.btnText}>{shouldShowPartnerStoreStory ? "Yes, I'll add something for them" : "Yes, let's offer something!"}</Text>
-                    <Gift color="white" size={20} />
+                    <Text style={[styles.btnText, useCompactLayout && styles.btnTextCompact]}>{shouldShowPartnerStoreStory ? "Yes, I'll add something for them" : "Yes, let's offer something!"}</Text>
+                    <Gift color="white" size={useCompactLayout ? 18 : 20} />
                   </LinearGradient>
                 </TouchableOpacity>
 
-                <View style={styles.centerOr}>
+                <View style={[styles.centerOr, useCompactLayout && styles.centerOrCompact]}>
                   <Text style={styles.orText}>— or —</Text>
                 </View>
 
                 <TouchableOpacity
-                  style={styles.secondaryActionBtn}
+                  style={[styles.secondaryActionBtn, useCompactLayout && styles.secondaryActionBtnCompact]}
                   onPress={handleConfirmAction}
                 >
                   <Text style={styles.secondaryActionText}>
@@ -270,7 +275,7 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.tertiarySkipBtn}
+                  style={[styles.tertiarySkipBtn, useCompactLayout && styles.tertiarySkipBtnCompact]}
                   onPress={() => onContinue({ week1: null, week2: null, week3: null })}
                 >
                   <Text style={styles.tertiarySkipText}>
@@ -279,10 +284,10 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
                 </TouchableOpacity>
               </View>
             ) : (
-              <View style={styles.pickerArea}>
-                <Text style={styles.pickerTitle}>What are you offering?</Text>
+              <View style={[styles.pickerArea, useCompactLayout && styles.pickerAreaCompact]}>
+                <Text style={[styles.pickerTitle, useCompactLayout && styles.pickerTitleCompact]}>What are you offering?</Text>
 
-                <View style={styles.grid}>
+                <View style={[styles.grid, useCompactLayout && styles.gridCompact]}>
                   {OPTIONS.map((item) => {
                     const isSelected = currentSelection === item.id;
                     const Icon = item.icon;
@@ -291,12 +296,12 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
                         key={item.id}
                         activeOpacity={0.9}
                         onPress={() => handleRewardSelect(item.id)}
-                        style={[styles.card, isSelected && styles.cardSelected]}
+                        style={[styles.card, useCompactLayout && styles.cardCompact, isSelected && styles.cardSelected]}
                       >
-                        <View style={[styles.iconBox, isSelected && styles.iconBoxSelected]}>
-                          <Icon color={isSelected ? COLORS.white : COLORS.coral} size={22} strokeWidth={2.5} />
+                        <View style={[styles.iconBox, useCompactLayout && styles.iconBoxCompact, isSelected && styles.iconBoxSelected]}>
+                          <Icon color={isSelected ? COLORS.white : COLORS.coral} size={useCompactLayout ? 19 : 22} strokeWidth={2.5} />
                         </View>
-                        <Text style={[styles.cardLabel, isSelected && styles.cardLabelSelected]}>{item.label}</Text>
+                        <Text style={[styles.cardLabel, useCompactLayout && styles.cardLabelCompact, isSelected && styles.cardLabelSelected]}>{item.label}</Text>
                         {isSelected && (
                           <View style={styles.checkBadge}><Check color={COLORS.white} size={8} strokeWidth={4} /></View>
                         )}
@@ -308,7 +313,7 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
                 <TouchableOpacity
                   activeOpacity={0.85}
                   onPress={handleConfirmAction}
-                  style={styles.confirmBtn}
+                  style={[styles.confirmBtn, useCompactLayout && styles.confirmBtnCompact]}
                   disabled={!currentSelection}
                 >
                   <LinearGradient
@@ -324,8 +329,8 @@ export default function PartnerRewardSelection({ onContinue, joinedWithCode = fa
             )}
           </Animated.View>
 
-          <View style={styles.footerTip}>
-            <Text style={styles.tipText}>Tip: You can change these anytime in the Marketplace.</Text>
+          <View style={[styles.footerTip, useCompactLayout && styles.footerTipCompact]}>
+            <Text style={[styles.tipText, useCompactLayout && styles.tipTextCompact]}>Tip: You can change these anytime in the Marketplace.</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -343,9 +348,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingBottom: Platform.OS === 'ios' ? 10 : 20,
   },
+  contentCompact: {
+    justifyContent: 'flex-start',
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 8 : 12,
+  },
   header: {
     alignItems: 'center',
     marginBottom: 20,
+  },
+  headerCompact: {
+    marginBottom: 8,
   },
   miniTag: {
     flexDirection: 'row',
@@ -357,11 +370,18 @@ const styles = StyleSheet.create({
     gap: 6,
     marginBottom: 12,
   },
+  miniTagCompact: {
+    paddingVertical: 3,
+    marginBottom: 6,
+  },
   miniTagText: {
     fontSize: 10,
     fontWeight: '900',
     color: COLORS.coral,
     letterSpacing: 1,
+  },
+  miniTagTextCompact: {
+    fontSize: 9,
   },
   title: {
     fontSize: 28,
@@ -371,6 +391,10 @@ const styles = StyleSheet.create({
     lineHeight: 34,
     letterSpacing: -0.5,
   },
+  titleCompact: {
+    fontSize: 24,
+    lineHeight: 28,
+  },
   subtitle: {
     fontSize: 14,
     fontWeight: '600',
@@ -379,12 +403,21 @@ const styles = StyleSheet.create({
     marginTop: 10,
     lineHeight: 20,
   },
+  subtitleCompact: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 6,
+  },
   progressTracker: {
     height: 40,
     width: '100%',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 30,
+  },
+  progressTrackerCompact: {
+    height: 30,
+    marginBottom: 12,
   },
   trackLine: {
     position: 'absolute',
@@ -425,6 +458,10 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
   },
+  mainAreaCompact: {
+    flex: 0,
+    justifyContent: 'flex-start',
+  },
   questionCard: {
     backgroundColor: COLORS.white,
     borderRadius: 32,
@@ -438,9 +475,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#F8FAFC',
   },
+  questionCardCompact: {
+    borderRadius: 26,
+    padding: 22,
+  },
   integratedQuestion: {
     alignItems: 'center',
     marginBottom: 24,
+  },
+  integratedQuestionCompact: {
+    marginBottom: 16,
   },
   unifiedQuestionText: {
     fontSize: 16,
@@ -449,6 +493,10 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     letterSpacing: -0.2,
     fontWeight: '500',
+  },
+  unifiedQuestionTextCompact: {
+    fontSize: 15,
+    lineHeight: 21,
   },
   boldCoral: {
     color: COLORS.coral,
@@ -471,9 +519,17 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 8,
   },
+  actionBtnCompact: {
+    height: 58,
+    borderRadius: 18,
+    marginBottom: 6,
+  },
   centerOr: {
     paddingVertical: 10,
     alignItems: 'center',
+  },
+  centerOrCompact: {
+    paddingVertical: 5,
   },
   orText: {
     color: '#CBD5E1',
@@ -492,6 +548,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
+  secondaryActionBtnCompact: {
+    paddingVertical: 14,
+    borderRadius: 16,
+    marginBottom: 10,
+  },
   secondaryActionText: {
     color: COLORS.black,
     fontSize: 14,
@@ -500,6 +561,9 @@ const styles = StyleSheet.create({
   tertiarySkipBtn: {
     paddingVertical: 10,
     alignItems: 'center',
+  },
+  tertiarySkipBtnCompact: {
+    paddingVertical: 6,
   },
   tertiarySkipText: {
     color: COLORS.muted,
@@ -519,6 +583,9 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 16,
     fontWeight: '800',
+  },
+  btnTextCompact: {
+    fontSize: 14,
   },
   ignoreBtn: {
     marginTop: 16,
@@ -546,6 +613,11 @@ const styles = StyleSheet.create({
     gap: 16,
     paddingTop: 10,
   },
+  summaryContainerCompact: {
+    flex: 0,
+    gap: 10,
+    paddingTop: 4,
+  },
   summaryCard: {
     flexDirection: 'row',
     backgroundColor: COLORS.white,
@@ -560,11 +632,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#F1F5F9',
   },
+  summaryCardCompact: {
+    borderRadius: 20,
+    padding: 16,
+  },
   summaryLeft: {
     flex: 1,
   },
   weekIndicator: {
     gap: 2,
+  },
+  weekIndicatorCompact: {
+    gap: 0,
   },
   weekText: {
     fontSize: 12,
@@ -573,10 +652,16 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
+  weekTextCompact: {
+    fontSize: 10,
+  },
   pointText: {
     fontSize: 22,
     fontWeight: '900',
     color: COLORS.black,
+  },
+  pointTextCompact: {
+    fontSize: 18,
   },
   summaryRight: {
     flexDirection: 'row',
@@ -587,10 +672,19 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     gap: 10,
   },
+  summaryRightCompact: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    gap: 8,
+  },
   summaryLabel: {
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.black,
+  },
+  summaryLabelCompact: {
+    fontSize: 12,
   },
   finalFinishBtn: {
     height: 64,
@@ -604,8 +698,17 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     elevation: 8,
   },
+  finalFinishBtnCompact: {
+    height: 58,
+    borderRadius: 24,
+    marginTop: 14,
+    marginBottom: 0,
+  },
   pickerArea: {
     flex: 1,
+  },
+  pickerAreaCompact: {
+    flex: 0,
   },
   pickerTitle: {
     fontSize: 18,
@@ -614,11 +717,18 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
   },
+  pickerTitleCompact: {
+    fontSize: 16,
+    marginBottom: 10,
+  },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  gridCompact: {
+    gap: 8,
   },
   card: {
     width: (width - 60) / 2,
@@ -630,6 +740,11 @@ const styles = StyleSheet.create({
     borderColor: '#F1F5F9',
     height: 100,
     justifyContent: 'center',
+  },
+  cardCompact: {
+    height: 90,
+    borderRadius: 18,
+    padding: 10,
   },
   cardSelected: {
     borderColor: COLORS.coral,
@@ -644,6 +759,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
+  iconBoxCompact: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    marginBottom: 5,
+  },
   iconBoxSelected: {
     backgroundColor: COLORS.coral,
   },
@@ -651,6 +772,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: COLORS.black,
+  },
+  cardLabelCompact: {
+    fontSize: 11,
   },
   cardLabelSelected: {
     color: COLORS.black,
@@ -669,10 +793,15 @@ const styles = StyleSheet.create({
     borderColor: COLORS.white,
   },
   confirmBtn: {
-    height: 60,
+    height: 54,
     borderRadius: 30,
     overflow: 'hidden',
     marginTop: 20,
+  },
+  confirmBtnCompact: {
+    height: 54,
+    borderRadius: 22,
+    marginTop: 14,
   },
   confirmBtnGradient: {
     flex: 1,
@@ -690,9 +819,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
+  footerTipCompact: {
+    marginTop: 6,
+  },
   tipText: {
     fontSize: 11,
     color: COLORS.muted,
     fontWeight: '600',
+  },
+  tipTextCompact: {
+    fontSize: 10,
   },
 });

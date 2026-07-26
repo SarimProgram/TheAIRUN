@@ -47,7 +47,7 @@ export interface WagerOverviewData {
 }
 
 export function useWager() {
-    const { authFetch } = useAuth();
+    const { authFetch, isAuthenticated, loading: authLoading } = useAuth();
     const [wager, setWager] = useState<WagerData | null>(null);
     const [overview, setOverview] = useState<WagerOverviewData | null>(null);
     const [loading, setLoading] = useState(true);
@@ -55,10 +55,40 @@ export function useWager() {
 
     const fetchActiveWager = useCallback(async () => {
         try {
+            if (authLoading) {
+                setLoading(true);
+                return;
+            }
+
+            if (!isAuthenticated) {
+                setOverview(null);
+                setWager(null);
+                setError(null);
+                setLoading(false);
+                return;
+            }
+
             setLoading(true);
             setError(null);
             const res = await authFetch(`${API_BASE_URL}/wager/overview`);
-            if (!res.ok) throw new Error('Failed to fetch wager');
+            if (!res.ok) {
+                const text = await res.text();
+                let message = `Failed to fetch wager (${res.status})`;
+
+                try {
+                    const data = JSON.parse(text);
+                    message = data?.message || data?.error || data?.code || message;
+                    if (data?.code && data.code !== message) {
+                        message = `${message} (${data.code})`;
+                    }
+                } catch {
+                    if (text) {
+                        message = `${message}: ${text.slice(0, 200)}`;
+                    }
+                }
+
+                throw new Error(message);
+            }
             const data = await res.json();
             setOverview(data || null);
             setWager(data?.currentWager || null);
@@ -68,7 +98,7 @@ export function useWager() {
         } finally {
             setLoading(false);
         }
-    }, [authFetch]);
+    }, [authFetch, authLoading, isAuthenticated]);
 
     const createWager = useCallback(async (title: string) => {
         try {

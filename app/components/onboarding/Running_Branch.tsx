@@ -25,7 +25,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { getGenderMascotSource } from '../../utils/genderMascot';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
 const PICKER_ITEM_HEIGHT = 32;
 const PICKER_HEIGHT = PICKER_ITEM_HEIGHT * 3;
 
@@ -251,12 +256,16 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
 
   return (
     <View style={styles.container}>
-        <View style={styles.fixedHeader}>
+        <View style={[styles.fixedHeader, useCompactLayout && styles.fixedHeaderCompact]}>
             <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={styles.hero}>
                 <Text style={styles.watermarkText}>RUNNING</Text>
                 <SafeAreaView>
-                    <View style={styles.navRow}>
-                        <TouchableOpacity onPress={handleBack} style={[styles.backBtn, currentStep === 0 && { opacity: 0 }]} disabled={currentStep === 0}>
+                    <View style={[styles.navRow, useCompactLayout && styles.navRowCompact]}>
+                        <TouchableOpacity
+                            onPress={handleBack}
+                            style={[styles.backBtn, useCompactLayout && styles.backBtnCompact, currentStep === 0 && { opacity: 0 }]}
+                            disabled={currentStep === 0}
+                        >
                             <ChevronLeft color={COLORS.white} size={28} />
                         </TouchableOpacity>
                         <View style={styles.progressContainer}>
@@ -265,10 +274,10 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                     </View>
                 </SafeAreaView>
                 
-                <View style={styles.mascotWrapper} pointerEvents="none">
+                <View style={[styles.mascotWrapper, useCompactLayout && styles.mascotWrapperCompact]} pointerEvents="none">
                     <Image
                         source={mascotSource}
-                        style={styles.heroMascot}
+                        style={[styles.heroMascot, useCompactLayout && styles.heroMascotCompact]}
                         contentFit="contain"
                     />
                 </View>
@@ -278,24 +287,25 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
       <Animated.View 
         style={[
             styles.contentMask, 
+            useCompactLayout && styles.contentMaskCompact,
             { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
         ]}
       >
         <View style={styles.content}>
             <ScrollView 
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.scrollContent}
+                contentContainerStyle={[styles.scrollContent, useCompactLayout && styles.scrollContentCompact]}
             >
-                <View style={styles.textGroup}>
-                    <Text style={styles.mainTitle}>{stepTitle}</Text>
-                    <Text style={styles.subTitle}>{stepDesc}</Text>
+                <View style={[styles.textGroup, useCompactLayout && styles.textGroupCompact]}>
+                    <Text style={[styles.mainTitle, useCompactLayout && styles.mainTitleCompact]}>{stepTitle}</Text>
+                    <Text style={[styles.subTitle, useCompactLayout && styles.subTitleCompact]}>{stepDesc}</Text>
                 </View>
 
                 {stepData.id === 'easyBaseline' ? (
-                    <View style={styles.optionStack}>
+                    <View style={[styles.optionStack, useCompactLayout && styles.optionStackCompact]}>
                         {selections.trainingGoal === 'speedImprovement' && (
-                            <View style={styles.recommendNote}>
-                                <Text style={styles.recommendNoteText}>
+                            <View style={[styles.recommendNote, useCompactLayout && styles.recommendNoteCompact]}>
+                                <Text style={[styles.recommendNoteText, useCompactLayout && styles.recommendNoteTextCompact]}>
                                     For speed work, we use your <Text style={{ fontWeight: '900' }}>easy 5K pace</Text> as the starting point.
                                 </Text>
                             </View>
@@ -306,21 +316,22 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                             activeOpacity={0.8}
                             style={[
                                 styles.optionCard,
+                                useCompactLayout && styles.optionCardCompact,
                                 baselineMode === 'absolute_new' && styles.optionCardActive
                             ]}
                         >
-                            <View style={[styles.iconWrap, baselineMode === 'absolute_new' && styles.iconWrapActive]}>
+                            <View style={[styles.iconWrap, useCompactLayout && styles.iconWrapCompact, baselineMode === 'absolute_new' && styles.iconWrapActive]}>
                                 <MaterialCommunityIcons
                                     name="run-fast"
-                                    size={24}
+                                    size={useCompactLayout ? 21 : 24}
                                     color={baselineMode === 'absolute_new' ? COLORS.white : COLORS.brand}
                                 />
                             </View>
-                            <View style={styles.optionTextWrap}>
-                                <Text style={[styles.optionTitle, baselineMode === 'absolute_new' && { color: COLORS.brand }]}>
+                            <View style={[styles.optionTextWrap, useCompactLayout && styles.optionTextWrapCompact]}>
+                                <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, baselineMode === 'absolute_new' && { color: COLORS.brand }]}>
                                     I am a beginner
                                 </Text>
-                                <Text style={styles.optionSub}>
+                                <Text style={[styles.optionSub, useCompactLayout && styles.optionSubCompact]}>
                                     Start with a gentle baseline pace.
                                 </Text>
                             </View>
@@ -334,6 +345,7 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                         <View
                             style={[
                                 styles.optionCard,
+                                useCompactLayout && styles.optionCardCompact,
                                 { flexDirection: 'column', alignItems: 'stretch' },
                                 baselineMode === 'estimate' && styles.optionCardActive
                             ]}
@@ -343,18 +355,18 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                                 activeOpacity={0.8}
                                 style={{ flexDirection: 'row', alignItems: 'center' }}
                             >
-                                <View style={[styles.iconWrap, baselineMode === 'estimate' && styles.iconWrapActive]}>
+                                <View style={[styles.iconWrap, useCompactLayout && styles.iconWrapCompact, baselineMode === 'estimate' && styles.iconWrapActive]}>
                                     <MaterialCommunityIcons
                                         name="timer-outline"
-                                        size={24}
+                                        size={useCompactLayout ? 21 : 24}
                                         color={baselineMode === 'estimate' ? COLORS.white : COLORS.brand}
                                     />
                                 </View>
-                                <View style={styles.optionTextWrap}>
-                                    <Text style={[styles.optionTitle, baselineMode === 'estimate' && { color: COLORS.brand }]}>
+                                <View style={[styles.optionTextWrap, useCompactLayout && styles.optionTextWrapCompact]}>
+                                    <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, baselineMode === 'estimate' && { color: COLORS.brand }]}>
                                         I know my pace
                                     </Text>
-                                    <Text style={styles.optionSub}>
+                                    <Text style={[styles.optionSub, useCompactLayout && styles.optionSubCompact]}>
                                         Select your comfortable finishing time.
                                     </Text>
                                 </View>
@@ -366,8 +378,8 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                             </TouchableOpacity>
 
                             {baselineMode === 'estimate' && (
-                                <View style={[styles.baselineCard, { paddingTop: 20, paddingBottom: 5 }]}>
-                                    <View style={styles.mainSelectionRow}>
+                                <View style={[styles.baselineCard, useCompactLayout && styles.baselineCardCompact]}>
+                                    <View style={[styles.mainSelectionRow, useCompactLayout && styles.mainSelectionRowCompact]}>
                                         <View style={styles.leftPaceColumn}>
                                             <View style={styles.timePickerRow}>
                                                 <View style={styles.pickerBlock}>
@@ -425,14 +437,14 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                                         </View>
 
                                         <View style={styles.rightStatsColumn}>
-                                            <View style={styles.statsCard}>
+                                            <View style={[styles.statsCard, useCompactLayout && styles.statsCardCompact]}>
                                                 <Text style={styles.statsLabel}>KM AVG</Text>
-                                                <Text style={styles.statsValue}>
+                                                <Text style={[styles.statsValue, useCompactLayout && styles.statsValueCompact]}>
                                                     {baselinePaceMinutes}:{String(baselinePaceSeconds).padStart(2, '0')}
                                                 </Text>
                                                 <Text style={styles.statsUnit}>/km</Text>
-                                                <View style={styles.statsDivider} />
-                                                <Text style={styles.totalSummaryText}>
+                                                <View style={[styles.statsDivider, useCompactLayout && styles.statsDividerCompact]} />
+                                                <Text style={[styles.totalSummaryText, useCompactLayout && styles.totalSummaryTextCompact]}>
                                                     {easyMinutes}:{String(easySeconds).padStart(2, '0')} total
                                                 </Text>
                                             </View>
@@ -443,15 +455,15 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                         </View>
 
                         {baselineMode === 'absolute_new' && (
-                            <View style={styles.recommendNote}>
-                                <Text style={styles.recommendNoteText}>
+                            <View style={[styles.recommendNote, useCompactLayout && styles.recommendNoteCompact]}>
+                                <Text style={[styles.recommendNoteText, useCompactLayout && styles.recommendNoteTextCompact]}>
                                     Starting pace: <Text style={{ fontWeight: '900' }}>{baselinePaceMinutes}:{String(baselinePaceSeconds).padStart(2, '0')} /km</Text>
                                 </Text>
                             </View>
                         )}
                     </View>
                 ) : (
-                    <View style={styles.optionStack}>
+                    <View style={[styles.optionStack, useCompactLayout && styles.optionStackCompact]}>
                         {stepData.options.map((item: any) => {
                             const isSelected = selectedOptionId === item.id;
                             const showDateLabel = item.hasDatePicker && raceDate && isSelected;
@@ -464,26 +476,27 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                                     activeOpacity={0.8}
                                     style={[
                                         styles.optionCard,
+                                        useCompactLayout && styles.optionCardCompact,
                                         isSelected && styles.optionCardActive
                                     ]}
                                 >
-                                    <View style={[styles.iconWrap, isSelected && styles.iconWrapActive]}>
+                                    <View style={[styles.iconWrap, useCompactLayout && styles.iconWrapCompact, isSelected && styles.iconWrapActive]}>
                                         {IconComponent ? (
                                             <IconComponent
-                                                size={22}
+                                                size={useCompactLayout ? 20 : 22}
                                                 strokeWidth={2.4}
                                                 color={isSelected ? COLORS.white : COLORS.brand}
                                             />
                                         ) : (
                                             <MaterialCommunityIcons
                                                 name={item.icon as any}
-                                                size={24}
+                                                size={useCompactLayout ? 21 : 24}
                                                 color={isSelected ? COLORS.white : COLORS.brand}
                                             />
                                         )}
                                     </View>
-                                    <View style={styles.optionTextWrap}>
-                                        <Text style={[styles.optionTitle, isSelected && { color: COLORS.brand }]}>
+                                    <View style={[styles.optionTextWrap, useCompactLayout && styles.optionTextWrapCompact]}>
+                                        <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, isSelected && { color: COLORS.brand }]}>
                                             {showDateLabel ? formatDate(raceDate) : item.label}
                                         </Text>
                                     </View>
@@ -499,28 +512,28 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                 )}
 
                 {stepData.id === 'priority' && selections.experience === 'beginner' && (
-                    <View style={styles.recommendNote}>
-                        <Text style={styles.recommendNoteText}>
+                    <View style={[styles.recommendNote, useCompactLayout && styles.recommendNoteCompact]}>
+                        <Text style={[styles.recommendNoteText, useCompactLayout && styles.recommendNoteTextCompact]}>
                             For beginners, we recommend focusing on <Text style={{ fontWeight: '900' }}>Efficiency</Text> to build an injury-free foundation.
                         </Text>
                     </View>
                 )}
                 
-                <View style={{ height: 40 }} />
+                <View style={{ height: useCompactLayout ? 16 : 40 }} />
             </ScrollView>
 
-            <View style={styles.footer}>
+            <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
                 <TouchableOpacity 
                     disabled={!isButtonActive}
                     onPress={handleNext}
-                    style={[styles.nextBtn, !isButtonActive && styles.nextBtnDisabled]}
+                    style={[styles.nextBtn, useCompactLayout && styles.nextBtnCompact, !isButtonActive && styles.nextBtnDisabled]}
                     activeOpacity={0.9}
                 >
-                    <Text style={styles.nextBtnText}>
+                    <Text style={[styles.nextBtnText, useCompactLayout && styles.nextBtnTextCompact]}>
                         {currentStep === steps.length - 1 ? 'Unlock My Plan' : 'Continue'}
                     </Text>
-                    <View style={styles.nextIconWrap}>
-                        <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
+                    <View style={[styles.nextIconWrap, useCompactLayout && styles.nextIconWrapCompact]}>
+                        <ArrowRight color={COLORS.white} size={useCompactLayout ? 18 : 20} strokeWidth={3} />
                     </View>
                 </TouchableOpacity>
             </View>
@@ -568,8 +581,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   fixedHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
     height: height * 0.45,
     width: width,
+  },
+  fixedHeaderCompact: {
+    height: height * 0.38,
   },
   hero: {
     flex: 1,
@@ -595,6 +615,9 @@ const styles = StyleSheet.create({
     marginTop: 10,
     gap: 15,
   },
+  navRowCompact: {
+    marginTop: 4,
+  },
   backBtn: {
     width: 44,
     height: 44,
@@ -602,6 +625,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: 22,
+  },
+  backBtnCompact: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   progressContainer: {
     flex: 1,
@@ -621,13 +649,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingBottom: height * 0.08,
   },
+  mascotWrapperCompact: {
+    paddingBottom: height * 0.05,
+  },
   heroMascot: {
     width: width * 0.55,
     height: width * 0.55,
   },
+  heroMascotCompact: {
+    width: width * 0.45,
+    height: width * 0.45,
+  },
   contentMask: {
     flex: 1,
-    marginTop: -height * 0.12,
+    marginTop: height * 0.33,
+  },
+  contentMaskCompact: {
+    marginTop: height * 0.28,
   },
   content: {
     flex: 1,
@@ -646,8 +684,15 @@ const styles = StyleSheet.create({
     paddingTop: 40,
     paddingBottom: 160,
   },
+  scrollContentCompact: {
+    paddingTop: 26,
+    paddingBottom: 112,
+  },
   textGroup: {
     marginBottom: 30,
+  },
+  textGroupCompact: {
+    marginBottom: 18,
   },
   mainTitle: {
     fontSize: 34,
@@ -655,14 +700,25 @@ const styles = StyleSheet.create({
     color: COLORS.ink,
     letterSpacing: -1,
   },
+  mainTitleCompact: {
+    fontSize: 28,
+  },
   subTitle: {
     fontSize: 16,
     color: COLORS.muted,
     marginTop: 10,
     lineHeight: 24,
   },
+  subTitleCompact: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 6,
+  },
   optionStack: {
     gap: 10,
+  },
+  optionStackCompact: {
+    gap: 8,
   },
   optionCard: {
     flexDirection: 'row',
@@ -672,6 +728,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: '#F0F0F0',
+  },
+  optionCardCompact: {
+    padding: 10,
+    borderRadius: 18,
   },
   optionCardActive: {
     backgroundColor: '#FFF0F0',
@@ -689,6 +749,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.02,
     shadowRadius: 5,
   },
+  iconWrapCompact: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+  },
   iconWrapActive: {
     backgroundColor: COLORS.brand,
   },
@@ -696,16 +761,25 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 15,
   },
+  optionTextWrapCompact: {
+    marginLeft: 12,
+  },
   optionTitle: {
     fontSize: 15,
     fontWeight: '800',
     color: COLORS.ink,
+  },
+  optionTitleCompact: {
+    fontSize: 14,
   },
   optionSub: {
     fontSize: 12,
     color: COLORS.muted,
     marginTop: 2,
     fontWeight: '500',
+  },
+  optionSubCompact: {
+    fontSize: 11,
   },
   baselineCardMuted: {
     opacity: 0.55,
@@ -783,6 +857,10 @@ const styles = StyleSheet.create({
   baselineCard: {
     paddingVertical: 10,
   },
+  baselineCardCompact: {
+    paddingTop: 12,
+    paddingBottom: 2,
+  },
   tappableGroup: {
     width: '100%',
   },
@@ -817,6 +895,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 15,
   },
+  mainSelectionRowCompact: {
+    gap: 10,
+  },
   leftPaceColumn: {
     flex: 0.65,
   },
@@ -842,6 +923,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
   },
+  statsCardCompact: {
+    padding: 10,
+    borderRadius: 14,
+  },
   statsLabel: {
     fontSize: 9,
     fontWeight: '900',
@@ -855,6 +940,9 @@ const styles = StyleSheet.create({
     color: COLORS.brand,
     letterSpacing: -1,
   },
+  statsValueCompact: {
+    fontSize: 16,
+  },
   statsUnit: {
     fontSize: 10,
     fontWeight: '700',
@@ -867,11 +955,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#F0F0F0',
     marginVertical: 10,
   },
+  statsDividerCompact: {
+    marginVertical: 7,
+  },
   totalSummaryText: {
     fontSize: 11,
     fontWeight: '700',
     color: COLORS.ink,
     opacity: 0.6,
+  },
+  totalSummaryTextCompact: {
+    fontSize: 10,
   },
   recommendNote: {
     padding: 16,
@@ -881,11 +975,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#FFE0E0',
   },
+  recommendNoteCompact: {
+    padding: 12,
+    borderRadius: 16,
+    marginTop: 14,
+  },
   recommendNoteText: {
     fontSize: 13,
     color: COLORS.brandDark,
     lineHeight: 18,
     fontWeight: '600',
+  },
+  recommendNoteTextCompact: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   footer: {
     position: 'absolute',
@@ -896,6 +999,10 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 40 : 25,
     paddingTop: 15,
     backgroundColor: 'rgba(255,255,255,0.92)',
+  },
+  footerCompact: {
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 22 : 18,
   },
   nextBtn: {
     backgroundColor: COLORS.ink,
@@ -911,6 +1018,11 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     elevation: 8,
   },
+  nextBtnCompact: {
+    height: 58,
+    borderRadius: 20,
+    paddingHorizontal: 20,
+  },
   nextBtnDisabled: {
     backgroundColor: COLORS.offWhite,
     shadowOpacity: 0,
@@ -921,6 +1033,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
   },
+  nextBtnTextCompact: {
+    fontSize: 16,
+  },
   nextIconWrap: {
     width: 44,
     height: 44,
@@ -928,6 +1043,11 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.brand,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  nextIconWrapCompact: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
   },
   modalOverlay: {
     flex: 1,

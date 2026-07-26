@@ -4,6 +4,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { requireStringParam } from '../utils/params';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -210,7 +211,7 @@ router.post('/earn-daily', authMiddleware, async (req: AuthRequest, res: Respons
 router.get('/daily/:dayKey', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user!.id;
-        const { dayKey } = req.params;
+        const dayKey = requireStringParam(req.params.dayKey, 'dayKey');
 
         const entries = await prisma.dailyPointsLedger.findMany({
             where: { userId, dayKey },
@@ -235,4 +236,3 @@ router.get('/daily/:dayKey', authMiddleware, async (req: AuthRequest, res: Respo
 });
 
 export default router;
-

@@ -22,7 +22,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { getGenderMascotSource } from '../../utils/genderMascot';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
+const modalContentWidth = Math.min(windowWidth * 0.9, 520);
 
 const COLORS = {
   brand: '#FF6B6B', // Vibrant Coral
@@ -177,12 +183,16 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
 
   return (
     <View style={styles.container}>
-        <View style={styles.fixedHeader}>
+        <View style={[styles.fixedHeader, useCompactLayout && styles.fixedHeaderCompact]}>
             <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={styles.hero}>
                 <Text style={styles.watermarkText}>WEIGHT LOSS</Text>
                 <SafeAreaView>
-                    <View style={styles.navRow}>
-                        <TouchableOpacity onPress={handleBack} style={[styles.backBtn, currentStep === 0 && { opacity: 0 }]} disabled={currentStep === 0}>
+                    <View style={[styles.navRow, useCompactLayout && styles.navRowCompact]}>
+                        <TouchableOpacity
+                            onPress={handleBack}
+                            style={[styles.backBtn, useCompactLayout && styles.backBtnCompact, currentStep === 0 && { opacity: 0 }]}
+                            disabled={currentStep === 0}
+                        >
                             <ChevronLeft color={COLORS.white} size={28} />
                         </TouchableOpacity>
                         <View style={styles.progressContainer}>
@@ -191,10 +201,10 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                     </View>
                 </SafeAreaView>
                 
-                <View style={styles.mascotWrapper} pointerEvents="none">
+                <View style={[styles.mascotWrapper, useCompactLayout && styles.mascotWrapperCompact]} pointerEvents="none">
                     <Image
                         source={mascotSource}
-                        style={styles.heroMascot}
+                        style={[styles.heroMascot, useCompactLayout && styles.heroMascotCompact]}
                         contentFit="contain"
                     />
                 </View>
@@ -204,20 +214,21 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
       <Animated.View 
         style={[
             styles.contentMask, 
+            useCompactLayout && styles.contentMaskCompact,
             { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
         ]}
       >
         <View style={styles.content}>
             <ScrollView 
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.scrollContent}
+                contentContainerStyle={[styles.scrollContent, useCompactLayout && styles.scrollContentCompact]}
             >
-                <View style={styles.textGroup}>
-                    <Text style={styles.mainTitle}>{stepData.title}</Text>
-                    <Text style={styles.subTitle}>{stepData.desc}</Text>
+                <View style={[styles.textGroup, useCompactLayout && styles.textGroupCompact]}>
+                    <Text style={[styles.mainTitle, useCompactLayout && styles.mainTitleCompact]}>{stepData.title}</Text>
+                    <Text style={[styles.subTitle, useCompactLayout && styles.subTitleCompact]}>{stepData.desc}</Text>
                 </View>
 
-                <View style={styles.optionStack}>
+                <View style={[styles.optionStack, useCompactLayout && styles.optionStackCompact]}>
                     {stepData.options.map((item) => {
                         const isSelected = selectedOptionId === item.id;
                         return (
@@ -227,19 +238,20 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                                 activeOpacity={0.8}
                                 style={[
                                     styles.optionCard,
+                                    useCompactLayout && styles.optionCardCompact,
                                     isSelected && styles.optionCardActive
                                 ]}
                             >
-                                <View style={[styles.iconWrap, isSelected && styles.iconWrapActive]}>
+                                <View style={[styles.iconWrap, useCompactLayout && styles.iconWrapCompact, isSelected && styles.iconWrapActive]}>
                                     <MaterialCommunityIcons 
                                         name={item.icon as any} 
-                                        size={24} 
+                                        size={useCompactLayout ? 21 : 24} 
                                         color={isSelected ? COLORS.white : COLORS.brand} 
                                     />
                                 </View>
-                                <View style={styles.optionTextWrap}>
-                                    <Text style={[styles.optionTitle, isSelected && { color: COLORS.brand }]}>{item.label}</Text>
-                                    <Text style={styles.optionSub}>{item.desc}</Text>
+                                <View style={[styles.optionTextWrap, useCompactLayout && styles.optionTextWrapCompact]}>
+                                    <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, isSelected && { color: COLORS.brand }]}>{item.label}</Text>
+                                    <Text style={[styles.optionSub, useCompactLayout && styles.optionSubCompact]}>{item.desc}</Text>
                                 </View>
                                 <MaterialCommunityIcons 
                                     name={isSelected ? "check-circle" : "chevron-right"} 
@@ -252,8 +264,8 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                 </View>
 
                 {currentStep === 0 && calculatedWeeks !== null && (
-                    <View style={[styles.weeksBadge, !isViable && styles.weeksBadgeWarning]}>
-                        <Text style={[styles.weeksText, !isViable && styles.weeksTextWarning]}>
+                    <View style={[styles.weeksBadge, useCompactLayout && styles.weeksBadgeCompact, !isViable && styles.weeksBadgeWarning]}>
+                        <Text style={[styles.weeksText, useCompactLayout && styles.weeksTextCompact, !isViable && styles.weeksTextWarning]}>
                             {selections.timeline === 'custom' && targetDate
                                 ? `Target: ${targetDate.toLocaleDateString()} • ${calculatedWeeks} weeks`
                                 : isViable
@@ -263,21 +275,21 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                     </View>
                 )}
                 
-                <View style={{ height: 40 }} />
+                <View style={{ height: useCompactLayout ? 16 : 40 }} />
             </ScrollView>
 
-            <View style={styles.footer}>
+            <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
                 <TouchableOpacity 
                     disabled={!isButtonActive}
                     onPress={handleNext}
-                    style={[styles.nextBtn, !isButtonActive && styles.nextBtnDisabled]}
+                    style={[styles.nextBtn, useCompactLayout && styles.nextBtnCompact, !isButtonActive && styles.nextBtnDisabled]}
                     activeOpacity={0.9}
                 >
-                    <Text style={styles.nextBtnText}>
+                    <Text style={[styles.nextBtnText, useCompactLayout && styles.nextBtnTextCompact]}>
                         {currentStep === STEPS.length - 1 ? 'Unlock My Plan' : 'Continue'}
                     </Text>
-                    <View style={styles.nextIconWrap}>
-                        <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
+                    <View style={[styles.nextIconWrap, useCompactLayout && styles.nextIconWrapCompact]}>
+                        <ArrowRight color={COLORS.white} size={useCompactLayout ? 18 : 20} strokeWidth={3} />
                     </View>
                 </TouchableOpacity>
             </View>
@@ -296,12 +308,25 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                 display="inline"
                 minimumDate={new Date()}
                 onChange={onDateChange}
+                themeVariant="light"
                 style={styles.modalCalendar}
                 accentColor={COLORS.brand}
+                textColor={COLORS.ink}
               />
-              <TouchableOpacity style={styles.modalButton} onPress={confirmIosDate}>
-                <Text style={styles.modalButtonText}>Confirm Date</Text>
-              </TouchableOpacity>
+              <View style={styles.modalActionRow}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonSecondary]}
+                  onPress={() => setShowCalendar(false)}
+                >
+                  <Text style={[styles.modalButtonText, styles.modalButtonSecondaryText]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonPrimary]}
+                  onPress={confirmIosDate}
+                >
+                  <Text style={styles.modalButtonText}>Confirm Date</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </Modal>
@@ -325,8 +350,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   fixedHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
     height: height * 0.45,
     width: width,
+  },
+  fixedHeaderCompact: {
+    height: height * 0.38,
   },
   hero: {
     flex: 1,
@@ -352,6 +384,9 @@ const styles = StyleSheet.create({
     marginTop: 10,
     gap: 15,
   },
+  navRowCompact: {
+    marginTop: 4,
+  },
   backBtn: {
     width: 44,
     height: 44,
@@ -359,6 +394,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: 22,
+  },
+  backBtnCompact: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   progressContainer: {
     flex: 1,
@@ -378,13 +418,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingBottom: height * 0.08,
   },
+  mascotWrapperCompact: {
+    paddingBottom: height * 0.05,
+  },
   heroMascot: {
     width: width * 0.55,
     height: width * 0.55,
   },
+  heroMascotCompact: {
+    width: width * 0.45,
+    height: width * 0.45,
+  },
   contentMask: {
     flex: 1,
-    marginTop: -height * 0.12,
+    marginTop: height * 0.33,
+  },
+  contentMaskCompact: {
+    marginTop: height * 0.28,
   },
   content: {
     flex: 1,
@@ -403,8 +453,15 @@ const styles = StyleSheet.create({
     paddingTop: 40,
     paddingBottom: 160,
   },
+  scrollContentCompact: {
+    paddingTop: 26,
+    paddingBottom: 112,
+  },
   textGroup: {
     marginBottom: 30,
+  },
+  textGroupCompact: {
+    marginBottom: 18,
   },
   mainTitle: {
     fontSize: 34,
@@ -412,14 +469,25 @@ const styles = StyleSheet.create({
     color: COLORS.ink,
     letterSpacing: -1,
   },
+  mainTitleCompact: {
+    fontSize: 28,
+  },
   subTitle: {
     fontSize: 16,
     color: COLORS.muted,
     marginTop: 10,
     lineHeight: 24,
   },
+  subTitleCompact: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 6,
+  },
   optionStack: {
     gap: 12,
+  },
+  optionStackCompact: {
+    gap: 8,
   },
   optionCard: {
     flexDirection: 'row',
@@ -429,6 +497,10 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     borderColor: '#F0F0F0',
+  },
+  optionCardCompact: {
+    padding: 12,
+    borderRadius: 20,
   },
   optionCardActive: {
     backgroundColor: '#FFF0F0',
@@ -446,6 +518,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.02,
     shadowRadius: 5,
   },
+  iconWrapCompact: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+  },
   iconWrapActive: {
     backgroundColor: COLORS.brand,
   },
@@ -453,16 +530,25 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 15,
   },
+  optionTextWrapCompact: {
+    marginLeft: 12,
+  },
   optionTitle: {
     fontSize: 17,
     fontWeight: '800',
     color: COLORS.ink,
+  },
+  optionTitleCompact: {
+    fontSize: 15,
   },
   optionSub: {
     fontSize: 13,
     color: COLORS.muted,
     marginTop: 2,
     fontWeight: '500',
+  },
+  optionSubCompact: {
+    fontSize: 12,
   },
   weeksBadge: {
     backgroundColor: '#FAFAFA',
@@ -473,6 +559,11 @@ const styles = StyleSheet.create({
     borderColor: '#F0F0F0',
     alignItems: 'center',
   },
+  weeksBadgeCompact: {
+    padding: 12,
+    borderRadius: 16,
+    marginTop: 14,
+  },
   weeksBadgeWarning: {
     backgroundColor: '#FFF5F5',
     borderColor: '#FFE0E0',
@@ -481,6 +572,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.ink,
     fontWeight: '700',
+  },
+  weeksTextCompact: {
+    fontSize: 12,
   },
   weeksTextWarning: {
     color: COLORS.brand,
@@ -494,6 +588,10 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 40 : 25,
     paddingTop: 15,
     backgroundColor: 'rgba(255,255,255,0.92)',
+  },
+  footerCompact: {
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 22 : 18,
   },
   nextBtn: {
     backgroundColor: COLORS.ink,
@@ -509,6 +607,11 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     elevation: 8,
   },
+  nextBtnCompact: {
+    height: 58,
+    borderRadius: 20,
+    paddingHorizontal: 20,
+  },
   nextBtnDisabled: {
     backgroundColor: COLORS.offWhite,
     shadowOpacity: 0,
@@ -519,6 +622,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
   },
+  nextBtnTextCompact: {
+    fontSize: 16,
+  },
   nextIconWrap: {
     width: 44,
     height: 44,
@@ -526,6 +632,11 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.brand,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  nextIconWrapCompact: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
   },
   modalOverlay: {
     flex: 1,
@@ -536,31 +647,50 @@ const styles = StyleSheet.create({
   modalContent: {
     backgroundColor: 'white',
     borderRadius: 30,
-    padding: 24,
-    width: width * 0.9,
-    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+    width: modalContentWidth,
+    maxWidth: 520,
+    alignItems: 'stretch',
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '900',
     color: COLORS.ink,
-    marginBottom: 20,
+    marginBottom: 16,
+    textAlign: 'center',
   },
   modalCalendar: {
     width: '100%',
-    height: 340,
+    minHeight: 400,
+    alignSelf: 'stretch',
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
   },
   modalButton: {
-    backgroundColor: COLORS.ink,
-    paddingVertical: 18,
-    borderRadius: 20,
-    width: '100%',
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 18,
     alignItems: 'center',
-    marginTop: 20,
+    justifyContent: 'center',
+  },
+  modalButtonPrimary: {
+    backgroundColor: COLORS.ink,
+  },
+  modalButtonSecondary: {
+    backgroundColor: COLORS.offWhite,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   modalButtonText: {
     color: 'white',
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800',
+  },
+  modalButtonSecondaryText: {
+    color: COLORS.ink,
   },
 });

@@ -15,7 +15,9 @@ import { ArrowRight, Zap, Coins, Gift, Sparkles } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -257,7 +259,7 @@ const styles = StyleSheet.create({
   },
   mainStepNumber: {
     color: COLORS.white,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '900',
   },
   cardWrapper: {
@@ -311,7 +313,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   mainButton: {
-    height: 60,
+    height: 54,
     borderRadius: 30,
     overflow: 'hidden',
     shadowColor: COLORS.coral,
@@ -329,7 +331,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: 'white',
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: -0.2,
   },

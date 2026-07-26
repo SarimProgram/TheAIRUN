@@ -143,6 +143,7 @@ export default function CustomPaywallScreen() {
     access,
     hasAccess,
     offerings,
+    startTrial,
     purchase,
     restorePurchases,
     refreshAccess,
@@ -222,6 +223,8 @@ export default function CustomPaywallScreen() {
   const activePackage = packages.find(p => p.identifier === selectedPlan);
   const activePeriod = getPackagePeriodLabel(activePackage);
   const activePrice = getPackagePrice(activePackage);
+  const useBackendTrialCta = __DEV__ && !activePackage;
+  const ctaDisabled = !!busyAction || (!useBackendTrialCta && !activePackage);
   const trialLength = getTrialLengthLabel(activePackage);
   const hasTrial = !!trialLength && activePeriod === 'week';
   const disclosurePrice = activePrice || 'the selected plan price';
@@ -339,10 +342,10 @@ export default function CustomPaywallScreen() {
 
           {/* Massive CTA */}
           <TouchableOpacity
-            style={[styles.ctaButton, (!!busyAction || !activePackage) && styles.ctaDisabled]}
-            disabled={!!busyAction || !activePackage}
+            style={[styles.ctaButton, ctaDisabled && styles.ctaDisabled]}
+            disabled={ctaDisabled}
             activeOpacity={0.9}
-            onPress={() => handleAction('purchase', () => purchase(activePackage))}
+            onPress={() => handleAction('purchase', () => useBackendTrialCta ? startTrial() : purchase(activePackage))}
           >
             {busyAction === 'purchase' ? (
               <ActivityIndicator color={COLORS.primaryText} />

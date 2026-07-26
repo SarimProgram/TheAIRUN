@@ -18,5 +18,7 @@ app/google-services.json
 backend/dist/
 app/dist/
 
-.DS_Store
+.local/
+app/ios/
 
+.DS_Store

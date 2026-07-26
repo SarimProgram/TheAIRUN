@@ -423,7 +423,7 @@ const styles = StyleSheet.create({
     paddingBottom: 30,
   },
   mainButton: {
-    height: 60,
+    height: 54,
     borderRadius: 20,
     overflow: 'hidden',
     shadowColor: COLORS.coral,
@@ -441,7 +441,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: COLORS.white,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: -0.5,
   },

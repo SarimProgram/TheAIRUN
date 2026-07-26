@@ -12,7 +12,9 @@ import {
 } from 'react-native';
 import { ChevronRight, Target, Coins, Gift, Sparkles, CheckCircle2 } from 'lucide-react-native';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
 
 const COLORS = {
   brand: '#FF6B6B',
@@ -209,7 +211,7 @@ const styles = StyleSheet.create({
     letterSpacing: -1,
   },
   subtitle: {
-    fontSize: 17,
+    fontSize: 16,
     color: COLORS.white,
     opacity: 0.9,
     marginTop: 12,
@@ -297,7 +299,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     flex: 1,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: COLORS.brand,
     textAlign: 'left',

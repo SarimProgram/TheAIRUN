@@ -18,7 +18,8 @@ import {
     Camera,
 } from 'lucide-react-native';
 
-const { height } = Dimensions.get('window');
+const { height: windowHeight } = Dimensions.get('window');
+const height = Math.min(windowHeight, 800);
 
 const COLORS = {
     coral: '#FF6B6B',
@@ -194,7 +195,7 @@ const styles = StyleSheet.create({
     },
     primaryButton: {
         backgroundColor: COLORS.coral,
-        height: 60,
+        height: 54,
         borderRadius: 18,
         flexDirection: 'row',
         alignItems: 'center',
@@ -208,7 +209,7 @@ const styles = StyleSheet.create({
     },
     buttonText: {
         color: 'white',
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '800',
         letterSpacing: -0.5,
     },

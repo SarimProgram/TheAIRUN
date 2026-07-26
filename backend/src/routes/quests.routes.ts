@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient, UserQuestStatus } from '@prisma/client';
 import { authMiddleware } from '../middleware/auth';
+import { requireStringParam } from '../utils/params';
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -143,7 +144,7 @@ router.get('/all', authMiddleware, async (_req: Request, res: Response) => {
 router.post('/:userQuestId/complete', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user?.id;
-        const { userQuestId } = req.params;
+        const userQuestId = requireStringParam(req.params.userQuestId, 'userQuestId');
 
         if (!userId) {
             return res.status(401).json({ error: 'Unauthorized' });
@@ -211,7 +212,7 @@ router.post('/:userQuestId/complete', authMiddleware, async (req: AuthRequest, r
 router.patch('/:userQuestId/progress', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user?.id;
-        const { userQuestId } = req.params;
+        const userQuestId = requireStringParam(req.params.userQuestId, 'userQuestId');
         const { progress } = req.body;
 
         if (!userId) {

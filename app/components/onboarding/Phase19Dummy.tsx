@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     flex: 1,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: COLORS.white,
     textAlign: 'center',

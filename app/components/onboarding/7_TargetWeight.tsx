@@ -11,14 +11,19 @@ import {
   Dimensions,
   Platform,
 } from 'react-native';
-import { ChevronLeft, ArrowRight, Target, Info } from 'lucide-react-native';
+import { ChevronLeft, ArrowRight, Info } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const { width } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
 
-const ITEM_HEIGHT = 70;
+const ITEM_HEIGHT = useCompactLayout ? 58 : 70;
 const VISIBLE_ITEMS = 3;
 const PICKER_HEIGHT = ITEM_HEIGHT * VISIBLE_ITEMS;
+const titleSize = useCompactLayout ? 32 : 36;
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -109,9 +114,10 @@ export default function TargetWeight({ currentWeight, unit = 'kg', onContinue, o
           </TouchableOpacity>
         </View>
 
-        <View style={styles.main}>
+        <View style={[styles.main, useCompactLayout && styles.mainCompact]}>
           <Animated.View style={[
             styles.topSection,
+            useCompactLayout && styles.topSectionCompact,
             { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
           ]}>
            
@@ -124,7 +130,7 @@ export default function TargetWeight({ currentWeight, unit = 'kg', onContinue, o
             </Text>
           </Animated.View>
 
-          <View style={styles.weightSummary}>
+          <View style={[styles.weightSummary, useCompactLayout && styles.weightSummaryCompact]}>
             <View style={styles.weightBox}>
               <Text style={styles.weightLabel}>CURRENT</Text>
               <Text style={styles.weightVal}>{currentWeight}<Text style={styles.weightUnitSmall}>{unit}</Text></Text>
@@ -140,7 +146,7 @@ export default function TargetWeight({ currentWeight, unit = 'kg', onContinue, o
             </View>
           </View>
 
-          <Animated.View style={[styles.pickerSection, { opacity: fadeAnim }]}>
+          <Animated.View style={[styles.pickerSection, useCompactLayout && styles.pickerSectionCompact, { opacity: fadeAnim }]}>
             <View style={styles.pickerContainer}>
               <View style={styles.indicator} pointerEvents="none" />
               <Animated.FlatList<any>
@@ -162,13 +168,15 @@ export default function TargetWeight({ currentWeight, unit = 'kg', onContinue, o
             </View>
           </Animated.View>
 
-          <View style={styles.infoNote}>
+          <View style={[styles.infoNote, useCompactLayout && styles.infoNoteCompact]}>
             <Info color={COLORS.muted} size={16} />
-            <Text style={styles.infoText}>We recommend a healthy and sustainable weight loss pace of 0.5 - 1 kg per week.</Text>
+            <Text style={[styles.infoText, useCompactLayout && styles.infoTextCompact]}>
+              We recommend a healthy and sustainable weight loss pace of 0.5 - 1 kg per week.
+            </Text>
           </View>
         </View>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
           <TouchableOpacity style={styles.mainButton} onPress={() => onContinue(values[selectedIndex])} activeOpacity={0.9}>
             <LinearGradient
               colors={[COLORS.coral, COLORS.coralDark]}
@@ -191,7 +199,9 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 16, paddingTop: 10 },
   backBtn: { width: 44, height: 44, justifyContent: 'center' },
   main: { flex: 1, paddingHorizontal: 32, paddingTop: 10 },
+  mainCompact: { paddingTop: 4 },
   topSection: { marginBottom: 30 },
+  topSectionCompact: { marginBottom: 16 },
   badge: {
     backgroundColor: '#FFF0F0',
     paddingHorizontal: 12,
@@ -204,7 +214,7 @@ const styles = StyleSheet.create({
     gap: 6
   },
   badgeText: { fontSize: 10, fontWeight: '900', color: COLORS.coral, letterSpacing: 1.5 },
-  title: { fontSize: 36, fontWeight: '900', color: COLORS.black, lineHeight: 42, letterSpacing: -1, marginBottom: 8 },
+  title: { fontSize: titleSize, fontWeight: '900', color: COLORS.black, lineHeight: titleSize + 6, letterSpacing: -1, marginBottom: 8 },
   subtitle: { fontSize: 15, color: COLORS.muted, lineHeight: 22, fontWeight: '500' },
 
   weightSummary: {
@@ -216,6 +226,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingLeft: 24,
+  },
+  weightSummaryCompact: {
+    marginBottom: 14,
+    paddingVertical: 8,
   },
   weightBox: {
     alignItems: 'center',
@@ -229,15 +243,16 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 107, 107, 0.2)',
   },
   weightLabel: { fontSize: 10, fontWeight: '800', color: COLORS.muted, marginBottom: 4, letterSpacing: 0.5 },
-  weightVal: { fontSize: 24, fontWeight: '900', color: COLORS.black },
+  weightVal: { fontSize: useCompactLayout ? 22 : 24, fontWeight: '900', color: COLORS.black },
   weightUnitSmall: { fontSize: 14, color: COLORS.muted, fontWeight: '600' },
   weightDivider: { width: 1, height: 30, backgroundColor: '#E2E8F0' },
 
   pickerSection: { alignItems: 'center', height: PICKER_HEIGHT, marginBottom: 30 },
+  pickerSectionCompact: { marginBottom: 14 },
   pickerContainer: { height: PICKER_HEIGHT, width: width * 0.45, justifyContent: 'center', alignItems: 'center' },
   indicator: { position: 'absolute', height: ITEM_HEIGHT, width: '110%', backgroundColor: COLORS.selection, borderRadius: 20, zIndex: -1 },
   itemWrapper: { height: ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center' },
-  valueText: { fontSize: 42, fontWeight: '900', letterSpacing: -1.5 },
+  valueText: { fontSize: useCompactLayout ? 36 : 42, fontWeight: '900', letterSpacing: -1.5 },
 
   infoNote: {
     flexDirection: 'row',
@@ -247,9 +262,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12
   },
+  infoNoteCompact: {
+    padding: 12,
+    borderRadius: 14,
+    gap: 10,
+  },
   infoText: { flex: 1, fontSize: 13, color: COLORS.muted, lineHeight: 18, fontWeight: '500' },
+  infoTextCompact: { fontSize: 12, lineHeight: 16 },
 
   footer: { paddingHorizontal: 32, paddingBottom: 32 },
+  footerCompact: { paddingTop: 18, paddingBottom: Platform.OS === 'ios' ? 12 : 20 },
   mainButton: {
     height: 64,
     borderRadius: 22,
@@ -261,5 +283,5 @@ const styles = StyleSheet.create({
     elevation: 8
   },
   gradientButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
-  buttonText: { color: 'white', fontSize: 18, fontWeight: '800', letterSpacing: -0.5 },
+  buttonText: { color: 'white', fontSize: 16, fontWeight: '800', letterSpacing: -0.5 },
 });

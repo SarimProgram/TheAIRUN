@@ -13,7 +13,9 @@ import {
 import { ChevronLeft, Users, Plus, ArrowRight } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
 
 const COLORS = {
     brand: '#FF3B3B', // Vibrant high-energy red
@@ -108,6 +110,10 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.white,
     },
     hero: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
         height: height * 0.4,
         paddingHorizontal: 25,
     },
@@ -122,12 +128,12 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        marginTop: -height * 0.15, // Pull content up into the red hero
+        marginTop: height * 0.20, // Pull content up more
         backgroundColor: COLORS.white,
         borderTopLeftRadius: 40,
         borderTopRightRadius: 40,
-        paddingHorizontal: 30,
-        paddingTop: 40,
+        paddingHorizontal: 24,
+        paddingTop: 30,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: -10 },
         shadowOpacity: 0.05,
@@ -135,35 +141,35 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
     textGroup: {
-        marginBottom: 40,
+        marginBottom: 30,
     },
     welcomeText: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '600',
         color: COLORS.brand,
         marginBottom: 4,
     },
     mainTitle: {
-        fontSize: 34,
+        fontSize: 30,
         fontWeight: '900',
         color: COLORS.ink,
         letterSpacing: -1,
     },
     subTitle: {
-        fontSize: 16,
+        fontSize: 15,
         color: COLORS.muted,
-        marginTop: 10,
-        lineHeight: 24,
+        marginTop: 6,
+        lineHeight: 22,
     },
     buttonStack: {
-        gap: 16,
+        gap: 12,
     },
     primaryBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: COLORS.white,
-        padding: 20,
-        borderRadius: 24,
+        padding: 16,
+        borderRadius: 20,
         borderWidth: 2,
         borderColor: COLORS.brand,
     },
@@ -171,40 +177,40 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#FAFAFA',
-        padding: 20,
-        borderRadius: 24,
+        padding: 16,
+        borderRadius: 20,
         borderWidth: 1,
         borderColor: '#F0F0F0',
     },
     btnIconWrap: {
-        width: 50,
-        height: 50,
-        borderRadius: 16,
+        width: 44,
+        height: 44,
+        borderRadius: 14,
         backgroundColor: '#FFF0F0',
         alignItems: 'center',
         justifyContent: 'center',
     },
     btnTextWrap: {
         flex: 1,
-        marginLeft: 15,
+        marginLeft: 12,
     },
     primaryBtnTitle: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '800',
         color: COLORS.ink,
     },
     primaryBtnSub: {
-        fontSize: 14,
+        fontSize: 13,
         color: COLORS.brand,
         fontWeight: '500',
     },
     secondaryBtnTitle: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '700',
         color: COLORS.ink,
     },
     secondaryBtnSub: {
-        fontSize: 14,
+        fontSize: 13,
         color: COLORS.muted,
     },
     brandTag: {

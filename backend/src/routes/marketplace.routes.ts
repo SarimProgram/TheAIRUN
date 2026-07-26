@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import prisma from '../db/prisma';
+import { requireStringParam } from '../utils/params';
 
 const router = Router();
 const UNDO_WINDOW_MS = 60 * 60 * 1000;
@@ -190,7 +191,7 @@ router.patch('/items/:id', authMiddleware, async (req: AuthRequest, res: Respons
             return res.status(400).json({ error: 'You must have a partner to manage shared rewards' });
         }
 
-        const itemId = req.params.id;
+        const itemId = requireStringParam(req.params.id, 'id');
         const payload = updateItemSchema.parse(req.body);
         const item = await prisma.marketplaceItem.findUnique({ where: { id: itemId } });
 
@@ -221,7 +222,7 @@ router.delete('/items/:id', authMiddleware, async (req: AuthRequest, res: Respon
             return res.status(400).json({ error: 'You must have a partner to manage shared rewards' });
         }
 
-        const itemId = req.params.id;
+        const itemId = requireStringParam(req.params.id, 'id');
         const item = await prisma.marketplaceItem.findUnique({ where: { id: itemId } });
         if (!item || !item.isCustom || item.pairKey !== pairKey) {
             return res.status(404).json({ error: 'Item not found' });
@@ -401,7 +402,7 @@ router.post('/redeem', authMiddleware, async (req: AuthRequest, res: Response) =
 router.patch('/wallet/:id/complete', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user!.id;
-        const { id } = req.params;
+        const id = requireStringParam(req.params.id, 'id');
         const requester = await prisma.user.findUnique({
             where: { id: userId },
             select: { partnerId: true },
@@ -435,7 +436,7 @@ router.patch('/wallet/:id/complete', authMiddleware, async (req: AuthRequest, re
 router.post('/wallet/:id/undo', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const requesterId = req.user!.id;
-        const { id } = req.params;
+        const id = requireStringParam(req.params.id, 'id');
 
         const requester = await prisma.user.findUnique({
             where: { id: requesterId },
@@ -487,7 +488,7 @@ router.post('/wallet/:id/undo', authMiddleware, async (req: AuthRequest, res: Re
 router.delete('/wallet/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user!.id;
-        const { id } = req.params;
+        const id = requireStringParam(req.params.id, 'id');
         const requester = await prisma.user.findUnique({
             where: { id: userId },
             select: { partnerId: true },

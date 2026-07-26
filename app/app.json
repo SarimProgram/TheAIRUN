@@ -10,12 +10,14 @@
     "ios": {
       "bundleIdentifier": "au.com.msarim.theaicoach",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "supportsTablet": false,
       "infoPlist": {
         "NSHealthShareUsageDescription": "We use your step count to sync and compare progress with your partner.",
         "NSHealthUpdateUsageDescription": "We may write workouts or activity sessions to your Health data to track progress.",
+        "NSMotionUsageDescription": "Runtogether uses motion activity to count steps for step battles, such as showing your live steps during a race.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location in the background to track your running route and distance.",
+        "NSLocationAlwaysUsageDescription": "Runtogether uses background location to keep tracking your route and distance when your screen locks during a run.",
         "NSLocationWhenInUseUsageDescription": "We need your location to track your running route and distance.",
         "ITSAppUsesNonExemptEncryption": false,
         "BGTaskSchedulerPermittedIdentifiers": [
@@ -27,9 +29,7 @@
           "remote-notification"
         ]
       },
-      "runtimeVersion": {
-        "policy": "appVersion"
-      }
+      "runtimeVersion": "1.0.1"
     },
     "android": {
       "googleServicesFile": "./google-services.json",
@@ -157,14 +157,18 @@
               "displayName": "Partner Kcals",
               "description": "View your and your partner's calories",
               "contentMarginsDisabled": true,
-              "supportedFamilies": ["systemMedium"]
+              "supportedFamilies": [
+                "systemMedium"
+              ]
             },
             {
               "name": "LogActionWidget",
               "displayName": "Quick Log",
               "description": "Quickly log a meal or workout",
               "contentMarginsDisabled": true,
-              "supportedFamilies": ["systemSmall"]
+              "supportedFamilies": [
+                "systemSmall"
+              ]
             }
           ]
         }

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import {
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -14,7 +15,11 @@ import { Bell, ChevronRight, Eye, Heart, ShoppingBag, Sparkles, Users } from 'lu
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image } from 'expo-image';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const height = Math.min(windowHeight, 800);
+const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
+const isCompactFrame = windowHeight <= 820;
+const useCompactLayout = isAirLayout || isCompactFrame;
 
 const COLORS = {
   brand: '#FF3B3B', // Vibrant high-energy red
@@ -112,8 +117,6 @@ export default function Phase19PlanTimeline({
         : null;
 
       if (goalMode === 'combined') {
-        const expectedWeightLabel =
-          expectedWeight != null ? `${expectedWeight} ${weightUnit}` : 'your target range';
         const runValue = weekData?.runKm ? `${weekData.runKm.toFixed(1)} km/week` : 'steady weekly training';
 
         return {
@@ -185,7 +188,7 @@ export default function Phase19PlanTimeline({
       <StatusBar barStyle="light-content" />
       
       {/* 1. Large High-Aesthetic Hero Container */}
-      <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={styles.hero}>
+      <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={[styles.hero, useCompactLayout && styles.heroCompact]}>
         <Text style={styles.watermarkText}>TOGETHER</Text>
         <SafeAreaView style={styles.heroSafe}>
           <TouchableOpacity onPress={onBack} style={styles.backBtn}>
@@ -220,7 +223,7 @@ export default function Phase19PlanTimeline({
                     </Text>
                 </View>
             </View>
-            <View style={styles.heroBadge}>
+            <View style={[styles.heroBadge, useCompactLayout && styles.heroBadgeCompact]}>
                 <Text style={styles.heroBadgeText}>BUILT FOR TWO</Text>
             </View>
           </View>
@@ -228,17 +231,21 @@ export default function Phase19PlanTimeline({
       </LinearGradient>
 
       {/* 2. Floating Info Card (The Split Section) */}
-      <Animated.View style={[styles.overlapCard, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-        <View style={styles.cardHeader}>
+      <Animated.View style={[styles.overlapCard, useCompactLayout && styles.overlapCardCompact, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+        <ScrollView
+          contentContainerStyle={styles.overlapScrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+        <View style={[styles.cardHeader, useCompactLayout && styles.cardHeaderCompact]}>
             <Text style={styles.cardHeaderTitle}>Your Plan, Better Together</Text>
         </View>
 
-        <View style={styles.splitRow}>
+        <View style={[styles.splitRow, useCompactLayout && styles.splitRowCompact]}>
             {/* Left: My Blueprint */}
             <View style={styles.column}>
                 <Text style={styles.columnLabel}>Your Plan</Text>
-                <View style={styles.blueprintBulletList}>
-                    {roadmapCheckpoints.map((item) => (
+                <View style={[styles.blueprintBulletList, useCompactLayout && styles.blueprintBulletListCompact]}>
+                    {roadmapCheckpoints.slice(0, useCompactLayout ? 3 : 4).map((item) => (
                         <View key={item.key} style={styles.blueprintBulletRow}>
                             <View style={styles.blueprintBulletDot} />
                             <View style={styles.blueprintBulletContent}>
@@ -255,7 +262,7 @@ export default function Phase19PlanTimeline({
             {/* Right: Partner Sync */}
             <View style={[styles.column, styles.partnerColumn]}>
                 <Text style={[styles.columnLabel, { color: COLORS.success }]}>WITH A PARTNER</Text>
-                <View style={styles.perksList}>
+                <View style={[styles.perksList, useCompactLayout && styles.perksListCompact]}>
                     <View style={styles.perk}>
                         <View style={styles.perkIconWrap}>
                           <Eye size={14} color={COLORS.brand} strokeWidth={2.2} />
@@ -280,26 +287,27 @@ export default function Phase19PlanTimeline({
                         </View>
                         <Text style={styles.perkText}>Run together in real time</Text>
                     </View>
-                    <View style={styles.perk}>
+                    {!useCompactLayout && <View style={styles.perk}>
                         <View style={styles.perkIconWrap}>
                           <ShoppingBag size={14} color={COLORS.brand} strokeWidth={2.2} />
                         </View>
                         <Text style={styles.perkText}>Couple marketplace access</Text>
-                    </View>
-                    <View style={styles.perk}>
+                    </View>}
+                    {!useCompactLayout && <View style={styles.perk}>
                         <View style={styles.perkIconWrap}>
                           <Sparkles size={14} color={COLORS.brand} strokeWidth={2.2} />
                         </View>
                         <Text style={styles.perkText}>Celebrate wins as a team</Text>
-                    </View>
+                    </View>}
                 </View>
             </View>
         </View>
+        </ScrollView>
       </Animated.View>
 
       {/* 3. High-Impact Footer */}
-      <View style={styles.footer}>
-        <TouchableOpacity style={styles.cta} onPress={onContinue} activeOpacity={0.9}>
+      <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
+        <TouchableOpacity style={[styles.cta, useCompactLayout && styles.ctaCompact]} onPress={onContinue} activeOpacity={0.9}>
             <LinearGradient 
                 colors={[COLORS.brand, COLORS.brandDark]} 
                 style={styles.ctaGrad}
@@ -310,7 +318,7 @@ export default function Phase19PlanTimeline({
                 <ChevronRight color={COLORS.white} size={20} strokeWidth={3} />
             </LinearGradient>
         </TouchableOpacity>
-        <Text style={styles.footerNote}>Start your plan and bring someone with you.</Text>
+        {!useCompactLayout && <Text style={styles.footerNote}>Start your plan and bring someone with you.</Text>}
       </View>
     </View>
   );
@@ -323,6 +331,9 @@ const styles = StyleSheet.create({
   },
   hero: {
     height: height * 0.38,
+  },
+  heroCompact: {
+    height: height * 0.3,
   },
   heroSafe: {
     flex: 1,
@@ -420,6 +431,10 @@ const styles = StyleSheet.create({
     marginTop: 5,
     marginBottom: 35, // pushes it comfortably away from the bottom so it doesn't look bad
   },
+  heroBadgeCompact: {
+    paddingVertical: 7,
+    marginBottom: 18,
+  },
   heroBadgeText: {
     color: COLORS.white,
     fontSize: 10,
@@ -439,11 +454,25 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 8,
   },
+  overlapCardCompact: {
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+  },
+  overlapScrollContent: {
+    paddingBottom: 12,
+    flexGrow: 1,
+  },
   cardHeader: {
     marginBottom: 30,
     borderBottomWidth: 1.5,
     borderBottomColor: COLORS.border,
     paddingBottom: 20,
+  },
+  cardHeaderCompact: {
+    marginBottom: 16,
+    paddingBottom: 12,
   },
   cardHeaderTitle: {
     fontSize: 12,
@@ -455,6 +484,9 @@ const styles = StyleSheet.create({
   },
   splitRow: {
     flexDirection: 'row',
+  },
+  splitRowCompact: {
+    flexShrink: 1,
   },
   column: {
     flex: 1,
@@ -478,6 +510,9 @@ const styles = StyleSheet.create({
   },
   blueprintBulletList: {
     gap: 10,
+  },
+  blueprintBulletListCompact: {
+    gap: 7,
   },
   blueprintBulletRow: {
     flexDirection: 'row',
@@ -511,6 +546,9 @@ const styles = StyleSheet.create({
   perksList: {
     gap: 9,
   },
+  perksListCompact: {
+    gap: 7,
+  },
   perk: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -538,6 +576,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 25,
     paddingBottom: Platform.OS === 'ios' ? 45 : 30,
   },
+  footerCompact: {
+    paddingHorizontal: 25,
+    paddingBottom: Platform.OS === 'ios' ? 12 : 20,
+  },
   cta: {
     height: 70,
     borderRadius: 24,
@@ -546,6 +588,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 15,
     elevation: 10,
+  },
+  ctaCompact: {
+    height: 58,
+    borderRadius: 20,
   },
   ctaGrad: {
     flex: 1,

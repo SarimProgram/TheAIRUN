@@ -19,10 +19,13 @@ import Constants from 'expo-constants';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { PRIVACY_POLICY_URL } from '../../config/legal';
 import { useAuth } from '@/src/auth/authContext';
 
-const { width, height } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const height = Math.min(windowHeight, 800);
 
 const COLORS = {
     brand: '#FF6B6B', 
@@ -279,7 +282,7 @@ export default function Phase0Expanded({
                 </SafeAreaView>
             </View>
 
-            {/* Bottom Section - Now 50% height */}
+            {/* Bottom Section */}
             <Animated.View style={[
                 styles.bottomSection,
                 { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
@@ -292,8 +295,22 @@ export default function Phase0Expanded({
 
                 <View style={styles.authContainer}>
                     <SocialButton title="Google" variant="google" onPress={onGooglePress || handleGoogleAuth} />
-                    <SocialButton title="Apple" variant="apple" onPress={onApplePress || onNext} />
-                    
+
+                    {Platform.OS === 'ios' ? (
+                        <AppleAuthentication.AppleAuthenticationButton
+                            buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                            cornerRadius={29}
+                            style={styles.appleNativeButton}
+                            onPress={() => {
+                                if (disabled || socialLoading) return;
+                                onApplePress?.();
+                            }}
+                        />
+                    ) : (
+                        <SocialButton title="Apple" variant="apple" onPress={onApplePress || onNext} />
+                    )}
+
                     <TouchableOpacity
                         style={styles.manualButton}
                         onPress={onManualPress || onNext}
@@ -335,9 +352,10 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.bg,
     },
     imageSection: {
-        flex: 1, // Dynamically fills top half
-        width: width,
+        flex: 1, // Let image section take remaining space
+        width: '100%',
         position: 'relative',
+        minHeight: height * 0.35,
     },
     heroImage: {
         width: '100%',
@@ -352,7 +370,7 @@ const styles = StyleSheet.create({
     },
     backBtnWrapper: {
         position: 'absolute',
-        top: 0,
+        top: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
         left: 0,
     },
     backBtn: {
@@ -371,14 +389,13 @@ const styles = StyleSheet.create({
         elevation: 4,
     },
     bottomSection: {
-        paddingHorizontal: 40,
-        paddingTop: 40,
-        height: height * 0.5, // Increased from 0.4 to 0.5
+        paddingHorizontal: 30, // Reduced from 40
+        paddingTop: 30, // Reduced from 40
         backgroundColor: COLORS.bg,
-        justifyContent: 'flex-start', // Start from top for more control
+        justifyContent: 'flex-start',
     },
     textGroup: {
-        marginBottom: 45,
+        marginBottom: 30, // Reduced from 45
     },
     title: {
         fontSize: 16,
@@ -388,29 +405,29 @@ const styles = StyleSheet.create({
         letterSpacing: 0.5,
     },
     mainAction: {
-        fontSize: 54, // Slightly larger
+        fontSize: 44, // Reduced from 54
         fontWeight: '900',
         color: COLORS.ink,
-        letterSpacing: -2,
-        lineHeight: 58,
-        marginBottom: 12,
+        letterSpacing: -1.5,
+        lineHeight: 48,
+        marginBottom: 8, // Reduced from 12
     },
     subtitle: {
-        fontSize: 15,
+        fontSize: 14, // Reduced from 15
         color: COLORS.muted,
-        lineHeight: 22,
+        lineHeight: 20,
         fontWeight: '500',
     },
     authContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 15,
-        marginBottom: 40,
+        gap: 12, // Reduced from 15
+        marginBottom: 30, // Reduced from 40
     },
     socialButton: {
-        width: 68,
-        height: 68,
-        borderRadius: 34,
+        width: 58, // Reduced from 68
+        height: 58,
+        borderRadius: 29,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -424,19 +441,23 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: COLORS.border,
     },
+    appleNativeButton: {
+        width: 58,
+        height: 58,
+    },
     iconContent: {
         alignItems: 'center',
         justifyContent: 'center',
     },
     socialIconImage: {
-        width: 26,
-        height: 26,
+        width: 24, // Reduced from 26
+        height: 24,
     },
     manualButton: {
         flex: 1,
-        height: 68,
+        height: 58, // Reduced from 68
         backgroundColor: COLORS.white,
-        borderRadius: 34,
+        borderRadius: 29,
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
@@ -444,7 +465,7 @@ const styles = StyleSheet.create({
     },
     manualText: {
         color: COLORS.ink,
-        fontSize: 17,
+        fontSize: 16, // Reduced from 17
         fontWeight: '700',
     },
     loadingIndicator: {
@@ -454,8 +475,7 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.brand,
     },
     footer: {
-        marginTop: 'auto', // Push to bottom of white section
-        marginBottom: Platform.OS === 'ios' ? 40 : 30,
+        marginBottom: Platform.OS === 'ios' ? 20 : 15, // Reduced from 40/30
         alignItems: 'center',
     },
     authPrompt: {

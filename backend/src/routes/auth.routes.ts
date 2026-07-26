@@ -237,15 +237,25 @@ router.post('/social', async (req, res, next) => {
     const displayName = buildDisplayName(identity.email, name, identity.displayName);
 
     if (!user) {
-      if (!identity.email) {
+      // Apple only returns the email on the first sign-in for a given Apple ID + app pair.
+      // On subsequent sign-ins (or after the user previously granted access and was later
+      // removed from our DB), the token has no email. Fall back to a stable synthetic
+      // email derived from the Apple subject so we can still create the account.
+      const emailForCreate =
+        identity.email ||
+        (provider === 'apple'
+          ? `apple_${identity.subject}@privaterelay.appleid.com`
+          : undefined);
+
+      if (!emailForCreate) {
         return res.status(400).json({
-          message: 'Apple did not return an email for this sign-in. Use the same Apple account you originally used or reset Apple authorization for this app.',
+          message: 'Social sign-in did not return an email. Please try again.',
         });
       }
 
       user = await (prisma as any).user.create({
         data: {
-          email: identity.email,
+          email: emailForCreate,
           displayName,
           passwordHash: null,
           [subjectField]: identity.subject,

@@ -15,7 +15,8 @@ import { Target, Scale, Zap, Activity, ChevronLeft, ArrowRight } from 'lucide-re
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image } from 'expo-image';
 
-const { width } = Dimensions.get('window');
+const { width: windowWidth } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -324,7 +325,7 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 20 : 30,
   },
   mainButton: {
-    height: 60,
+    height: 54,
     borderRadius: 20,
     overflow: 'hidden',
     shadowColor: COLORS.coral,
@@ -346,7 +347,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: COLORS.white,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: -0.5,
   },

@@ -25,7 +25,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useWager } from '../../hooks/useWager';
 
-const { width } = Dimensions.get('window');
+const { width: windowWidth } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -372,7 +373,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: -0.5,
   },

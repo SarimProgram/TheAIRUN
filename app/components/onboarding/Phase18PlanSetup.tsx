@@ -18,7 +18,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getGenderMascotSource } from '../../utils/genderMascot';
 
-const { width, height: screenHeight } = Dimensions.get('window');
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const width = Math.min(windowWidth, 480);
+const screenHeight = Math.min(windowHeight, 800);
 
 const COLORS = {
   brand: '#FF6B6B',
@@ -340,7 +342,7 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 16,
-    height: 60,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

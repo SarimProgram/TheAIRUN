@@ -5,6 +5,7 @@ import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { buildPartnerLivePayloadForUser, pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
+import { requireStringParam } from '../utils/params';
 
 const router = Router();
 import { prisma } from '../db/prisma';
@@ -847,7 +848,7 @@ router.post('/workouts', authMiddleware, async (req: AuthRequest, res: Response)
 router.delete('/workouts/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user!.id;
-        const { id } = req.params;
+        const id = requireStringParam(req.params.id, 'id');
 
         const workout = await prisma.workoutSession.findFirst({
             where: { id, userId }
@@ -1405,7 +1406,7 @@ router.get('/nutrition-history', authMiddleware, async (req: AuthRequest, res: R
 router.get('/:dayKey', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user!.id;
-        const { dayKey } = req.params;
+        const dayKey = requireStringParam(req.params.dayKey, 'dayKey');
 
         const summary = await prisma.dailySummary.findUnique({
             where: { userId_dayKey: { userId, dayKey } }
