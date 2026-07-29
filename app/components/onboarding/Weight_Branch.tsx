@@ -296,39 +296,50 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
         </View>
       </Animated.View>
 
-      {/* iOS Modal Calendar */}
+      {/* iOS Modal Date Picker */}
       {Platform.OS === 'ios' && (
-        <Modal animationType="fade" transparent={true} visible={showCalendar}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+        <Modal animationType="fade" transparent={true} visible={showCalendar} onRequestClose={() => setShowCalendar(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowCalendar(false)}
+          >
+            <TouchableOpacity activeOpacity={1} style={styles.modalContent}>
+              <View style={styles.modalHandle} />
               <Text style={styles.modalTitle}>Choose Target Date</Text>
-              <DateTimePicker
-                value={targetDate || new Date()}
-                mode="date"
-                display="inline"
-                minimumDate={new Date()}
-                onChange={onDateChange}
-                themeVariant="light"
-                style={styles.modalCalendar}
-                accentColor={COLORS.brand}
-                textColor={COLORS.ink}
-              />
+              <Text style={styles.modalSubtitle}>Pick the day you want to hit your goal.</Text>
+
+              <View style={styles.modalPickerWrap}>
+                <DateTimePicker
+                  value={targetDate || new Date()}
+                  mode="date"
+                  display="spinner"
+                  minimumDate={new Date()}
+                  onChange={onDateChange}
+                  themeVariant="light"
+                  style={styles.modalCalendar}
+                  textColor={COLORS.ink}
+                />
+              </View>
+
               <View style={styles.modalActionRow}>
                 <TouchableOpacity
                   style={[styles.modalButton, styles.modalButtonSecondary]}
                   onPress={() => setShowCalendar(false)}
+                  activeOpacity={0.85}
                 >
                   <Text style={[styles.modalButtonText, styles.modalButtonSecondaryText]}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalButton, styles.modalButtonPrimary]}
                   onPress={confirmIosDate}
+                  activeOpacity={0.9}
                 >
                   <Text style={styles.modalButtonText}>Confirm Date</Text>
                 </TouchableOpacity>
               </View>
-            </View>
-          </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
         </Modal>
       )}
 
@@ -640,40 +651,67 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 20,
   },
   modalContent: {
     backgroundColor: 'white',
-    borderRadius: 30,
-    paddingHorizontal: 20,
-    paddingVertical: 24,
+    borderRadius: 28,
+    paddingHorizontal: 22,
+    paddingTop: 14,
+    paddingBottom: 22,
     width: modalContentWidth,
     maxWidth: 520,
     alignItems: 'stretch',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    elevation: 12,
+  },
+  modalHandle: {
+    alignSelf: 'center',
+    width: 44,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E5E7EB',
+    marginBottom: 14,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '900',
     color: COLORS.ink,
-    marginBottom: 16,
     textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    color: COLORS.muted,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 4,
+    fontWeight: '500',
+  },
+  modalPickerWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 8,
   },
   modalCalendar: {
     width: '100%',
-    minHeight: 400,
-    alignSelf: 'stretch',
+    height: 200,
   },
   modalActionRow: {
     flexDirection: 'row',
-    gap: 12,
-    marginTop: 16,
+    gap: 10,
+    marginTop: 6,
   },
   modalButton: {
     flex: 1,
-    paddingVertical: 16,
-    borderRadius: 18,
+    paddingVertical: 14,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -687,7 +725,7 @@ const styles = StyleSheet.create({
   },
   modalButtonText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
   },
   modalButtonSecondaryText: {

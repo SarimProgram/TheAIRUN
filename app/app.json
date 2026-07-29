@@ -10,7 +10,7 @@
     "ios": {
       "bundleIdentifier": "au.com.msarim.theaicoach",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "buildNumber": "8",
+      "buildNumber": "9",
       "supportsTablet": false,
       "infoPlist": {
         "NSHealthShareUsageDescription": "We use your step count to sync and compare progress with your partner.",
