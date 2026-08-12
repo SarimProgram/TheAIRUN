@@ -36,7 +36,7 @@ const OPTIONS = [
     label: 'Morning', 
     sub: 'Early starts & fresh air', 
     icon: Sun, 
-    color: '#FF6B6B',
+    color: COLORS.brand,
     bgColor: '#FFF0F0'
   } as const,
   { 
@@ -44,16 +44,16 @@ const OPTIONS = [
     label: 'Afternoon', 
     sub: 'Mid-day energy & focus', 
     icon: Sunset, 
-    color: '#FFB800',
-    bgColor: '#FFF8E6'
+    color: COLORS.brand,
+    bgColor: '#FFF0F0'
   } as const,
   { 
     id: 'evening', 
     label: 'Evening', 
     sub: 'Wind down with a run', 
     icon: Moon, 
-    color: '#8B5CF6',
-    bgColor: '#F5F3FF'
+    color: COLORS.brand,
+    bgColor: '#FFF0F0'
   } as const,
 ] as const;
 

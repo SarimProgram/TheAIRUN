@@ -2,7 +2,7 @@
   "expo": {
     "name": "Runtogether",
     "slug": "app",
-    "version": "1.0.1",
+    "version": "1.1",
     "orientation": "portrait",
     "icon": "./assets/iosicon.png",
     "scheme": "app",
@@ -10,7 +10,7 @@
     "ios": {
       "bundleIdentifier": "au.com.msarim.theaicoach",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "buildNumber": "9",
+      "buildNumber": "10",
       "supportsTablet": false,
       "infoPlist": {
         "NSHealthShareUsageDescription": "We use your step count to sync and compare progress with your partner.",
@@ -29,7 +29,7 @@
           "remote-notification"
         ]
       },
-      "runtimeVersion": "1.0.1"
+      "runtimeVersion": "1.1"
     },
     "android": {
       "googleServicesFile": "./google-services.json",
@@ -63,7 +63,7 @@
         "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "au.com.msarim.theaicoach",
-      "runtimeVersion": "1.0.1"
+      "runtimeVersion": "1.1"
     },
     "web": {
       "output": "static",

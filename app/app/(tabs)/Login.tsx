@@ -202,6 +202,7 @@ export default function LoginScreen() {
   );
   const [pushPermissionStatus, setPushPermissionStatus] = useState('undetermined');
   const [notificationLoadingKey, setNotificationLoadingKey] = useState<NotificationPreferenceKey | null>(null);
+  const [notificationPermissionLoading, setNotificationPermissionLoading] = useState(false);
 
   const [googleRequest, googleResponse, promptGoogleAuth] = Google.useAuthRequest({
     clientId: googleOAuth.expoClientId,
@@ -358,6 +359,16 @@ export default function LoginScreen() {
     }, [isAuthenticated, loadNotificationPreferences])
   );
 
+  useEffect(() => {
+    if (!notificationsModalVisible || !isAuthenticated) {
+      return;
+    }
+
+    getPushPermissionStatus()
+      .then(setPushPermissionStatus)
+      .catch(() => {});
+  }, [notificationsModalVisible, isAuthenticated]);
+
   const handleLogin = async () => {
     if (!email || !password) {
       Alert.alert('Missing fields', 'Please enter email and password.');
@@ -500,6 +511,24 @@ export default function LoginScreen() {
       await Linking.openURL(PRIVACY_POLICY_URL);
     } catch {
       Alert.alert('Unable to Open', 'Could not open the privacy policy right now.');
+    }
+  };
+
+  const handleRequestNotificationPermission = async () => {
+    if (notificationPermissionLoading) return;
+
+    try {
+      setNotificationPermissionLoading(true);
+      const latestPermissionStatus = await ensureNotificationPermissionAsync();
+      setPushPermissionStatus(latestPermissionStatus);
+
+      if (latestPermissionStatus === 'granted' && hasRemoteNotificationsEnabled(notificationPreferences)) {
+        await syncRemotePushTokenForPreferences(authFetch, notificationPreferences);
+      }
+    } catch (err: any) {
+      Alert.alert('Permission Request Failed', err?.message || 'Could not request notification permission.');
+    } finally {
+      setNotificationPermissionLoading(false);
     }
   };
 
@@ -1542,17 +1571,32 @@ export default function LoginScreen() {
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ paddingBottom: 120 }}
             >
-              {pushPermissionStatus === 'denied' && (
-                <View style={[styles.settingsCard, { marginBottom: 20, backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1 }]}>
-                  <Text style={[styles.disclosureLabelText, { color: '#92400E' }]}>System Permissions Off</Text>
-                  <Text style={[styles.disclosureValueText, { color: '#B45309', marginBottom: 10 }]}>
-                    To receive any alerts, you must enable notifications in your device settings.
+              {pushPermissionStatus !== 'granted' && (
+                <View style={[styles.settingsCard, { marginBottom: 20, backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1, marginHorizontal: 20 }]}>
+                  <Text style={[styles.disclosureLabelText, { color: '#92400E' }]}>
+                    {pushPermissionStatus === 'denied' ? 'System Permissions Off' : 'Notifications Not Enabled'}
                   </Text>
-                  <TouchableOpacity 
-                    onPress={() => Linking.openSettings()}
+                  <Text style={[styles.disclosureValueText, { color: '#B45309', marginBottom: 10 }]}>
+                    {pushPermissionStatus === 'denied'
+                      ? 'Notifications are blocked for Runtogether. Enable them in your device settings.'
+                      : 'Allow notifications so Runtogether can send alerts and reminders. This also adds the Notifications option in your phone settings.'}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={
+                      pushPermissionStatus === 'denied'
+                        ? () => Linking.openSettings()
+                        : handleRequestNotificationPermission
+                    }
+                    disabled={notificationPermissionLoading}
                     style={{ backgroundColor: '#B45309', paddingVertical: 8, borderRadius: 8, alignItems: 'center' }}
                   >
-                    <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 12 }}>Open System Settings</Text>
+                    {notificationPermissionLoading ? (
+                      <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                      <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 12 }}>
+                        {pushPermissionStatus === 'denied' ? 'Open System Settings' : 'Enable Notifications'}
+                      </Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               )}

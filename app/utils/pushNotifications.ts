@@ -2,19 +2,44 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 
-function notificationPermissionGranted(permission: unknown) {
+function getPermissionStatus(permission: unknown): Notifications.PermissionStatus {
   const value = permission as { granted?: boolean; status?: string };
-  return value.granted === true || value.status === 'granted';
+  if (value.granted === true || value.status === 'granted') {
+    return Notifications.PermissionStatus.GRANTED;
+  }
+  if (value.status === 'denied') {
+    return Notifications.PermissionStatus.DENIED;
+  }
+  return Notifications.PermissionStatus.UNDETERMINED;
 }
 
 export async function getPushPermissionStatus(): Promise<Notifications.PermissionStatus> {
   const permission = await Notifications.getPermissionsAsync();
-  return notificationPermissionGranted(permission) ? Notifications.PermissionStatus.GRANTED : Notifications.PermissionStatus.DENIED;
+  return getPermissionStatus(permission);
+}
+
+async function configureAndroidNotificationChannelsAsync() {
+  if (Platform.OS !== 'android') {
+    return;
+  }
+
+  await Notifications.setNotificationChannelAsync('messages', {
+    name: 'Messages',
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#FF6B6B',
+  });
+
+  await Notifications.setNotificationChannelAsync('reminders', {
+    name: 'Reminders',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    lightColor: '#FF6B6B',
+  });
 }
 
 export async function ensureNotificationPermissionAsync(): Promise<Notifications.PermissionStatus> {
   const permission = await Notifications.getPermissionsAsync();
-  let finalStatus = notificationPermissionGranted(permission) ? Notifications.PermissionStatus.GRANTED : Notifications.PermissionStatus.DENIED;
+  let finalStatus = getPermissionStatus(permission);
 
   if (finalStatus !== Notifications.PermissionStatus.GRANTED) {
     const request = await Notifications.requestPermissionsAsync({
@@ -24,7 +49,11 @@ export async function ensureNotificationPermissionAsync(): Promise<Notifications
         allowSound: true,
       },
     });
-    finalStatus = notificationPermissionGranted(request) ? Notifications.PermissionStatus.GRANTED : Notifications.PermissionStatus.DENIED;
+    finalStatus = getPermissionStatus(request);
+  }
+
+  if (finalStatus === Notifications.PermissionStatus.GRANTED) {
+    await configureAndroidNotificationChannelsAsync();
   }
 
   return finalStatus;
@@ -44,14 +73,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     return null;
   }
 
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('messages', {
-      name: 'Messages',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FF6B6B',
-    });
-  }
+  await configureAndroidNotificationChannelsAsync();
 
   const token = await Notifications.getExpoPushTokenAsync({ projectId });
   return token.data;

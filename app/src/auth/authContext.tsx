@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveTokens, clearTokens as clearStorageTokens, getAccessToken, getRefreshToken } from '@/utils/authstorage';
 import { API_BASE_URL, getDefaultHeaders } from '@/config/api';
 import { setAnalyticsUserId, setAnalyticsUserProperties, trackEvent } from '@/src/analytics/analytics';
+import { clearOnboardingCheckpoint } from '@/src/onboarding/checkpoint';
 
 interface AuthContextType {
     user: any;
@@ -291,6 +292,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         } catch {}
 
         await clearSession();
+        await clearOnboardingCheckpoint();
         await trackEvent('logout');
     };
 
@@ -314,6 +316,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         await clearSession();
+        await clearOnboardingCheckpoint();
         await trackEvent('account_deleted');
     };
 

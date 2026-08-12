@@ -1,7 +1,7 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Platform } from 'react-native';
@@ -14,12 +14,18 @@ import { ChatProvider } from '@/contexts/ChatContext';
 import { GlobalChatNotification } from '@/components/chat/GlobalChatNotification';
 import PushNotificationRegistrar from '@/components/chat/PushNotificationRegistrar';
 import LocalNotificationScheduler from '@/components/notifications/LocalNotificationScheduler';
+import NotificationPermissionBootstrap from '@/components/notifications/NotificationPermissionBootstrap';
 import PartnerSurfaceRegistrar from '@/components/partner/PartnerSurfaceRegistrar';
 import { EntitlementProvider, useEntitlement } from '@/src/billing';
 import { RaceSocketProvider } from '@/contexts/RaceSocketContext';
 import GlobalRaceInviteOverlay from '@/components/race/GlobalRaceInviteOverlay';
 import { hasStepPermissionConsent } from '@/config/healthPermissions';
 import { trackScreen } from '@/src/analytics/analytics';
+import {
+  loadOnboardingCheckpoint,
+  subscribeToOnboardingCheckpoint,
+  type OnboardingCheckpoint,
+} from '@/src/onboarding/checkpoint';
 
 import { registerBackgroundStepSync } from '../tasks/backgroundStepSync';
 
@@ -44,18 +50,55 @@ function PaywallRouteGuard() {
   const { isAuthenticated, loading: authLoading } = useAuth();
   const { access, hasAccess, loading: entitlementLoading, refreshAccess } = useEntitlement();
   const paywallCheckAttemptedRef = useRef(false);
+  const checkpointNotificationReceivedRef = useRef(false);
+  const [onboardingCheckpoint, setOnboardingCheckpoint] = useState<OnboardingCheckpoint | null>(null);
+  const [onboardingCheckpointLoading, setOnboardingCheckpointLoading] = useState(true);
 
   useEffect(() => {
-    if (authLoading || entitlementLoading) return;
+    let cancelled = false;
+    const unsubscribe = subscribeToOnboardingCheckpoint((checkpoint) => {
+      if (!cancelled) {
+        checkpointNotificationReceivedRef.current = true;
+        setOnboardingCheckpoint(checkpoint);
+      }
+    });
+
+    loadOnboardingCheckpoint()
+      .then((checkpoint) => {
+        if (!cancelled && !checkpointNotificationReceivedRef.current) {
+          setOnboardingCheckpoint(checkpoint);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOnboardingCheckpointLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authLoading || entitlementLoading || onboardingCheckpointLoading) return;
     if (!isAuthenticated) {
       paywallCheckAttemptedRef.current = false;
+      return;
+    }
+
+    const onboardingIncomplete = onboardingCheckpoint?.completed === false;
+    const isOnboardingRoute = pathname.startsWith('/Onboarding');
+
+    if (onboardingIncomplete) {
+      paywallCheckAttemptedRef.current = false;
+      if (!isOnboardingRoute) router.replace('/Onboarding');
       return;
     }
 
     const allowed =
       pathname === '/paywall' ||
       pathname.startsWith('/Login') ||
-      pathname.startsWith('/Onboarding') ||
+      isOnboardingRoute ||
       pathname.startsWith('/(auth)');
 
     if (allowed) {
@@ -79,7 +122,18 @@ function PaywallRouteGuard() {
     if (!hasAccess || backendRequiresPaywall) {
       router.replace('/paywall');
     }
-  }, [access?.paywallReason, authLoading, entitlementLoading, hasAccess, isAuthenticated, pathname, refreshAccess, router]);
+  }, [
+    access?.paywallReason,
+    authLoading,
+    entitlementLoading,
+    hasAccess,
+    isAuthenticated,
+    onboardingCheckpoint?.completed,
+    onboardingCheckpointLoading,
+    pathname,
+    refreshAccess,
+    router,
+  ]);
 
   return null;
 }
@@ -199,6 +253,7 @@ export default function RootLayout() {
                     <Stack.Screen name="kcal-detail" options={{ presentation: 'modal', headerShown: false }} />
                   </Stack>
                   <PushNotificationRegistrar />
+                  <NotificationPermissionBootstrap />
                   <PartnerSurfaceRegistrar />
                   <LocalNotificationScheduler />
                   <GlobalChatNotification />

@@ -133,11 +133,11 @@ export default function JourneyTypeSelection({ onContinue, onBack }: Props) {
               <View style={styles.headerTextSide}>
                 <View style={styles.badge}>
                   <Users color={COLORS.coral} size={14} strokeWidth={2.5} />
-                  <Text style={styles.badgeText}>PARTNERSHIP</Text>
+                  <Text style={styles.badgeText}>YOUR TEAM</Text>
                 </View>
                 <Text style={styles.title}>
-                  Starting{'\n'}
-                  <Text style={{ color: COLORS.coral }}>Point?</Text>
+                  Go further,{'\n'}
+                  <Text style={{ color: COLORS.coral }}>together.</Text>
                 </Text>
               </View>
 
@@ -152,10 +152,10 @@ export default function JourneyTypeSelection({ onContinue, onBack }: Props) {
             </View>
             <Text style={styles.subtitle}>
               {hasPartner
-                ? 'Your partner is already connected. Continue to personalize your plan.'
+                ? 'You’re connected! Now you can build a plan that keeps you both moving.'
                 : hasInviteSent
-                  ? 'Invite already sent. You can continue now and sync once your partner accepts.'
-                : "Invite your partner by email so you can sync goals and run together."}
+                  ? 'Your invite is on its way. Keep going while your partner joins.'
+                : 'Invite your partner to share goals, stay motivated, and make every run count.'}
             </Text>
 
             {loadingState ? (
@@ -174,7 +174,7 @@ export default function JourneyTypeSelection({ onContinue, onBack }: Props) {
               </View>
             ) : (
               <View style={styles.inviteCard}>
-                <Text style={styles.inputLabel}>Partner Email</Text>
+                <Text style={styles.inputLabel}>YOUR PARTNER’S EMAIL</Text>
                 <View style={styles.inviteRow}>
                   <TextInput
                     style={styles.input}
@@ -192,7 +192,7 @@ export default function JourneyTypeSelection({ onContinue, onBack }: Props) {
                 </View>
                 {sentInvites.length > 0 && (
                   <View style={styles.sentWrap}>
-                    <Text style={styles.sentTitle}>Already invited</Text>
+                    <Text style={styles.sentTitle}>INVITES SENT</Text>
                     {sentInvites.slice(0, 3).map((invite) => (
                       <View key={invite.id} style={styles.sentRow}>
                         <Text style={styles.sentEmail}>{invite.toEmail}</Text>
@@ -219,7 +219,7 @@ export default function JourneyTypeSelection({ onContinue, onBack }: Props) {
               end={{ x: 1, y: 0 }}
               style={styles.gradientButton}
             >
-              <Text style={styles.buttonText}>{hasPartner || hasInviteSent ? 'Move Next' : 'Invite Later'}</Text>
+              <Text style={styles.buttonText}>{hasPartner || hasInviteSent ? 'Keep going' : 'Invite later'}</Text>
               <ArrowRight color="white" size={20} strokeWidth={3} />
             </LinearGradient>
           </TouchableOpacity>

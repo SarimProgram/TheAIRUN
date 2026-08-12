@@ -11,7 +11,7 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import { ArrowRight, Zap, Coins, Gift, Sparkles } from 'lucide-react-native';
+import { ArrowRight, Zap, Coins, Gift } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
 
@@ -32,24 +32,24 @@ const COLORS = {
 const STAGES = [
   {
     id: '1',
-    title: 'Earn Points',
-    desc: 'Work out & stay in calorie deficit to build balance.',
+    title: 'Complete your runs',
+    desc: 'Finish workouts and stay on track to earn points.',
     icon: Zap,
     image: require('../../assets/Comp1.png'),
     align: 'left',
   },
   {
     id: '2',
-    title: 'Collect Effort',
-    desc: 'Your sweat becomes currency in the couple bank.',
+    title: 'Build your balance',
+    desc: 'Your points add up in a shared reward balance.',
     icon: Coins,
     image: require('../../assets/comp2.png'),
     align: 'right',
   },
   {
     id: '3',
-    title: 'Redeem Prizes',
-    desc: 'Partner sets rewards you actually want.',
+    title: 'Choose your reward',
+    desc: 'Use your balance on treats you’ll both enjoy.',
     icon: Gift,
     image: require('../../assets/comp3.png'),
     align: 'left',
@@ -93,8 +93,8 @@ export default function MarketplaceHowItWorks({ onContinue }: any) {
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.mainTitle}>
-              How Marketplace{"\n"}
-              <Text style={{ color: COLORS.coral }}>Actually Works</Text>
+              How rewards{"\n"}
+              <Text style={{ color: COLORS.coral }}>work for you.</Text>
             </Text>
           </View>
 
@@ -121,7 +121,6 @@ export default function MarketplaceHowItWorks({ onContinue }: any) {
 
             {STAGES.map((stage, index) => {
               const isLeft = stage.align === 'left';
-
               return (
                 <View
                   key={stage.id}
@@ -130,7 +129,7 @@ export default function MarketplaceHowItWorks({ onContinue }: any) {
                     { flexDirection: isLeft ? 'row' : 'row-reverse' }
                   ]}
                 >
-                  {/* Number Circle */}
+                  {/* Step Icon */}
                   <View style={styles.iconWrapper}>
                     <View style={styles.iconCircle}>
                       <Text style={styles.mainStepNumber}>{stage.id}</Text>
@@ -181,7 +180,7 @@ export default function MarketplaceHowItWorks({ onContinue }: any) {
                 style={styles.gradientButton}
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               >
-                <Text style={styles.buttonText}>Start Earning Rewards</Text>
+                <Text style={styles.buttonText}>Start earning</Text>
                 <ArrowRight color="white" size={20} strokeWidth={3} />
               </LinearGradient>
             </TouchableOpacity>

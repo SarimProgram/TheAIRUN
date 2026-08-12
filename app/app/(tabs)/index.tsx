@@ -56,11 +56,6 @@ import { usePoints } from '../../hooks/usePoints';
 import { usePartnerSummary } from '../../hooks/usePartnerSummary';
 import { useDailySummary, getDashboardData } from '../../hooks/useDailySummary';
 import { useAuth } from '@/src/auth/authContext';
-import { hasRemoteNotificationsEnabled } from '@/utils/notificationPreferences';
-import {
-  loadNotificationSettings,
-  syncRemotePushTokenForPreferences,
-} from '@/utils/notificationRegistration';
 import { API_BASE_URL } from '../../config/api';
 import { applyPartnerSurfacePayload, buildPartnerLivePayload } from '../../lib/partner-surface';
 import { useStepSync } from '../../hooks/UseStepSync';
@@ -313,7 +308,6 @@ export default function App() {
   const lastChatJumpRef = useRef<string | null>(null);
   const lastMainScrollYRef = useRef(0);
   const heroLayoutRef = useRef({ y: 0, height: 0 });
-  const notificationBootstrapAttemptedRef = useRef(false);
   const [isRunning, setIsRunning] = useState(false);
   const [nudgeSent, setNudgeSent] = useState(false);
   const [partner, setPartner] = useState<any>(null);
@@ -370,12 +364,6 @@ export default function App() {
     isConnected: isPartnerLiveConnected,
   } = useRealtimePartner({ accessToken });
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      notificationBootstrapAttemptedRef.current = false;
-    }
-  }, [isAuthenticated]);
-
   const fetchPartner = useCallback(() => {
     if (!isAuthenticated) return;
     authFetch(`${API_BASE_URL}/partner`)
@@ -423,27 +411,6 @@ export default function App() {
         refetchPartnerSummary();
         fetchPartner();
         fetchPendingInvites();
-
-        const shouldPromptForPermission = !notificationBootstrapAttemptedRef.current;
-        notificationBootstrapAttemptedRef.current = true;
-
-        loadNotificationSettings(authFetch, true)
-          .then(async ({ permissionStatus, preferences }) => {
-            if (!active || !hasRemoteNotificationsEnabled(preferences)) {
-              return;
-            }
-
-            if (permissionStatus !== 'undetermined' || !shouldPromptForPermission) {
-              return;
-            }
-
-            await syncRemotePushTokenForPreferences(authFetch, preferences, {
-              promptForPermission: true,
-            });
-          })
-          .catch((err) => {
-            console.log('[Home] notification bootstrap failed', err);
-          });
       }
 
       return () => {

@@ -121,16 +121,16 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
             styles.topSection,
             { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
           ]}>
-            <Text style={styles.title}>When were you{"\n"}<Text style={{ color: COLORS.coral }}>Born?</Text></Text>
-            <Text style={styles.subtitle}>Helping us calculate your heart rate zones and training intensity.</Text>
+            <Text style={styles.title}>What year were you{"\n"}<Text style={{ color: COLORS.coral }}>born?</Text></Text>
+            <Text style={styles.subtitle}>This helps us make your plan feel right for you.</Text>
           </Animated.View>
 
           <Animated.View style={[styles.pickerSection, { opacity: fadeAnim }]}>
             <View style={styles.ageBadge}>
-              <Text style={styles.ageBadgeLabel}>ESTIMATED AGE</Text>
+              <Text style={styles.ageBadgeLabel}>YOUR AGE</Text>
               <Text style={styles.ageBadgeValue}>
                 {selectedAge}
-                <Text style={styles.ageBadgeUnit}>  yrs</Text>
+                <Text style={styles.ageBadgeUnit}> years</Text>
               </Text>
             </View>
 
@@ -170,7 +170,7 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
               end={{ x: 1, y: 0 }}
               style={styles.gradientButton}
             >
-              <Text style={styles.buttonText}>Continue</Text>
+              <Text style={styles.buttonText}>Next</Text>
               <ArrowRight color="white" size={20} strokeWidth={3} />
             </LinearGradient>
           </TouchableOpacity>
@@ -195,16 +195,16 @@ const styles = StyleSheet.create({
   backBtn: {
     width: 44,
     height: 44,
-    justifyContent: 'center',
+    justifyContent: 'space-between',
   },
   main: {
     flex: 1,
     paddingHorizontal: 32,
     paddingTop: 8,
-    justifyContent: 'space-between',
+    justifyContent: 'center',
   },
   topSection: {
-    marginBottom: 0,
+    marginBottom: 36,
   },
   title: {
     fontSize: titleSize,

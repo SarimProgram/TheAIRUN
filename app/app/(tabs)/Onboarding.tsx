@@ -10,6 +10,7 @@ import {
     Dimensions,
     Platform,
     Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -23,6 +24,11 @@ import { useAuth } from '@/src/auth/authContext';
 import { useEntitlement } from '@/src/billing';
 import { upsertTrainingProfile } from '@/db/offlineDb';
 import { setAnalyticsUserProperties, trackEvent } from '@/src/analytics/analytics';
+import {
+    loadOnboardingCheckpoint,
+    markOnboardingComplete,
+    saveOnboardingProgress,
+} from '@/src/onboarding/checkpoint';
 
 // Import phase components
 import Phase0Welcome from '../../components/onboarding/Phase0Welcome';
@@ -135,7 +141,11 @@ export default function OnboardingGreeting() {
     const [generatedWeeklyPlan, setGeneratedWeeklyPlan] = useState<any[]>([]);
     const [savingOnboardingCheckpoint, setSavingOnboardingCheckpoint] = useState(false);
     const [joinedWithCode, setJoinedWithCode] = useState(false);
+    const [checkpointHydrated, setCheckpointHydrated] = useState(false);
     const deviceTimezone = useRef(getDeviceTimezone()).current;
+    const wasAuthenticatedWhenMountedRef = useRef(isAuthenticated);
+    const shouldPersistCheckpointRef = useRef(false);
+    const onboardingCompletedRef = useRef(false);
 
     // Splash Animation Values
     const splashFade = useRef(new Animated.Value(1)).current;
@@ -171,6 +181,92 @@ export default function OnboardingGreeting() {
         }
     }, [currentPhase]);
 
+    useEffect(() => {
+        let cancelled = false;
+
+        loadOnboardingCheckpoint()
+            .then((checkpoint) => {
+                if (cancelled || !checkpoint) return;
+
+                onboardingCompletedRef.current = checkpoint.completed;
+                if (checkpoint.completed) return;
+
+                shouldPersistCheckpointRef.current = true;
+                setUserName(checkpoint.userName ?? '');
+                setUserGender(checkpoint.userGender ?? '');
+                setAvailableDays(Array.isArray(checkpoint.availableDays) ? checkpoint.availableDays : [0, 2, 4]);
+                setUserGoal(checkpoint.userGoal ?? null);
+                setUserAge(checkpoint.userAge ?? '');
+                setUserWeight(checkpoint.userWeight ?? '');
+                setUserWeightUnit(checkpoint.userWeightUnit ?? 'kg');
+                setUserHeight(checkpoint.userHeight ?? '');
+                setUserHeightUnit(checkpoint.userHeightUnit ?? 'cm');
+                setUserTargetWeight(checkpoint.userTargetWeight ?? '');
+                setPlanData(checkpoint.planData && typeof checkpoint.planData === 'object'
+                    ? checkpoint.planData
+                    : { intensityLevel: 'ACTIVE', activityPreference: 'WALKING_RUNNING' });
+                setGeneratedWeeklyPlan(Array.isArray(checkpoint.generatedWeeklyPlan)
+                    ? checkpoint.generatedWeeklyPlan
+                    : []);
+                setJoinedWithCode(!!checkpoint.joinedWithCode);
+                setCurrentPhase(wasAuthenticatedWhenMountedRef.current && checkpoint.currentPhase > 1
+                    ? Math.min(checkpoint.currentPhase, DEV_LAST_PHASE)
+                    : Math.min(checkpoint.currentPhase, 1));
+            })
+            .finally(() => {
+                if (!cancelled) setCheckpointHydrated(true);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (
+            !checkpointHydrated ||
+            !isAuthenticated ||
+            !shouldPersistCheckpointRef.current ||
+            onboardingCompletedRef.current
+        ) {
+            return;
+        }
+
+        saveOnboardingProgress({
+            currentPhase,
+            userName,
+            userGender,
+            availableDays,
+            userGoal,
+            userAge,
+            userWeight,
+            userWeightUnit,
+            userHeight,
+            userHeightUnit,
+            userTargetWeight,
+            planData,
+            generatedWeeklyPlan,
+            joinedWithCode,
+        }).catch(() => {});
+    }, [
+        availableDays,
+        checkpointHydrated,
+        currentPhase,
+        generatedWeeklyPlan,
+        isAuthenticated,
+        joinedWithCode,
+        planData,
+        userAge,
+        userGender,
+        userGoal,
+        userHeight,
+        userHeightUnit,
+        userName,
+        userTargetWeight,
+        userWeight,
+        userWeightUnit,
+    ]);
+
     const hasExistingPlan = useCallback(async () => {
         try {
             const res = await authFetch(`${API_BASE_URL}/plan`);
@@ -204,14 +300,26 @@ export default function OnboardingGreeting() {
     }, [authFetch]);
 
     const continueAfterAuth = useCallback(async (_prefilledName?: string) => {
+        const checkpoint = await loadOnboardingCheckpoint();
+        if (checkpoint && !checkpoint.completed) {
+            shouldPersistCheckpointRef.current = true;
+            setCurrentPhase(checkpoint.currentPhase > 1
+                ? Math.min(checkpoint.currentPhase, DEV_LAST_PHASE)
+                : 2);
+            return;
+        }
+
         const shouldSkipOnboarding = await hasExistingPlan();
 
         if (shouldSkipOnboarding) {
+            onboardingCompletedRef.current = true;
+            await markOnboardingComplete();
             await trackEvent('onboarding_skipped_existing_plan');
             router.replace('/welcome');
             return;
         }
 
+        shouldPersistCheckpointRef.current = true;
         setCurrentPhase(2);
     }, [hasExistingPlan, router]);
 
@@ -276,6 +384,7 @@ export default function OnboardingGreeting() {
     };
 
     const goToNextPhase = () => {
+        if (isAuthenticated) shouldPersistCheckpointRef.current = true;
         if (currentPhase < TOTAL_PHASES - 1) {
             setCurrentPhase(prev => prev + 1);
         } else {
@@ -414,9 +523,13 @@ export default function OnboardingGreeting() {
                 joined_with_code: joinedWithCode,
             });
 
+            onboardingCompletedRef.current = true;
+            await markOnboardingComplete();
             (navigation as any).navigate('index');
         } catch (error) {
             console.error('Error submitting onboarding:', error);
+            onboardingCompletedRef.current = true;
+            await markOnboardingComplete();
             (navigation as any).navigate('index');
         }
     };
@@ -635,7 +748,10 @@ export default function OnboardingGreeting() {
             case 22: return <Phase0ManualAuth
                 onBack={() => setCurrentPhase(1)}
                 onRegister={register}
-                onSuccess={() => setCurrentPhase(2)}
+                onSuccess={() => {
+                    shouldPersistCheckpointRef.current = true;
+                    setCurrentPhase(2);
+                }}
             />;
             case 24: return <Phase0ManualLogin
                 onBack={() => setCurrentPhase(1)}
@@ -801,7 +917,9 @@ export default function OnboardingGreeting() {
                 weightUnit={userWeightUnit}
                 mainGoal={userGoal}
                 onBack={() => setCurrentPhase(11)}
-                onContinue={() => {
+                onContinue={async () => {
+                    onboardingCompletedRef.current = true;
+                    await markOnboardingComplete();
                     if (hasAccess) {
                         router.replace('/welcome');
                         return;
@@ -914,10 +1032,14 @@ export default function OnboardingGreeting() {
             <StatusBar barStyle={isSplashVisible ? "light-content" : "dark-content"} />
 
             <View style={styles.safeArea}>
-                {renderPhaseContent()}
+                {checkpointHydrated ? renderPhaseContent() : (
+                    <View style={styles.checkpointLoading}>
+                        <ActivityIndicator size="large" color={COLORS.coral} />
+                    </View>
+                )}
             </View>
 
-            {renderDevPhaseControls()}
+            {checkpointHydrated && renderDevPhaseControls()}
 
             {isSplashVisible && renderSplash()}
         </View>
@@ -936,6 +1058,11 @@ const styles = StyleSheet.create({
         height: height,
         alignSelf: 'center',
         overflow: 'hidden',
+    },
+    checkpointLoading: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
 
     // --- Splash ---

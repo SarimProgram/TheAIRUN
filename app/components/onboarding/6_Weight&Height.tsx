@@ -167,7 +167,7 @@ export default function WeightHeightSelection({ onContinue, onBack }: Props) {
 
   const renderResultDisplay = (extraStyle?: StyleProp<ViewStyle>) => (
     <View style={[styles.resultDisplay, useCompactLayout && styles.resultDisplayCompact, extraStyle]}>
-      <Text style={styles.resultLabel}>{step === 0 ? 'Current Weight' : 'Current Height'}</Text>
+      <Text style={styles.resultLabel}>{step === 0 ? 'YOUR WEIGHT' : 'YOUR HEIGHT'}</Text>
       <View style={styles.resultRow}>
         <Text style={styles.resultValue}>
           {step === 0 ? weightValues[selectedWeightIndex] : heightValues[selectedHeightIndex]}
@@ -197,16 +197,16 @@ export default function WeightHeightSelection({ onContinue, onBack }: Props) {
               <View style={styles.headerTextSide}>
                
                 <Text style={styles.title}>
-                  {step === 0 ? "What's your\n" : "One last\n"}
-                  <Text style={{ color: COLORS.coral }}>{step === 0 ? 'Weight?' : 'Height?'}</Text>
+                  {step === 0 ? "What’s your\n" : "How tall are\n"}
+                  <Text style={{ color: COLORS.coral }}>{step === 0 ? 'weight?' : 'you?'}</Text>
                 </Text>
               </View>
             </View>
 
             <Text style={styles.subtitle}>
               {step === 0
-                ? "This helps us calculate your calorie burn and metabolic rate."
-                : "Standard measurements help refine your stride analysis."}
+                ? "This helps us make your plan fit you better."
+                : "This helps us make your plan feel more personal."}
             </Text>
           </Animated.View>
 
@@ -281,7 +281,7 @@ export default function WeightHeightSelection({ onContinue, onBack }: Props) {
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               style={styles.gradientButton}
             >
-              <Text style={styles.buttonText}>{step === 0 ? 'Continue' : 'Continue'}</Text>
+              <Text style={styles.buttonText}>{step === 0 ? 'Next' : 'Finish'}</Text>
               <ArrowRight color="white" size={20} strokeWidth={3} />
             </LinearGradient>
           </TouchableOpacity>

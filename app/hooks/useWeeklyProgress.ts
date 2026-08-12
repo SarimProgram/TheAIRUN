@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../config/api';
 import { loadRuns } from '../lib/run-storage';
+import { parseApiError } from '../utils/premiumErrors';
 
 export interface WeeklyProgress {
     weekStart: string;
@@ -74,7 +75,10 @@ export function useWeeklyProgress({ accessToken }: UseWeeklyProgressOptions): Us
             ]);
 
             if (!userResponse.ok) {
-                throw new Error('Failed to fetch weekly progress');
+                throw await parseApiError(
+                    userResponse,
+                    'Failed to fetch weekly progress'
+                );
             }
 
             const userData = await userResponse.json();
@@ -125,6 +129,12 @@ export function useWeeklyProgress({ accessToken }: UseWeeklyProgressOptions): Us
                 const partnerData = await partnerResponse.json();
                 setHasPartner(partnerData.hasPartner);
                 setPartnerProgress(partnerData.partner || null);
+            } else {
+                const partnerError = await parseApiError(
+                    partnerResponse,
+                    'Failed to fetch partner weekly progress'
+                );
+                console.warn('Error fetching partner weekly progress:', partnerError);
             }
         } catch (err) {
             console.error('Error fetching weekly progress:', err);

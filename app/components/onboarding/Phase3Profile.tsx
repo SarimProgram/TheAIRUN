@@ -59,9 +59,9 @@ export default function Phase3Neo({ userName, onBack, onHaveCode, onFirstTime }:
                 ]}
             >
                 <View style={styles.textGroup}>
-                    <Text style={styles.welcomeText}>Hey {userName || 'Runner'},</Text>
-                    <Text style={styles.mainTitle}>Ready to start?</Text>
-                    <Text style={styles.subTitle}>Select how you'd like to join the community.</Text>
+                    <Text style={styles.welcomeText}>Hi {userName || 'Runner'}!</Text>
+                    <Text style={styles.mainTitle}>Let’s run together</Text>
+                    <Text style={styles.subTitle}>Choose how you’d like to get started.</Text>
                 </View>
 
                 <View style={styles.buttonStack}>
@@ -75,8 +75,8 @@ export default function Phase3Neo({ userName, onBack, onHaveCode, onFirstTime }:
                             <Users color={COLORS.brand} size={24} />
                         </View>
                         <View style={styles.btnTextWrap}>
-                            <Text style={styles.primaryBtnTitle}>I have a code</Text>
-                            <Text style={styles.primaryBtnSub}>Join your partner's plan</Text>
+                            <Text style={styles.primaryBtnTitle}>I have an invite code</Text>
+                            <Text style={styles.primaryBtnSub}>Join someone already on RunTogether</Text>
                         </View>
                         <ArrowRight color={COLORS.brand} size={20} />
                     </TouchableOpacity>
@@ -91,8 +91,8 @@ export default function Phase3Neo({ userName, onBack, onHaveCode, onFirstTime }:
                             <Plus color={COLORS.ink} size={24} />
                         </View>
                         <View style={styles.btnTextWrap}>
-                            <Text style={styles.secondaryBtnTitle}>First time here</Text>
-                            <Text style={styles.secondaryBtnSub}>Create a new couple plan</Text>
+                            <Text style={styles.secondaryBtnTitle}>I’m new here</Text>
+                            <Text style={styles.secondaryBtnSub}>Start a new plan together</Text>
                         </View>
                         <ArrowRight color={COLORS.muted} size={20} />
                     </TouchableOpacity>
@@ -134,6 +134,8 @@ const styles = StyleSheet.create({
         borderTopRightRadius: 40,
         paddingHorizontal: 24,
         paddingTop: 30,
+        justifyContent: 'center',
+        paddingBottom: height * 0.16,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: -10 },
         shadowOpacity: 0.05,
@@ -142,6 +144,7 @@ const styles = StyleSheet.create({
     },
     textGroup: {
         marginBottom: 30,
+        alignItems: 'center',
     },
     welcomeText: {
         fontSize: 16,
@@ -160,6 +163,7 @@ const styles = StyleSheet.create({
         color: COLORS.muted,
         marginTop: 6,
         lineHeight: 22,
+        textAlign: 'center',
     },
     buttonStack: {
         gap: 12,

@@ -40,11 +40,11 @@ const COLORS = {
 };
 
 const OPTIONS = [
-  { id: 'coffee', label: 'Coffee or dessert', icon: Coffee },
+  { id: 'coffee', label: 'Coffee or a treat', icon: Coffee },
   { id: 'movie', label: 'Movie night', icon: Film },
-  { id: 'shop', label: 'Shopping reward', icon: ShoppingBag },
-  { id: 'exp', label: 'Experience', icon: Map },
-  { id: 'save', label: 'Bigger reward', icon: Trophy },
+  { id: 'shop', label: 'Shopping treat', icon: ShoppingBag },
+  { id: 'exp', label: 'Fun day out', icon: Map },
+  { id: 'save', label: 'Something big', icon: Trophy },
   { id: 'surprise', label: 'Surprise me', icon: Gift },
 ];
 
@@ -93,14 +93,14 @@ export default function MarketplaceMotivation({ onContinue }: any) {
           <View style={[styles.header, useCompactLayout && styles.headerCompact]}>
             <View style={[styles.miniTag, useCompactLayout && styles.miniTagCompact]}>
               <Sparkles size={12} color={COLORS.coral} fill={COLORS.coral} />
-              <Text style={[styles.miniTagText, useCompactLayout && styles.miniTagTextCompact]}>CHOICE {selected.length}/3</Text>
+              <Text style={[styles.miniTagText, useCompactLayout && styles.miniTagTextCompact]}>PICK UP TO 3 · {selected.length}/3</Text>
             </View>
             <Text style={[styles.title, useCompactLayout && styles.titleCompact]}>
-              Choose Your{"\n"}
-              <Text style={{ color: COLORS.coral }}>Favorite Rewards</Text>
+              What will keep{"\n"}
+              <Text style={{ color: COLORS.coral }}>you going?</Text>
             </Text>
             <Text style={[styles.subtitle, useCompactLayout && styles.subtitleCompact]}>
-              What would motivate you most to earn with your workout points?
+              Pick up to three rewards you’d love to work toward.
             </Text>
           </View>
 
@@ -150,7 +150,7 @@ export default function MarketplaceMotivation({ onContinue }: any) {
                 style={styles.gradientButton}
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               >
-                <Text style={[styles.buttonText, useCompactLayout && styles.buttonTextCompact]}>Confirm Selections</Text>
+                <Text style={[styles.buttonText, useCompactLayout && styles.buttonTextCompact]}>Save my rewards</Text>
                 <ArrowRight color="white" size={useCompactLayout ? 18 : 20} strokeWidth={3} />
               </LinearGradient>
             </TouchableOpacity>

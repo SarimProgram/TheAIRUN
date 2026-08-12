@@ -116,7 +116,7 @@ export default function Phase2Goals({ onNext, onBack, prefilledName }: any) {
                                 style={styles.logoImage}
                                 resizeMode="contain"
                             />
-                            <Text style={styles.heroLabel}>SETTING UP: YOUR PROFILE</Text>
+                            <Text style={styles.heroLabel}>LET’S MAKE IT YOURS</Text>
                         </View>
                     </View>
                 </SafeAreaView>
@@ -140,18 +140,17 @@ export default function Phase2Goals({ onNext, onBack, prefilledName }: any) {
                     contentContainerStyle={styles.scrollContent}
                 >
                     <View style={styles.textGroup}>
-                        <Text style={styles.welcomeText}>The Basics,</Text>
-                        <Text style={styles.mainTitle}>About You</Text>
-                        <Text style={styles.subTitle}>Personalize your profile to get the best experience.</Text>
+                        <Text style={styles.welcomeText}>Let’s get started!</Text>
+                        <Text style={styles.mainTitle}>Tell us about you</Text>
                     </View>
 
                     <View style={styles.formArea}>
                         {!hasPrefilledName && (
                             <View style={styles.inputGroup}>
-                                <Text style={styles.fieldLabel}>FULL NAME</Text>
+                                <Text style={styles.fieldLabel}>YOUR NAME</Text>
                                 <TextInput
                                     style={styles.mainInput}
-                                    placeholder="Type here..."
+                                    placeholder="Enter your name"
                                     placeholderTextColor={COLORS.muted}
                                     value={name}
                                     onChangeText={setName}
@@ -162,7 +161,7 @@ export default function Phase2Goals({ onNext, onBack, prefilledName }: any) {
                         )}
 
                         <View style={styles.inputGroup}>
-                            <Text style={styles.fieldLabel}>GENDER</Text>
+                            <Text style={styles.fieldLabel}>CHOOSE ONE</Text>
                             <View style={styles.genderRow}>
                                 {genderOptions.map((opt) => (
                                     <TouchableOpacity
@@ -190,7 +189,7 @@ export default function Phase2Goals({ onNext, onBack, prefilledName }: any) {
                                 style={[styles.nextBtn, !canContinue && styles.nextBtnDisabled]}
                                 activeOpacity={0.9}
                             >
-                                <Text style={styles.nextBtnText}>Continue</Text>
+                                <Text style={styles.nextBtnText}>Let’s go</Text>
                                 <View style={styles.nextIconWrap}>
                                     <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
                                 </View>
@@ -280,11 +279,14 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
     scrollContent: {
+        flexGrow: 1,
+        justifyContent: 'center',
         paddingHorizontal: 24,
         paddingTop: 30,
         paddingBottom: 30,
     },
     textGroup: {
+        width: '100%',
         marginBottom: 25,
     },
     welcomeText: {
@@ -299,16 +301,11 @@ const styles = StyleSheet.create({
         color: COLORS.ink,
         letterSpacing: -1,
     },
-    subTitle: {
-        fontSize: 14,
-        color: COLORS.muted,
-        marginTop: 6,
-        lineHeight: 20,
-    },
     formArea: {
-        flex: 1,
+        width: '100%',
     },
     inputGroup: {
+        width: '100%',
         marginBottom: 25,
     },
     fieldLabel: {
@@ -319,12 +316,14 @@ const styles = StyleSheet.create({
         marginBottom: 10,
     },
     mainInput: {
+        width: '100%',
         fontSize: 20,
         fontWeight: '600',
         color: COLORS.ink,
         paddingVertical: 8,
     },
     underline: {
+        width: '100%',
         height: 1.5,
         backgroundColor: COLORS.line,
         marginTop: 5,
@@ -355,6 +354,7 @@ const styles = StyleSheet.create({
         color: COLORS.brand,
     },
     footer: {
+        width: '100%',
         marginTop: 20,
     },
     nextBtn: {
