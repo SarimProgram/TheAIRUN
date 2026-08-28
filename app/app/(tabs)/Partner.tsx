@@ -37,6 +37,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_BASE_URL } from '../../config/api';
 import { useChat } from '@/contexts/ChatContext';
+import { ConnectedPartners } from '@/components/partner/ConnectedPartners';
+import { getMappedDays, type DaySchedule } from '@/utils/planProjection';
+import type { PartnerDaySummary, ScheduledPartnerRun } from '@/utils/partnerTimeline';
 
 const { width } = Dimensions.get('window');
 
@@ -46,6 +49,7 @@ type Invite = {
     toEmail: string;
     status: string;
     createdAt: string;
+    updatedAt?: string;
     fromUser?: { id: string; displayName: string; email: string };
     toUser?: { id: string; displayName: string; email: string } | null;
 };
@@ -72,6 +76,14 @@ type PartnerPointsHistoryEntry = {
     progress: number;
 };
 
+const POINTS_CATEGORY_LABELS: Record<string, string> = {
+    WALK_RUN: 'Walk / Run',
+    STEPS: 'Steps',
+    CALORIES: 'Nutrition',
+    MOBILITY: 'Mobility',
+    HYDRATION: 'Hydration',
+};
+
 type CurrentUser = {
     id: string;
     displayName: string;
@@ -95,6 +107,7 @@ type PartnerSummary = {
 
 type TodaySummary = {
     steps: number;
+    stepsTarget?: number;
     activeCalories: number;
     consumedCalories: number;
     calorieTarget: number;
@@ -212,7 +225,7 @@ export default function PartnerScreen() {
     const { authFetch, isAuthenticated } = useAuth();
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { connected: isPartnerConnected, sendMessage: sendChatMessage } = useChat();
+    const { connected: isPartnerConnected, sendMessage: sendChatMessage, messages: chatMessages, currentUserId } = useChat();
 
     const [email, setEmail] = useState('');
     const [loading, setLoading] = useState(false);
@@ -228,11 +241,17 @@ export default function PartnerScreen() {
     const [myTodaySummary, setMyTodaySummary] = useState<TodaySummary | null>(null);
     const [partnerTodaySummary, setPartnerTodaySummary] = useState<PartnerSummary | null>(null);
     const [partnerWeekProgress, setPartnerWeekProgress] = useState<PartnerWeekProgress | null>(null);
+    const [partnerWeekDays, setPartnerWeekDays] = useState<PartnerDaySummary[]>([]);
+    const [partnerWeekStart, setPartnerWeekStart] = useState<string | undefined>();
+    const [partnerWeekEnd, setPartnerWeekEnd] = useState<string | undefined>();
+    const [partnerPlannedDays, setPartnerPlannedDays] = useState<DaySchedule[]>([]);
+    const [scheduledPartnerRuns, setScheduledPartnerRuns] = useState<ScheduledPartnerRun[]>([]);
     const [wagerOverview, setWagerOverview] = useState<WagerOverview | null>(null);
     const [waterNudgeSentAt, setWaterNudgeSentAt] = useState<number | null>(null);
     const [isLastWagerSheetOpen, setIsLastWagerSheetOpen] = useState(false);
     const [isPointsHistoryOpen, setIsPointsHistoryOpen] = useState(false);
     const [partnerPointsHistory, setPartnerPointsHistory] = useState<PartnerPointsHistoryEntry[]>([]);
+    const [myPointsHistory, setMyPointsHistory] = useState<PartnerPointsHistoryEntry[]>([]);
     const [partnerPointsHistoryLoading, setPartnerPointsHistoryLoading] = useState(false);
     const [partnerPointsHistoryError, setPartnerPointsHistoryError] = useState<string | null>(null);
     const [showAllPartnerPointsHistory, setShowAllPartnerPointsHistory] = useState(false);
@@ -394,20 +413,44 @@ export default function PartnerScreen() {
             if (partnerData.hasPartner && partnerData.partner) {
                 setDashboardLoading(true);
                 try {
-                    const [mySummaryRes, partnerSummaryRes, partnerWeekRes, wagerOverviewRes, activeWagerRes] = await Promise.all([
+                    const [
+                        mySummaryRes,
+                        partnerSummaryRes,
+                        partnerWeekRes,
+                        wagerOverviewRes,
+                        activeWagerRes,
+                        pointsHistoryRes,
+                        scheduledRunsRes,
+                        partnerPlanRes,
+                    ] = await Promise.all([
                         authFetch(`${API_BASE_URL}/summary/today`),
                         authFetch(`${API_BASE_URL}/summary/partner`),
                         authFetch(`${API_BASE_URL}/summary/partner/week`),
                         authFetch(`${API_BASE_URL}/wager/overview`),
                         authFetch(`${API_BASE_URL}/wager/active`),
+                        authFetch(`${API_BASE_URL}/partner/points-history`),
+                        authFetch(`${API_BASE_URL}/runtogether/active`),
+                        authFetch(`${API_BASE_URL}/plan/partner/weekly`),
                     ]);
 
-                    const [mySummaryData, partnerSummaryData, partnerWeekData, wagerOverviewData, activeWagerData] = await Promise.all([
+                    const [
+                        mySummaryData,
+                        partnerSummaryData,
+                        partnerWeekData,
+                        wagerOverviewData,
+                        activeWagerData,
+                        pointsHistoryData,
+                        scheduledRunsData,
+                        partnerPlanData,
+                    ] = await Promise.all([
                         mySummaryRes.json(),
                         partnerSummaryRes.json(),
                         partnerWeekRes.json(),
                         wagerOverviewRes.json(),
                         activeWagerRes.json(),
+                        pointsHistoryRes.json().catch(() => ({ entries: [] })),
+                        scheduledRunsRes.json().catch(() => ({ sent: [], received: [] })),
+                        partnerPlanRes.json().catch(() => null),
                     ]);
 
                     const resolvedCurrentWager = wagerOverviewData?.currentWager ?? activeWagerData?.wager ?? null;
@@ -415,6 +458,71 @@ export default function PartnerScreen() {
                     setMyTodaySummary(mySummaryData ?? null);
                     setPartnerTodaySummary(partnerSummaryData?.hasPartner ? partnerSummaryData.partner : null);
                     setPartnerWeekProgress(partnerWeekData?.hasPartner ? partnerWeekData.partner : null);
+                    setPartnerWeekDays(Array.isArray(partnerWeekData?.days) ? partnerWeekData.days : []);
+                    setPartnerWeekStart(partnerWeekData?.weekStart);
+                    setPartnerWeekEnd(partnerWeekData?.weekEnd);
+                    setPartnerPointsHistory(Array.isArray(pointsHistoryData?.entries) ? pointsHistoryData.entries : []);
+
+                    const weekDays = Array.isArray(partnerWeekData?.days) ? partnerWeekData.days : [];
+                    const timelineDayKeys = [
+                        ...new Set([
+                            ...weekDays.map((day: PartnerDaySummary) => day.dayKey),
+                            ...(Array.isArray(pointsHistoryData?.entries)
+                                ? pointsHistoryData.entries.map((entry: PartnerPointsHistoryEntry) => entry.dayKey)
+                                : []),
+                        ]),
+                    ];
+                    const myPointsResults = await Promise.all(
+                        timelineDayKeys.map((dayKey) =>
+                            authFetch(`${API_BASE_URL}/points/daily/${dayKey}`)
+                                .then((res) => res.json())
+                                .catch(() => ({ entries: [] })),
+                        ),
+                    );
+                    const resolvedMyPointsHistory: PartnerPointsHistoryEntry[] = [];
+                    timelineDayKeys.forEach((dayKey, index) => {
+                        const data = myPointsResults[index];
+                        for (const entry of data?.entries ?? []) {
+                            if (!entry?.earnedPoints) continue;
+                            resolvedMyPointsHistory.push({
+                                dayKey,
+                                awardedAt: entry.awardedAt,
+                                category: entry.category,
+                                categoryLabel:
+                                    POINTS_CATEGORY_LABELS[entry.category] ?? entry.category,
+                                earnedPoints: entry.earnedPoints,
+                                maxPoints: entry.maxPoints ?? 0,
+                                progress: entry.progress ?? 0,
+                            });
+                        }
+                    });
+                    setMyPointsHistory(resolvedMyPointsHistory);
+
+                    const weeklyPlanTable = Array.isArray(partnerPlanData?.['Weekly Plan Table'])
+                        ? partnerPlanData['Weekly Plan Table']
+                        : [];
+                    const currentPlanWeek = partnerPlanData?.plan?.currentWeek ?? weeklyPlanTable[0]?.Week ?? 1;
+                    const currentWeekPlan =
+                        weeklyPlanTable.find((week: { Week?: number }) => week.Week === currentPlanWeek) ??
+                        weeklyPlanTable[weeklyPlanTable.length - 1];
+                    const availableDays = partnerPlanData?.plan?.availableDays;
+                    setPartnerPlannedDays(
+                        currentWeekPlan ? getMappedDays(currentWeekPlan, availableDays) : []
+                    );
+
+                    const activeRuns = [
+                        ...(Array.isArray(scheduledRunsData?.sent) ? scheduledRunsData.sent : []),
+                        ...(Array.isArray(scheduledRunsData?.received) ? scheduledRunsData.received : []),
+                    ].map((run: ScheduledPartnerRun) => ({
+                        id: run.id,
+                        scheduledTime: run.scheduledTime,
+                        distanceKm: run.distanceKm,
+                        status: run.status,
+                        isSender: run.isSender,
+                        partnerName: run.partnerName,
+                    }));
+                    setScheduledPartnerRuns(activeRuns);
+
                     setWagerOverview(
                         wagerOverviewData
                             ? {
@@ -437,7 +545,14 @@ export default function PartnerScreen() {
                 setMyTodaySummary(null);
                 setPartnerTodaySummary(null);
                 setPartnerWeekProgress(null);
+                setPartnerWeekDays([]);
+                setPartnerWeekStart(undefined);
+                setPartnerWeekEnd(undefined);
+                setPartnerPlannedDays([]);
+                setScheduledPartnerRuns([]);
                 setWagerOverview(null);
+                setPartnerPointsHistory([]);
+                setMyPointsHistory([]);
                 setDashboardLoading(false);
             }
 
@@ -546,6 +661,7 @@ export default function PartnerScreen() {
             setPartnerPointsHistory(Array.isArray(data?.entries) ? data.entries : []);
         } catch (err: any) {
             setPartnerPointsHistory([]);
+            setMyPointsHistory([]);
             setPartnerPointsHistoryError(err?.message || 'Failed to load partner points history');
         } finally {
             setPartnerPointsHistoryLoading(false);
@@ -675,6 +791,56 @@ export default function PartnerScreen() {
         partnerSteps < Math.max(1500, Math.round((partnerTodaySummary?.stepsTarget ?? 0) * 0.15)) &&
         (partnerTodaySummary?.exerciseMinutes ?? 0) === 0 &&
         (partnerTodaySummary?.waterMl ?? 0) < 500;
+    const daysTogether = React.useMemo(() => {
+        if (!partner) return 1;
+
+        const acceptedSentInvite = sentInvites.find(
+            (invite) =>
+                invite.status === 'ACCEPTED' &&
+                (invite.toUser?.id === partner.id ||
+                    invite.toEmail.toLowerCase() === partner.email.toLowerCase()),
+        );
+
+        const connectedAt =
+            acceptedSentInvite?.updatedAt ??
+            acceptedSentInvite?.createdAt ??
+            chatMessages[0]?.createdAt;
+
+        if (!connectedAt) return 1;
+
+        const start = new Date(connectedAt);
+        start.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const diffMs = today.getTime() - start.getTime();
+        return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
+    }, [partner, sentInvites, chatMessages]);
+    const timelineChatMessages = React.useMemo(
+        () =>
+            chatMessages.map((message) => ({
+                id: message.id,
+                fromUserId: message.fromUserId,
+                fromName: message.fromName,
+                content: message.content,
+                createdAt: message.createdAt,
+            })),
+        [chatMessages],
+    );
+    const myTodaySummaryForTimeline = React.useMemo(
+        () =>
+            myTodaySummary
+                ? {
+                      steps: myTodaySummary.steps,
+                      stepsTarget:
+                          myTodaySummary.stepsTarget ??
+                          partnerWeekDays.find((day) => day.isToday)?.stepsTarget,
+                      distanceKm: myTodaySummary.distanceKm,
+                      runKmTarget: myTodaySummary.runKmTarget,
+                      exerciseMinutes: myTodaySummary.exerciseMinutes,
+                  }
+                : null,
+        [myTodaySummary, partnerWeekDays],
+    );
     const hasStepLeadChange = Math.abs(stepLead) >= 500;
     const partnerNotifications: PartnerNotification[] = partner
         ? [
@@ -932,6 +1098,14 @@ export default function PartnerScreen() {
         showSentToast(message);
     }, [sendChatMessage, showSentToast]);
 
+    const postTimelineNote = useCallback((content: string) => {
+        if (!isPartnerConnected) {
+            Alert.alert('Chat unavailable', 'Live partner chat is not available right now.');
+            return;
+        }
+        sendMessage(content);
+    }, [isPartnerConnected, sendMessage]);
+
     const sendPartnerMessage = useCallback((message: string, onSent?: () => void) => {
         if (!partner) return false;
         if (!isPartnerConnected) {
@@ -1071,258 +1245,59 @@ export default function PartnerScreen() {
         <View style={styles.container}>
             <StatusBar style="dark" />
             
-            <View
-                style={[
-                    styles.topNav,
-                    {
-                        paddingTop: Math.max(insets.top + 8, 24),
-                        height: Math.max(insets.top + 64, 88),
-                    },
-                ]}
-            >
-                <TouchableOpacity onPress={handleBackPress} style={styles.backCircle} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-                    <ArrowLeft size={20} color={COLORS.text} />
-                </TouchableOpacity>
+            {!(currentStep === 0 && hasPartner && partner) && (
+                <View
+                    style={[
+                        styles.topNav,
+                        {
+                            paddingTop: Math.max(insets.top + 8, 24),
+                            height: Math.max(insets.top + 64, 88),
+                        },
+                    ]}
+                >
+                    <TouchableOpacity onPress={handleBackPress} style={styles.backCircle} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                        <ArrowLeft size={20} color={COLORS.text} />
+                    </TouchableOpacity>
 
-                {currentStep !== 0 && (
-                    <View style={styles.stepDots}>
-                        {[0,1,2].map(s => (
-                            <View key={s} style={[styles.dot, currentStep === s && styles.dotActive]} />
-                        ))}
-                    </View>
-                )}
+                    {currentStep !== 0 && (
+                        <View style={styles.stepDots}>
+                            {[0,1,2].map(s => (
+                                <View key={s} style={[styles.dot, currentStep === s && styles.dotActive]} />
+                            ))}
+                        </View>
+                    )}
 
-                <View style={{width: 44}} />
-            </View>
+                    <View style={{width: 44}} />
+                </View>
+            )}
 
             <Animated.View style={[styles.main, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
                 {currentStep === 0 && (
                     <View style={styles.content}>
                         {hasPartner && partner ? (
-                            <ScrollView
-                                style={styles.connectedScroll}
-                                contentContainerStyle={[styles.connectedScrollContent, { paddingBottom: Math.max(insets.bottom + 24, 120) }]}
-                                showsVerticalScrollIndicator={false}
-                            >
-                                <View style={styles.partnerHeaderRow}>
-                                    <View style={styles.partnerHeaderIdentity}>
-                                        <View style={styles.heroAvatarRow}>
-                                            <View style={styles.partnerHeaderAvatar}>
-                                                <Text style={styles.heroAvatarLetter}>{currentUser?.displayName?.charAt(0).toUpperCase()}</Text>
-                                            </View>
-                                            <View style={styles.partnerHeaderAvatarPartner}>
-                                                <Text style={styles.heroAvatarLetter}>{partner.displayName.charAt(0).toUpperCase()}</Text>
-                                                <View style={[styles.onlineDot, { backgroundColor: isPartnerConnected ? '#10B981' : '#F59E0B' }]} />
-                                            </View>
-                                        </View>
-                                        <View style={styles.partnerHeaderText}>
-                                            <Text style={styles.partnerHeaderName}>{partner.displayName}</Text>
-                                        </View>
-                                    </View>
-                                    <View style={styles.partnerHeaderActions}>
-                                        <TouchableOpacity style={styles.partnerHeaderAction} onPress={disconnect}>
-                                            <Unlink size={14} color="#64748B" />
-                                        </TouchableOpacity>
-                                    </View>
-                                </View>
-
-                                <Animated.View
-                                    style={[
-                                        styles.notifCard,
-                                        heroNotificationToneStyle,
-                                        {
-                                            opacity: heroNotificationAnim,
-                                            transform: [
-                                                {
-                                                    translateX: heroNotificationTranslateX,
-                                                },
-                                                {
-                                                    scale: heroNotificationAnim.interpolate({
-                                                        inputRange: [0, 1],
-                                                        outputRange: [0.98, 1],
-                                                    }),
-                                                },
-                                            ],
-                                        },
-                                    ]}
-                                >
-                                    <View style={styles.notifTopRow}>
-                                        <View style={[styles.notifIconLg, 
-                                            activeNotification?.tone === 'warning' ? styles.heroNotificationIconWarning :
-                                            activeNotification?.tone === 'success' ? styles.heroNotificationIconSuccess :
-                                            styles.heroNotificationIconInfo
-                                        ]}>
-                                            {activeNotification?.id === 'hydration-alert' ? <Droplets size={22} color="#FFF" /> :
-                                             activeNotification?.tone === 'warning' ? <AlertTriangle size={22} color="#FFF" /> :
-                                             activeNotification?.tone === 'success' ? <CheckCircle2 size={22} color="#FFF" /> :
-                                             <Bell size={22} color="#FFF" />}
-                                        </View>
-                                        <View style={styles.notifTitleWrap}>
-                                            <Text style={styles.notifTag}>{heroCardTitle}</Text>
-                                            {partnerNotifications.length > 1 && (
-                                                <View style={styles.notifMetaRow}>
-                                                    <View style={styles.notifDots}>
-                                                        {partnerNotifications.map((notification, index) => (
-                                                            <View
-                                                                key={notification.id}
-                                                                style={[
-                                                                    styles.notifDot,
-                                                                    index === activeNotificationIndex && styles.notifDotActive,
-                                                                ]}
-                                                            />
-                                                        ))}
-                                                    </View>
-                                                    <View style={styles.notifNavRow}>
-                                                        <TouchableOpacity
-                                                            style={styles.notifNavButton}
-                                                            onPress={() => cycleNotification(-1)}
-                                                        >
-                                                            <ArrowLeft size={12} color="#FFFFFF" />
-                                                        </TouchableOpacity>
-                                                        <TouchableOpacity
-                                                            style={styles.notifNavButton}
-                                                            onPress={() => cycleNotification(1)}
-                                                        >
-                                                            <ArrowRight size={12} color="#FFFFFF" />
-                                                        </TouchableOpacity>
-                                                    </View>
-                                                </View>
-                                            )}
-                                        </View>
-                                    </View>
-                                    <Text style={styles.notifBody}>{heroCardBody}</Text>
-                                    {!!activeNotification?.actions?.length && (
-                                        <View style={styles.notifActionsRow}>
-                                            {activeNotification.actions.slice(0, 2).map((action) => (
-                                                <TouchableOpacity
-                                                    key={`${activeNotification.id}-${action.label}`}
-                                                    style={styles.notifActionButton}
-                                                    onPress={() => handleNotificationAction(action)}
-                                                >
-                                                    <Text style={styles.notifActionText}>{action.label}</Text>
-                                                </TouchableOpacity>
-                                            ))}
-                                        </View>
-                                    )}
-
-                                </Animated.View>
-
-                                <TouchableOpacity
-                                    style={styles.partnerPointsCard}
-                                    activeOpacity={0.88}
-                                    onPress={openPartnerPointsHistory}
-                                >
-                                    <Text style={styles.partnerPointsCardLabel}>Partner Points</Text>
-                                    <View style={styles.partnerPointsRow}>
-                                        <View style={styles.partnerPointsIcon}>
-                                            <Heart size={16} color="#FF6B6B" fill="#FF6B6B" />
-                                        </View>
-                                        <Text style={styles.partnerPointsValue}>{(partner.points ?? partner.pointsBalance ?? 0).toLocaleString()}</Text>
-                                        <View style={styles.partnerPointsChevron}>
-                                            <ChevronRight size={16} color="#94A3B8" />
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-
-                                {/* Dashboard */}
-                                {dashboardLoading ? (
-                                    <View style={styles.loadingCard}>
-                                        <ActivityIndicator color="#FF6B6B" />
-                                    </View>
-                                ) : (
-                                    <>
-                                        {/* Wager Card */}
-                                        <View style={styles.wagerCard}>
-                                            <View style={styles.wagerHeader}>
-                                                <Text style={styles.wagerTag}>WEEKLY WAGER</Text>
-                                                {activeWager && <View style={styles.liveDot} />}
-                                            </View>
-                                            <Text style={styles.wagerTitle}>{activeWager ? activeWager.title : 'No active wager'}</Text>
-                                            <Text style={styles.wagerSub}>{currentWagerSubtitle}</Text>
-
-                                            {activeWager && currentLeader && (
-                                                <View style={styles.wagerStats}>
-                                                    <View style={styles.wagerStatBlock}>
-                                                        <Text style={styles.wagerStatNum}>{currentLeader.yourWeek.totalDistanceKm.toFixed(1)}</Text>
-                                                        <Text style={styles.wagerStatUnit}>km Â· You</Text>
-                                                    </View>
-                                                    <View style={styles.wagerDivider} />
-                                                    <View style={styles.wagerStatBlock}>
-                                                        <Text style={styles.wagerStatNum}>{currentLeader.partnerWeek.totalDistanceKm.toFixed(1)}</Text>
-                                                        <Text style={styles.wagerStatUnit}>km Â· {partner.displayName}</Text>
-                                                    </View>
-                                                </View>
-                                            )}
-                                        </View>
-
-                                        {/* Metric Cards */}
-                                        <View style={styles.metricsGrid}>
-                                            <View style={[styles.metricCard, showPartnerCaloriesWarning ? styles.metricCardWarning : undefined]}>
-                                                {showPartnerCaloriesWarning ? (
-                                                    <AlertTriangle size={14} color="#FFF" style={{ marginBottom: 8 }} />
-                                                ) : (
-                                                    <View style={[styles.metricDot, { backgroundColor: '#FF6B6B' }]} />
-                                                )}
-                                                <Text style={[styles.metricLabel, showPartnerCaloriesWarning ? styles.metricLabelLight : undefined]}>Calories</Text>
-                                                <Text style={[styles.metricVal, showPartnerCaloriesWarning ? styles.metricValLight : undefined]}>
-                                                    {showPartnerCaloriesWarning ? `+${Math.round(partnerCaloriesOverTarget)}` : 'On track'}
-                                                </Text>
-                                                {showPartnerCaloriesWarning && (
-                                                    <TouchableOpacity style={styles.metricActionBtn} onPress={sendCaloriesNudge}>
-                                                        <MessageCircleMore size={16} color="#EF4444" />
-                                                    </TouchableOpacity>
-                                                )}
-                                            </View>
-
-                                            <View style={[styles.metricCard, (partnerNeedsWaterNudge && !waterNudgeSentAt) ? styles.metricCardWater : waterNudgeSentAt ? styles.metricCardSuccess : undefined]}>
-                                                {(partnerNeedsWaterNudge && !waterNudgeSentAt) ? (
-                                                    <AlertTriangle size={14} color="#FFF" style={{ marginBottom: 8 }} />
-                                                ) : (
-                                                    <View style={[styles.metricDot, { backgroundColor: waterNudgeSentAt ? '#FFF' : '#3B82F6' }]} />
-                                                )}
-                                                <Text style={[styles.metricLabel, (partnerNeedsWaterNudge || waterNudgeSentAt) ? styles.metricLabelLight : undefined]}>Water</Text>
-                                                <Text style={[styles.metricVal, (partnerNeedsWaterNudge || waterNudgeSentAt) ? styles.metricValLight : undefined]}>
-                                                    {waterNudgeSentAt ? 'Nudged' : partnerNeedsWaterNudge ? 'Low!' : 'Good'}
-                                                </Text>
-                                                {partnerNeedsWaterNudge && !waterNudgeSentAt && (
-                                                    <TouchableOpacity style={styles.metricActionBtn} onPress={sendWaterNudge}>
-                                                        <Bell size={16} color="#3B82F6" />
-                                                    </TouchableOpacity>
-                                                )}
-                                            </View>
-                                        </View>
-
-                                        <View style={styles.metricsGrid}>
-                                            <View style={styles.metricCard}>
-                                                <View style={[styles.metricDot, { backgroundColor: '#8B5CF6' }]} />
-                                                <Text style={styles.metricLabel}>Weight</Text>
-                                                <Text style={styles.metricVal}>{partnerWeight.value}<Text style={styles.metricUnit}> {partnerWeight.unit}</Text></Text>
-                                            </View>
-
-                                            <View style={styles.metricCard}>
-                                                <View style={[styles.metricDot, { backgroundColor: '#F59E0B' }]} />
-                                                <Text style={styles.metricLabel}>Goal</Text>
-                                                <Text style={styles.metricVal}>{partnerGoalLabel}</Text>
-                                            </View>
-                                        </View>
-
-                                        {/* Activity */}
-                                        <TouchableOpacity
-                                            style={styles.activityCard}
-                                            activeOpacity={lastWagerSummary ? 0.85 : 1}
-                                            disabled={!lastWagerSummary}
-                                            onPress={openTopLastWagerBreakdown}
-                                        >
-                                            <Text style={styles.activityLabel}>RECENT ACTIVITY</Text>
-                                            <Text style={styles.activityText}>
-                                                {lastWagerSummary
-                                                    ? lastWagerSummary
-                                                    : 'Challenge your partner to get started'}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    </>
-                                )}
-                            </ScrollView>
+                            <ConnectedPartners
+                                userName={currentUser?.displayName ?? 'You'}
+                                partnerName={partner.displayName}
+                                daysTogether={daysTogether}
+                                weekStart={partnerWeekStart}
+                                days={partnerWeekDays}
+                                plannedDays={partnerPlannedDays}
+                                pointsHistory={partnerPointsHistory}
+                                myPointsHistory={myPointsHistory}
+                                scheduledRuns={scheduledPartnerRuns}
+                                myTodaySummary={myTodaySummaryForTimeline}
+                                wagerOverview={wagerOverview}
+                                showCaloriesWarning={showPartnerCaloriesWarning}
+                                partnerCaloriesOverTarget={partnerCaloriesOverTarget}
+                                partnerNeedsWaterNudge={partnerNeedsWaterNudge}
+                                waterNudgeSent={!!waterNudgeSentAt}
+                                loading={dashboardLoading}
+                                onBack={handleBackPress}
+                                onAddMemory={postTimelineNote}
+                                onAddReminder={sendWaterNudge}
+                                onCaloriesNudge={sendCaloriesNudge}
+                                onWaterNudge={sendWaterNudge}
+                            />
                         ) : (
                             <ScrollView 
                                 style={styles.connectedScroll}
