@@ -23,6 +23,8 @@ export interface UIStep {
  */
 export interface UserContext {
   baselinePaceSecPerKm?: number;
+  runningBaselinePaceSecPerKm?: number;
+  walkingBaselinePaceSecPerKm?: number;
   ageYears?: number;
   heightCm?: number;
   weightKg?: number;

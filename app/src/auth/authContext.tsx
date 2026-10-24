@@ -163,6 +163,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             ...(options.headers as Record<string, string> || {}),
         };
 
+        const isFormDataBody =
+            typeof FormData !== 'undefined' &&
+            options.body != null &&
+            (options.body instanceof FormData ||
+                (typeof options.body === 'object' && '_parts' in (options.body as object)));
+
+        if (isFormDataBody) {
+            delete headers['Content-Type'];
+            delete headers['content-type'];
+        }
+
         // Auto-set Content-Type for JSON string bodies if not already set
         if (options.body && typeof options.body === 'string' && !headers['Content-Type'] && !headers['content-type']) {
             headers['Content-Type'] = 'application/json';

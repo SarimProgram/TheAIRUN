@@ -5,8 +5,6 @@ import {
   Text,
   SafeAreaView,
   TouchableOpacity,
-  Animated,
-  StatusBar,
   Dimensions,
   Platform,
   ScrollView,
@@ -19,6 +17,11 @@ import {
   ArrowRight,
   Footprints,
   Target,
+  Sprout,
+  TrendingUp,
+  Trophy,
+  Calendar,
+  CalendarRange,
 } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -52,10 +55,10 @@ const STEPS = [
     title: "I'm training for...",
     desc: 'Pick your primary running objective.',
     options: [
-      { id: '5k', label: '5K Race', icon: 'target', desc: 'Speed & Power focus' },
-      { id: '10k', label: '10K Race', icon: 'trophy-outline', desc: 'Balance & Pace focus' },
-      { id: 'halfMarathon', label: 'Half Marathon', icon: 'medal-outline', desc: 'Stamina & Grit focus' },
-      { id: 'speedImprovement', label: 'Speed Work', icon: 'speedometer', desc: 'Break your personal records' },
+      { id: '5k', iconLabel: '5K', desc: 'Speed & power' },
+      { id: '10k', iconLabel: '10K', desc: 'Balance & pace' },
+      { id: 'halfMarathon', iconLabel: 'Half Marathon', desc: 'Stamina & grit' },
+      { id: 'speedImprovement', iconLabel: 'PR', desc: 'Speed work' },
     ],
   },
   {
@@ -63,9 +66,9 @@ const STEPS = [
     title: "My running level is...",
     desc: 'Be honest to get the best training plan.',
     options: [
-      { id: 'beginner', label: 'Beginner', icon: 'flash-outline', desc: 'New or starting over' },
-      { id: 'intermediate', label: 'Intermediate', icon: 'map-marker-distance', desc: 'Consistent weekly runner' },
-      { id: 'advanced', label: 'Advanced', icon: 'shield-check-outline', desc: 'Experienced competitive athlete' },
+      { id: 'beginner', label: 'Beginner', iconComponent: Sprout, desc: 'New or starting over' },
+      { id: 'intermediate', label: 'Intermediate', iconComponent: TrendingUp, desc: 'Consistent weekly runner' },
+      { id: 'advanced', label: 'Advanced', iconComponent: Trophy, desc: 'Experienced competitive athlete' },
     ],
   },
   {
@@ -76,30 +79,41 @@ const STEPS = [
   },
   {
     id: 'raceDate',
-    title: "The race is on...",
-    desc: 'Do you have a specific deadline?',
+    title: "Do you have a race day?",
+    desc: "We'll shape your plan around your timeline.",
     options: [
-      { id: 'yes', label: 'A set date', icon: 'calendar-check-outline', hasDatePicker: true, desc: 'I have a specific goal date' },
-      { id: 'notYet', label: 'Flexible', icon: 'calendar-remove-outline', desc: 'I am training for general fitness' },
+      {
+        id: 'yes',
+        label: 'Yes, I have a date',
+        iconComponent: Calendar,
+        hasDatePicker: true,
+        desc: "Pick your event and we'll count down to it",
+      },
+      {
+        id: 'notYet',
+        label: 'Not yet',
+        iconComponent: CalendarRange,
+        desc: 'Train on a flexible schedule for now',
+      },
     ],
   },
   {
     id: 'dietStrategy',
-    title: "My focus for food is...",
-    desc: 'How should we align your nutrition?',
+    title: "What's your food goal?",
+    desc: 'Pick what fits you best.',
     options: [
-      { id: 'performance', label: 'High Performance', icon: 'food-apple-outline', desc: 'Fuel for my running goals' },
-      { id: 'weightloss', label: 'Slight Weight Loss', icon: 'scale-bathroom', desc: 'Leaner for better speed' },
+      { id: 'performance', label: 'Fuel my runs', icon: 'food-apple-outline', desc: 'More energy for training' },
+      { id: 'weightloss', label: 'Lose a little weight', icon: 'scale-bathroom', desc: 'Support steady weight loss' },
     ],
   },
   {
     id: 'priority',
-    title: 'My focus is',
-    desc: 'Choose the outcome you want to prioritize most.',
+    title: 'Your focus',
+    desc: 'Pick what matters most.',
     options: [
-      { id: 'faster', label: 'Pure Pace', iconComponent: Target, desc: 'Explosive quickness & speed' },
-      { id: 'longer', label: 'Ultra Distance', iconComponent: Footprints, desc: 'Endless endurance & stamina' },
-      { id: 'form', label: 'Efficiency', iconComponent: Activity, desc: 'Perfect technique & posture' },
+      { id: 'faster', label: 'Get faster', iconComponent: Target, desc: 'More speed' },
+      { id: 'longer', label: 'Go longer', iconComponent: Footprints, desc: 'More distance' },
+      { id: 'form', label: 'Run smoothly', iconComponent: Activity, desc: 'Better form' },
     ],
   },
 ];
@@ -113,34 +127,34 @@ const RUN_BASELINE_CONFIG: Record<string, { label: string; distanceKm: number; d
 const MINUTE_OPTIONS = Array.from({ length: 231 }, (_, index) => index + 10);
 const SECOND_OPTIONS = Array.from({ length: 12 }, (_, index) => index * 5);
 
-export default function RunningBranch({ onComplete, skipDietStrategy = false, gender }: any) {
+export default function RunningBranch({ onComplete, onBack, skipDietStrategy = false, gender, initialData }: any) {
   const steps = skipDietStrategy
     ? STEPS.filter((step) => step.id !== 'dietStrategy')
     : STEPS;
-  const [currentStep, setCurrentStep] = useState(0);
-  const [selections, setSelections] = useState<Record<string, string>>({});
-  const [raceDate, setRaceDate] = useState<Date | null>(null);
+  const [currentStep, setCurrentStep] = useState(() => initialData ? steps.length - 1 : 0);
+  const [selections, setSelections] = useState<Record<string, string>>(() => initialData ? {
+    trainingGoal: initialData.trainingGoal,
+    experience: initialData.experience,
+    raceDate: initialData.raceDateSelection ?? (initialData.raceDate ? 'yes' : 'notYet'),
+    dietStrategy: initialData.dietStrategy,
+    priority: initialData.priority,
+  } : {});
+  const [raceDate, setRaceDate] = useState<Date | null>(() => initialData?.raceDate ? new Date(initialData.raceDate) : null);
   const [showCalendar, setShowCalendar] = useState(false);
-  const [easyMinutes, setEasyMinutes] = useState(35);
-  const [easySeconds, setEasySeconds] = useState(0);
-  const [baselineMode, setBaselineMode] = useState<'estimate' | 'absolute_new'>('absolute_new');
+  const [easyMinutes, setEasyMinutes] = useState(initialData?.easyMinutes ?? 35);
+  const [easySeconds, setEasySeconds] = useState(initialData?.easySeconds ?? 0);
+  const [baselineMode, setBaselineMode] = useState<'estimate' | 'absolute_new'>(initialData?.baselineMode ?? 'absolute_new');
   const minuteScrollRef = useRef<ScrollView | null>(null);
   const secondScrollRef = useRef<ScrollView | null>(null);
-
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(40)).current;
-  const direction = useRef(1);
-
-  useEffect(() => {
-    runEnterAnimation();
-  }, [currentStep]);
+  const shouldInitializeBaselineRef = useRef(!initialData);
 
   useEffect(() => {
     const baselineConfig = RUN_BASELINE_CONFIG[selections.trainingGoal];
-    if (baselineConfig) {
+    if (baselineConfig && shouldInitializeBaselineRef.current) {
       setEasyMinutes(baselineConfig.defaultMinutes);
       setEasySeconds(0);
     }
+    shouldInitializeBaselineRef.current = true;
   }, [selections.trainingGoal]);
 
   useEffect(() => {
@@ -153,16 +167,6 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
 
     return () => clearTimeout(timer);
   }, [easyMinutes, easySeconds, currentStep]);
-
-  const runEnterAnimation = () => {
-    fadeAnim.setValue(currentStep === 0 ? 0 : 0.4);
-    slideAnim.setValue(20);
-
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, tension: 20, useNativeDriver: true })
-    ]).start();
-  };
 
   const onDateChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
@@ -185,7 +189,6 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
 
   const handleNext = async () => {
     if (currentStep < steps.length - 1) {
-      direction.current = 1;
       const nextStep = steps[currentStep + 1];
       if (nextStep.id === 'priority' && selections.experience === 'beginner') {
           setSelections(prev => ({ ...prev, priority: 'form' }));
@@ -200,6 +203,10 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
       onComplete?.({
         ...selections,
         raceDate: raceDate?.toISOString() || null,
+        raceDateSelection: selections.raceDate,
+        easyMinutes,
+        easySeconds,
+        baselineMode,
         baselinePaceSecPerKm,
         isAbsoluteNewToRunning: baselineMode === 'absolute_new',
       });
@@ -208,8 +215,9 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
 
   const handleBack = () => {
     if (currentStep > 0) {
-      direction.current = -1;
       setCurrentStep(currentStep - 1);
+    } else {
+      onBack?.();
     }
   };
 
@@ -234,11 +242,14 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
   const mascotSource = getGenderMascotSource(gender);
 
   const stepTitle = stepData.id === 'easyBaseline'
-    ? "What's your pace?"
+    ? "Let's find your starting pace"
     : stepData.title;
   const stepDesc = stepData.id === 'easyBaseline'
-    ? 'Choose a comfortable finishing pace.'
+    ? 'Pick what feels right for you.'
     : stepData.desc;
+  const selectedGoalOption = stepData.id === 'trainingGoal'
+    ? stepData.options.find((item: any) => item.id === selectedOptionId)
+    : null;
 
   const formatDate = (date: Date) => {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -263,8 +274,7 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                     <View style={[styles.navRow, useCompactLayout && styles.navRowCompact]}>
                         <TouchableOpacity
                             onPress={handleBack}
-                            style={[styles.backBtn, useCompactLayout && styles.backBtnCompact, currentStep === 0 && { opacity: 0 }]}
-                            disabled={currentStep === 0}
+                            style={[styles.backBtn, useCompactLayout && styles.backBtnCompact]}
                         >
                             <ChevronLeft color={COLORS.white} size={28} />
                         </TouchableOpacity>
@@ -284,11 +294,10 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
             </LinearGradient>
         </View>
 
-      <Animated.View 
+      <View
         style={[
-            styles.contentMask, 
+            styles.contentMask,
             useCompactLayout && styles.contentMaskCompact,
-            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
         ]}
       >
         <View style={styles.content}>
@@ -329,10 +338,10 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                             </View>
                             <View style={[styles.optionTextWrap, useCompactLayout && styles.optionTextWrapCompact]}>
                                 <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, baselineMode === 'absolute_new' && { color: COLORS.brand }]}>
-                                    I am a beginner
+                                    I am new to running
                                 </Text>
                                 <Text style={[styles.optionSub, useCompactLayout && styles.optionSubCompact]}>
-                                    Start with a gentle baseline pace.
+                                    Use a gentle starting pace.
                                 </Text>
                             </View>
                             <MaterialCommunityIcons
@@ -462,6 +471,54 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                             </View>
                         )}
                     </View>
+                ) : stepData.id === 'trainingGoal' ? (
+                    <View style={[styles.goalPicker, useCompactLayout && styles.goalPickerCompact]}>
+                        <View style={[styles.goalHero, useCompactLayout && styles.goalHeroCompact]}>
+                            <Text style={[
+                                styles.goalHeroBadge,
+                                useCompactLayout && styles.goalHeroBadgeCompact,
+                                (selectedGoalOption?.iconLabel?.length ?? 0) > 5 && styles.goalHeroBadgeLong,
+                                (selectedGoalOption?.iconLabel?.length ?? 0) > 5 && useCompactLayout && styles.goalHeroBadgeLongCompact,
+                                !selectedGoalOption && styles.goalHeroBadgeMuted,
+                            ]}>
+                                {selectedGoalOption?.iconLabel ?? 'None'}
+                            </Text>
+                            <Text style={[styles.goalHeroDesc, useCompactLayout && styles.goalHeroDescCompact]}>
+                                {selectedGoalOption?.desc ?? 'Tap a distance below'}
+                            </Text>
+                        </View>
+
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={[styles.goalPillRow, useCompactLayout && styles.goalPillRowCompact]}
+                        >
+                            {stepData.options.map((item: any) => {
+                                const isSelected = selectedOptionId === item.id;
+
+                                return (
+                                    <TouchableOpacity
+                                        key={item.id}
+                                        onPress={() => toggleSelection(item.id)}
+                                        activeOpacity={0.85}
+                                        style={[
+                                            styles.goalPill,
+                                            useCompactLayout && styles.goalPillCompact,
+                                            isSelected && styles.goalPillSelected,
+                                        ]}
+                                    >
+                                        <Text style={[
+                                            styles.goalPillText,
+                                            useCompactLayout && styles.goalPillTextCompact,
+                                            isSelected && styles.goalPillTextSelected,
+                                        ]}>
+                                            {item.iconLabel}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
                 ) : (
                     <View style={[styles.optionStack, useCompactLayout && styles.optionStackCompact]}>
                         {stepData.options.map((item: any) => {
@@ -499,6 +556,16 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                                         <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, isSelected && { color: COLORS.brand }]}>
                                             {showDateLabel ? formatDate(raceDate) : item.label}
                                         </Text>
+                                        {!!item.desc && !showDateLabel && (
+                                            <Text style={[styles.optionSub, useCompactLayout && styles.optionSubCompact]}>
+                                                {item.desc}
+                                            </Text>
+                                        )}
+                                        {showDateLabel && (
+                                            <Text style={[styles.optionSub, useCompactLayout && styles.optionSubCompact, isSelected && { color: COLORS.brand }]}>
+                                                Race day selected
+                                            </Text>
+                                        )}
                                     </View>
                                     <MaterialCommunityIcons
                                         name={isSelected ? "check-circle" : "chevron-right"}
@@ -514,7 +581,7 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                 {stepData.id === 'priority' && selections.experience === 'beginner' && (
                     <View style={[styles.recommendNote, useCompactLayout && styles.recommendNoteCompact]}>
                         <Text style={[styles.recommendNoteText, useCompactLayout && styles.recommendNoteTextCompact]}>
-                            For beginners, we recommend focusing on <Text style={{ fontWeight: '900' }}>Efficiency</Text> to build an injury-free foundation.
+                            Beginners: try <Text style={{ fontWeight: '900' }}>Run smoothly</Text> first.
                         </Text>
                     </View>
                 )}
@@ -530,7 +597,7 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                     activeOpacity={0.9}
                 >
                     <Text style={[styles.nextBtnText, useCompactLayout && styles.nextBtnTextCompact]}>
-                        {currentStep === steps.length - 1 ? 'Unlock My Plan' : 'Continue'}
+                        Continue
                     </Text>
                     <View style={[styles.nextIconWrap, useCompactLayout && styles.nextIconWrapCompact]}>
                         <ArrowRight color={COLORS.white} size={useCompactLayout ? 18 : 20} strokeWidth={3} />
@@ -538,7 +605,7 @@ export default function RunningBranch({ onComplete, skipDietStrategy = false, ge
                 </TouchableOpacity>
             </View>
         </View>
-      </Animated.View>
+      </View>
 
       {/* iOS Modal Calendar */}
       {Platform.OS === 'ios' && (
@@ -719,6 +786,113 @@ const styles = StyleSheet.create({
   },
   optionStackCompact: {
     gap: 8,
+  },
+  goalPicker: {
+    gap: 28,
+    paddingTop: 8,
+  },
+  goalPickerCompact: {
+    gap: 22,
+    paddingTop: 4,
+  },
+  goalHero: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 180,
+    borderRadius: 32,
+    backgroundColor: '#FAFAFA',
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+  },
+  goalHeroCompact: {
+    minHeight: 150,
+    borderRadius: 26,
+    paddingVertical: 24,
+  },
+  goalHeroBadge: {
+    fontSize: 72,
+    fontWeight: '900',
+    color: COLORS.ink,
+    letterSpacing: -4,
+    lineHeight: 76,
+    textAlign: 'center',
+  },
+  goalHeroBadgeCompact: {
+    fontSize: 58,
+    lineHeight: 62,
+    letterSpacing: -3,
+  },
+  goalHeroBadgeLong: {
+    fontSize: 40,
+    lineHeight: 44,
+    letterSpacing: -1.5,
+  },
+  goalHeroBadgeLongCompact: {
+    fontSize: 32,
+    lineHeight: 36,
+    letterSpacing: -1,
+  },
+  goalHeroBadgeMuted: {
+    color: '#D1D5DB',
+  },
+  goalHeroDesc: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.muted,
+    letterSpacing: -0.2,
+    textAlign: 'center',
+  },
+  goalHeroDescCompact: {
+    marginTop: 8,
+    fontSize: 14,
+  },
+  goalPillRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 4,
+  },
+  goalPillRowCompact: {
+    gap: 8,
+  },
+  goalPill: {
+    minWidth: 76,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 999,
+    backgroundColor: COLORS.white,
+    borderWidth: 1.5,
+    borderColor: '#ECECEC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goalPillCompact: {
+    minWidth: 68,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  goalPillSelected: {
+    backgroundColor: COLORS.brand,
+    borderColor: COLORS.brand,
+    shadowColor: COLORS.brand,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  goalPillText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.ink,
+    letterSpacing: -0.4,
+  },
+  goalPillTextCompact: {
+    fontSize: 15,
+  },
+  goalPillTextSelected: {
+    color: COLORS.white,
   },
   optionCard: {
     flexDirection: 'row',

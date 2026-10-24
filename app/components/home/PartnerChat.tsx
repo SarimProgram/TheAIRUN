@@ -1,20 +1,18 @@
 // app/components/home/PartnerChat.tsx
-// Floating chat bubble + modal for real-time partner messaging
+// Floating compose bubble + annotation sheet for partner messaging
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
-    TextInput,
     TouchableOpacity,
     StyleSheet,
     Modal,
-    FlatList,
     KeyboardAvoidingView,
     Platform,
-    Dimensions,
+    Alert,
 } from 'react-native';
-import { MessageCircle, Send, X, Wifi, WifiOff } from 'lucide-react-native';
+import { MessageCircle, X, PenLine } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
     useSharedValue,
@@ -23,13 +21,16 @@ import Animated, {
     withTiming,
     useAnimatedStyle,
     FadeIn,
-    FadeOut,
-    SlideInRight,
+    FadeInDown,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSocket, ChatMessage } from '../../hooks/useSocket';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+import PartnerNoteCompose from '../chat/PartnerNoteCompose';
+import NoteDrawingPreview from '../chat/NoteDrawingPreview';
+import {
+    MESSAGE_LIFETIME_MS,
+    getDisplayContent,
+} from '../chat/partnerNoteShared';
 
 type Props = {
     isAuthenticated: boolean;
@@ -37,11 +38,6 @@ type Props = {
     currentUserId?: string;
 };
 
-const MESSAGE_LIFETIME_MS = 60 * 1000; // 60 seconds
-
-/**
- * TimeLeftIndicator - shows a shrinking bar under each message
- */
 const TimeLeftIndicator = ({ createdAt }: { createdAt: string }) => {
     const [fraction, setFraction] = useState(1);
 
@@ -66,82 +62,104 @@ const TimeLeftIndicator = ({ createdAt }: { createdAt: string }) => {
 const timeStyles = StyleSheet.create({
     container: {
         height: 2,
-        backgroundColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: 'rgba(92, 64, 51, 0.15)',
         borderRadius: 1,
-        marginTop: 4,
+        marginTop: 8,
         overflow: 'hidden',
     },
     bar: {
         height: '100%',
-        backgroundColor: '#FF6B6B',
+        backgroundColor: '#5C4033',
         borderRadius: 1,
     },
 });
 
-/**
- * MessageBubble - individual chat message
- */
-const MessageBubble = ({ msg, isMe }: { msg: ChatMessage; isMe: boolean }) => (
-    <Animated.View
-        entering={SlideInRight.duration(300)}
-        style={[
-            bubbleStyles.container,
-            isMe ? bubbleStyles.myMsg : bubbleStyles.partnerMsg,
-        ]}
-    >
-        {!isMe && (
-            <Text style={bubbleStyles.senderName}>{msg.fromName}</Text>
-        )}
-        <Text style={[bubbleStyles.text, isMe ? bubbleStyles.myText : bubbleStyles.partnerText]}>
-            {msg.content}
-        </Text>
-        <Text style={bubbleStyles.time}>
-            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-        </Text>
-        <TimeLeftIndicator createdAt={msg.createdAt} />
-    </Animated.View>
-);
+const PartnerNote = ({ msg, isMe }: { msg: ChatMessage; isMe?: boolean }) => {
+    const isDrawing = msg.content.startsWith('[DRAW]');
+    const displayContent = getDisplayContent(msg.content);
 
-const bubbleStyles = StyleSheet.create({
-    container: {
-        maxWidth: '78%',
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 18,
-        marginVertical: 3,
+    return (
+        <Animated.View entering={FadeInDown.duration(280)} style={[noteStyles.wrap, isMe && noteStyles.wrapMe]}>
+            <View style={[noteStyles.tape, isMe && noteStyles.tapeMe]} />
+            <View style={[noteStyles.note, isMe ? noteStyles.noteMe : noteStyles.notePartner]}>
+                <Text style={noteStyles.sender}>{isMe ? 'You' : msg.fromName}</Text>
+                {isDrawing ? (
+                    <>
+                        <Text style={noteStyles.drawLabel}>Drawing</Text>
+                        <NoteDrawingPreview content={msg.content} height={72} />
+                    </>
+                ) : (
+                    <Text style={noteStyles.text}>{displayContent}</Text>
+                )}
+                <Text style={noteStyles.time}>
+                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+                <TimeLeftIndicator createdAt={msg.createdAt} />
+            </View>
+        </Animated.View>
+    );
+};
+
+const noteStyles = StyleSheet.create({
+    wrap: { marginBottom: 12, alignSelf: 'flex-start', maxWidth: '92%' },
+    wrapMe: { alignSelf: 'flex-end' },
+    tape: {
+        position: 'absolute',
+        top: -4,
+        left: 20,
+        width: 44,
+        height: 12,
+        backgroundColor: 'rgba(255, 220, 150, 0.65)',
+        borderRadius: 1,
+        zIndex: 2,
     },
-    myMsg: {
-        alignSelf: 'flex-end',
-        backgroundColor: '#FF6B6B',
-        borderBottomRightRadius: 4,
+    tapeMe: { left: undefined, right: 20 },
+    note: {
+        borderRadius: 4,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        paddingTop: 18,
     },
-    partnerMsg: {
-        alignSelf: 'flex-start',
-        backgroundColor: '#2A2D3A',
-        borderBottomLeftRadius: 4,
+    notePartner: {
+        backgroundColor: '#F0EDE4',
+        borderColor: '#DDD8CB',
     },
-    senderName: {
-        fontSize: 10,
-        fontWeight: '700',
-        color: '#A78BFA',
-        marginBottom: 2,
+    noteMe: {
+        backgroundColor: '#FFF8DC',
+        borderColor: '#F5E6B8',
+    },
+    sender: {
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+        fontSize: 9,
+        fontWeight: '800',
+        color: '#5C4033',
+        marginBottom: 6,
         textTransform: 'uppercase',
-        letterSpacing: 0.5,
+        letterSpacing: 1.2,
+    },
+    drawLabel: {
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+        fontSize: 9,
+        fontWeight: '800',
+        color: '#5C4033',
+        marginBottom: 4,
+        letterSpacing: 1,
+        textTransform: 'uppercase',
     },
     text: {
-        fontSize: 15,
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+        fontSize: 14,
         lineHeight: 20,
-    },
-    myText: {
-        color: '#FFFFFF',
-    },
-    partnerText: {
-        color: '#E5E7EB',
+        color: '#2C1810',
+        fontWeight: '600',
     },
     time: {
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
         fontSize: 9,
-        color: 'rgba(255,255,255,0.5)',
-        marginTop: 4,
+        color: '#5C4033',
+        marginTop: 8,
         alignSelf: 'flex-end',
     },
 });
@@ -149,12 +167,10 @@ const bubbleStyles = StyleSheet.create({
 export default function PartnerChat({ isAuthenticated, partnerName, currentUserId }: Props) {
     const insets = useSafeAreaInsets();
     const [isOpen, setIsOpen] = useState(false);
-    const [text, setText] = useState('');
-    const flatListRef = useRef<FlatList>(null);
+    const [lastSent, setLastSent] = useState<string | null>(null);
 
     const { connected, messages, sendMessage } = useSocket(isAuthenticated);
 
-    // Pulse animation for the floating bubble
     const pulse = useSharedValue(1);
     useEffect(() => {
         pulse.value = withRepeat(
@@ -171,40 +187,60 @@ export default function PartnerChat({ isAuthenticated, partnerName, currentUserI
         transform: [{ scale: pulse.value }],
     }));
 
-    // Unread count - messages we haven't seen (chat is closed + from partner)
+    const partnerMessages = useMemo(
+        () =>
+            messages
+                .filter((m) => m.fromUserId !== currentUserId)
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+        [messages, currentUserId]
+    );
+
+    const latestPartnerMessage = partnerMessages[0] ?? null;
+
+    const latestOwnMessage = useMemo(
+        () =>
+            messages
+                .filter((m) => m.fromUserId === currentUserId)
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? null,
+        [messages, currentUserId]
+    );
+
+    const hasVisibleNotes = !!latestPartnerMessage || !!latestOwnMessage;
+
     const [lastSeenCount, setLastSeenCount] = useState(0);
     const unreadCount = useMemo(() => {
         if (isOpen) return 0;
-        const partnerMessages = messages.filter(m => m.fromUserId !== currentUserId);
         return Math.max(0, partnerMessages.length - lastSeenCount);
-    }, [messages, isOpen, currentUserId, lastSeenCount]);
+    }, [partnerMessages.length, isOpen, lastSeenCount]);
 
-    // When opening chat, mark all as seen
     useEffect(() => {
         if (isOpen) {
-            const partnerMessages = messages.filter(m => m.fromUserId !== currentUserId);
             setLastSeenCount(partnerMessages.length);
         }
-    }, [isOpen, messages, currentUserId]);
+    }, [isOpen, partnerMessages.length]);
 
-    // Auto-scroll to bottom when new messages arrive
     useEffect(() => {
-        if (isOpen && messages.length > 0) {
-            setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: true });
-            }, 100);
-        }
-    }, [messages.length, isOpen]);
+        if (!lastSent) return;
+        const timer = setTimeout(() => setLastSent(null), 3000);
+        return () => clearTimeout(timer);
+    }, [lastSent]);
 
-    const handleSend = () => {
-        if (!text.trim()) return;
-        sendMessage(text);
-        setText('');
+    const deliverMessage = (content: string, preview?: string) => {
+        sendMessage(content);
+        setLastSent(preview ?? content);
+    };
+
+    const handleComposeSend = (content: string) => {
+        if (!connected) {
+            Alert.alert('Chat unavailable', 'Live partner chat is not available right now.');
+            return;
+        }
+        const preview = content.startsWith('[DRAW]') ? 'Drawing sent' : content;
+        deliverMessage(content, preview);
     };
 
     return (
         <>
-            {/* FLOATING CHAT BUBBLE */}
             <Animated.View style={[styles.fabContainer, pulseStyle]}>
                 <TouchableOpacity
                     style={styles.fab}
@@ -223,30 +259,27 @@ export default function PartnerChat({ isAuthenticated, partnerName, currentUserI
                         )}
                     </LinearGradient>
                 </TouchableOpacity>
-                {/* Connection indicator dot */}
                 <View style={[styles.connDot, { backgroundColor: connected ? '#4ADE80' : '#EF4444' }]} />
             </Animated.View>
 
-            {/* CHAT MODAL */}
             <Modal
                 visible={isOpen}
                 animationType="slide"
-                transparent={true}
+                transparent
                 onRequestClose={() => setIsOpen(false)}
             >
                 <View style={[styles.modalContainer, { paddingTop: insets.top }]}>
                     <LinearGradient
                         colors={['#1A1B2E', '#16172B']}
-                        style={styles.chatContainer}
+                        style={styles.sheetContainer}
                     >
-                        {/* HEADER */}
                         <View style={styles.header}>
                             <View style={styles.headerLeft}>
                                 <View style={[styles.headerDot, { backgroundColor: connected ? '#4ADE80' : '#EF4444' }]} />
                                 <View>
-                                    <Text style={styles.headerTitle}>{partnerName}</Text>
+                                    <Text style={styles.headerTitle}>Note to {partnerName}</Text>
                                     <Text style={styles.headerSub}>
-                                        {connected ? 'Connected • Messages expire in 60s' : 'Connecting...'}
+                                        {connected ? 'Write a note • disappears in 60s' : 'Connecting...'}
                                     </Text>
                                 </View>
                             </View>
@@ -258,70 +291,58 @@ export default function PartnerChat({ isAuthenticated, partnerName, currentUserI
                             </TouchableOpacity>
                         </View>
 
-                        {/* MESSAGES */}
-                        <FlatList
-                            ref={flatListRef}
-                            data={messages}
-                            keyExtractor={(item) => item.id}
-                            renderItem={({ item }) => (
-                                <MessageBubble
-                                    msg={item}
-                                    isMe={item.fromUserId === currentUserId}
-                                />
-                            )}
-                            contentContainerStyle={styles.messageList}
-                            showsVerticalScrollIndicator={false}
-                            ListEmptyComponent={
-                                <View style={styles.emptyChat}>
-                                    <MessageCircle size={40} color="#374151" />
-                                    <Text style={styles.emptyChatText}>
-                                        Send a message to {partnerName}!
-                                    </Text>
-                                    <Text style={styles.emptyChatSub}>
-                                        Messages disappear after 60 seconds ⏱️
-                                    </Text>
-                                </View>
-                            }
-                        />
-
-                        {/* INPUT BAR */}
                         <KeyboardAvoidingView
+                            style={styles.body}
                             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                             keyboardVerticalOffset={insets.top}
                         >
-                            <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="Type a message..."
-                                    placeholderTextColor="#6B7280"
-                                    value={text}
-                                    onChangeText={setText}
-                                    onSubmitEditing={handleSend}
-                                    returnKeyType="send"
-                                    multiline={false}
-                                    maxLength={500}
+                            <View style={styles.notesArea}>
+                                {hasVisibleNotes ? (
+                                    <View style={styles.notesStack}>
+                                        {latestPartnerMessage && (
+                                            <PartnerNote msg={latestPartnerMessage} />
+                                        )}
+                                        {latestOwnMessage && (
+                                            <PartnerNote msg={latestOwnMessage} isMe />
+                                        )}
+                                    </View>
+                                ) : (
+                                    <Animated.View entering={FadeIn.duration(200)} style={styles.emptyNote}>
+                                        <PenLine size={28} color="#4B5563" />
+                                        <Text style={styles.emptyNoteTitle}>Send a quick note</Text>
+                                        <Text style={styles.emptyNoteSub}>
+                                            Use the note box below. Notes expire after 60 seconds.
+                                        </Text>
+                                    </Animated.View>
+                                )}
+                            </View>
+
+                            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+                                <PartnerNoteCompose
+                                    partnerName={partnerName}
+                                    disabled={!connected}
+                                    onSend={handleComposeSend}
                                 />
-                                <TouchableOpacity
-                                    style={[
-                                        styles.sendBtn,
-                                        (!text.trim() || !connected) && styles.sendBtnDisabled,
-                                    ]}
-                                    onPress={handleSend}
-                                    disabled={!text.trim() || !connected}
-                                >
-                                    <Send size={18} color="#FFF" />
-                                </TouchableOpacity>
                             </View>
                         </KeyboardAvoidingView>
                     </LinearGradient>
                 </View>
             </Modal>
+
+            {lastSent && !isOpen && (
+                <Animated.View
+                    entering={FadeIn.duration(200)}
+                    style={[styles.sentBanner, { bottom: insets.bottom + 100 }]}
+                >
+                    <Text style={styles.sentBannerLabel}>Sent to {partnerName}</Text>
+                    <Text style={styles.sentBannerText} numberOfLines={2}>{lastSent}</Text>
+                </Animated.View>
+            )}
         </>
     );
 }
 
 const styles = StyleSheet.create({
-    // -- FAB --
     fabContainer: {
         position: 'absolute',
         bottom: 100,
@@ -374,16 +395,14 @@ const styles = StyleSheet.create({
         borderColor: '#FFF',
     },
 
-    // -- MODAL --
     modalContainer: {
         flex: 1,
         backgroundColor: '#1A1B2E',
     },
-    chatContainer: {
+    sheetContainer: {
         flex: 1,
     },
 
-    // -- HEADER --
     header: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -397,6 +416,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
+        flex: 1,
     },
     headerDot: {
         width: 10,
@@ -422,63 +442,64 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
 
-    // -- MESSAGE LIST --
-    messageList: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        flexGrow: 1,
-        justifyContent: 'flex-end',
+    body: {
+        flex: 1,
+        justifyContent: 'space-between',
+    },
+    notesArea: {
+        flex: 1,
+        paddingHorizontal: 20,
+        paddingTop: 20,
+    },
+    notesStack: { gap: 4 },
+    footer: {
+        paddingHorizontal: 20,
+        paddingTop: 8,
+        gap: 8,
     },
 
-    // -- EMPTY STATE --
-    emptyChat: {
-        flex: 1,
-        justifyContent: 'center',
+    emptyNote: {
         alignItems: 'center',
-        paddingVertical: 60,
+        paddingVertical: 24,
+        marginBottom: 8,
     },
-    emptyChatText: {
+    emptyNoteTitle: {
+        color: '#E5E7EB',
+        fontSize: 16,
+        fontWeight: '700',
+        marginTop: 12,
+    },
+    emptyNoteSub: {
         color: '#6B7280',
-        fontSize: 15,
-        fontWeight: '600',
-        marginTop: 16,
-    },
-    emptyChatSub: {
-        color: '#4B5563',
-        fontSize: 12,
+        fontSize: 13,
+        textAlign: 'center',
         marginTop: 6,
+        lineHeight: 18,
+        paddingHorizontal: 12,
     },
 
-    // -- INPUT --
-    inputBar: {
-        flexDirection: 'row',
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        gap: 10,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.05)',
-        backgroundColor: 'rgba(0,0,0,0.2)',
+    sentBanner: {
+        position: 'absolute',
+        left: 20,
+        right: 20,
+        backgroundColor: 'rgba(26, 27, 46, 0.95)',
+        borderRadius: 14,
+        padding: 14,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.08)',
+        zIndex: 998,
     },
-    input: {
-        flex: 1,
-        backgroundColor: '#2A2D3A',
-        borderRadius: 24,
-        paddingHorizontal: 18,
-        paddingVertical: 12,
-        fontSize: 15,
-        color: '#FFFFFF',
-        maxHeight: 100,
+    sentBannerLabel: {
+        color: '#A78BFA',
+        fontSize: 10,
+        fontWeight: '800',
+        textTransform: 'uppercase',
+        letterSpacing: 0.8,
+        marginBottom: 4,
     },
-    sendBtn: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: '#FF6B6B',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    sendBtnDisabled: {
-        backgroundColor: '#374151',
-        opacity: 0.6,
+    sentBannerText: {
+        color: '#E5E7EB',
+        fontSize: 13,
+        lineHeight: 18,
     },
 });

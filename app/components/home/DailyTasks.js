@@ -1,4 +1,3 @@
-/* eslint-disable react/no-unescaped-entities */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
@@ -6,8 +5,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  TextInput
 } from 'react-native';
+import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import {
   Coffee,
   Utensils,
@@ -18,9 +17,10 @@ import {
   Droplets,
   Camera,
   Apple,
-  MessageSquare,
-  Zap
+  Check,
 } from 'lucide-react-native';
+import Reanimated, { FadeInUp, FadeOut } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { API_BASE_URL } from '../../config/api';
@@ -28,6 +28,9 @@ import { useAuth } from '@/src/auth/authContext';
 import { useWaterSync } from '../../hooks/useWaterSync';
 import { usePartnerSummary } from '../../hooks/usePartnerSummary';
 import { useChat } from '../../contexts/ChatContext';
+import { usePoints } from '../../hooks/usePoints';
+import { ReminderPartnerSheet } from '../partner/ReminderPartnerSheet';
+import { PARTNER_REMINDER_CATEGORIES } from '../partner/reminderAssets';
 
 const COLORS = {
   primary: '#FF6B6B',
@@ -39,10 +42,79 @@ const COLORS = {
   textMuted: '#9CA3AF',
   white: '#FFFFFF',
   border: '#F1F5F9',
-  danger: '#F43F5E',
 };
 
 const MEAL_TYPES = ["BREAKFAST", "LUNCH", "SNACK", "DINNER"];
+const WATER_GLASS_GOAL = 8;
+const PARTNER_WATER_STALE_MS = 2 * 60 * 60 * 1000;
+const HYDRATION_REMINDER_CATEGORIES = PARTNER_REMINDER_CATEGORIES.filter(
+  (category) => category.id === 'hydration',
+);
+
+function partnerNeedsWaterNudge(partnerSummary) {
+  if (!partnerSummary) return false;
+
+  const now = new Date();
+  if ((partnerSummary.waterMl ?? 0) === 0) {
+    return now.getHours() >= 10;
+  }
+
+  if (!partnerSummary.lastWaterUpdate) return false;
+
+  const diff = Date.now() - new Date(partnerSummary.lastWaterUpdate).getTime();
+  return diff > PARTNER_WATER_STALE_MS;
+}
+
+const GLASS_BODY =
+  'M 18 14 C 18 9 46 9 46 14 L 48 66 C 48 72 16 72 16 66 Z';
+const GLASS_WATER =
+  'M 20 30 L 18.5 64 C 18.5 68 45.5 68 45.5 64 L 44 30 Z';
+const GLASS_RIM =
+  'M 18 14 C 18 10 46 10 46 14';
+const GLASS_HIGHLIGHT =
+  'M 22 18 L 21 62 C 21 65 24 65 26 65 L 27 18 Z';
+
+function HydrationGlass({ filled, onPress, disabled, index }) {
+  const gradientId = `hydration-water-${index}`;
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      style={styles.glassBtn}
+      activeOpacity={disabled ? 1 : 0.8}
+    >
+      <Svg width={34} height={42} viewBox="0 0 64 80">
+        <Defs>
+          <LinearGradient id={gradientId} x1="32" y1="28" x2="32" y2="70" gradientUnits="userSpaceOnUse">
+            <Stop offset="0" stopColor="#BAE6FD" />
+            <Stop offset="1" stopColor={COLORS.water} />
+          </LinearGradient>
+        </Defs>
+
+        <Path
+          d={GLASS_BODY}
+          fill={filled ? '#F0F9FF' : '#F8FAFC'}
+          stroke={filled ? '#7DD3FC' : '#CBD5E1'}
+          strokeWidth={2}
+        />
+
+        {filled ? (
+          <Path d={GLASS_WATER} fill={`url(#${gradientId})`} />
+        ) : null}
+
+        <Path d={GLASS_HIGHLIGHT} fill="rgba(255,255,255,0.42)" />
+        <Path
+          d={GLASS_RIM}
+          fill="none"
+          stroke={filled ? COLORS.water : '#94A3B8'}
+          strokeWidth={2.5}
+          strokeLinecap="round"
+        />
+      </Svg>
+    </TouchableOpacity>
+  );
+}
 
 const ICON_MAP = {
   BREAKFAST: Coffee,
@@ -53,40 +125,30 @@ const ICON_MAP = {
 
 const MealTrackerSection = () => {
   const { authFetch, isAuthenticated, accessToken } = useAuth();
-  const { sendMessage } = useChat();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { sendMessage, connected: chatConnected } = useChat();
+  const { balance: pointsBalance } = usePoints({ accessToken });
   const [activeUser, setActiveUser] = useState('me');
+  const [showWaterReminderSheet, setShowWaterReminderSheet] = useState(false);
+  const [waterNudgeSent, setWaterNudgeSent] = useState(false);
+  const [devForceWaterNudge, setDevForceWaterNudge] = useState(false);
   
   // Get partner summary for hydration tracking
-  const { partnerData, loading: partnerSummaryLoading } = usePartnerSummary({ accessToken });
-
-  // Nudge state
-  const [nudgeExpanded, setNudgeExpanded] = useState(false);
-  const [customNudge, setCustomNudge] = useState('');
-  const [nudgeSentAt, setNudgeSentAt] = useState(null);
-
-  // Auto-clear nudge cooldown after 1 hour
-  useEffect(() => {
-    if (!nudgeSentAt) return;
-    const remaining = 60 * 60 * 1000 - (Date.now() - nudgeSentAt);
-    if (remaining <= 0) { setNudgeSentAt(null); return; }
-    const timer = setTimeout(() => setNudgeSentAt(null), remaining);
-    return () => clearTimeout(timer);
-  }, [nudgeSentAt]);
+  const { partnerData, hasPartner, loading: partnerSummaryLoading } = usePartnerSummary({ accessToken });
 
   const [loading, setLoading] = useState(true);
   const [meals, setMeals] = useState([]);
   const [dailyTotalCalories, setDailyTotalCalories] = useState(0);
 
   // Water tracking with offline-first sync
-  const { waterMl, glassCount, logWater, lastLoggedAt } = useWaterSync({ accessToken });
+  const { glassCount, setWaterTotal } = useWaterSync({ accessToken });
 
   // Partner data state
   const [partnerLoading, setPartnerLoading] = useState(false);
   const [partnerMeals, setPartnerMeals] = useState([]);
   const [partnerTotalCalories, setPartnerTotalCalories] = useState(0);
   const [partnerName, setPartnerName] = useState('Partner');
-  const [hasPartner, setHasPartner] = useState(false);
 
   const ACTIVE_COLOR = activeUser === 'me' ? COLORS.primary : COLORS.action;
 
@@ -126,7 +188,6 @@ const MealTrackerSection = () => {
       });
       if (!resp.ok) throw new Error(`Failed to fetch partner meals: ${resp.status}`);
       const json = await resp.json();
-      setHasPartner(json?.hasPartner || false);
       setPartnerMeals(json?.meals || []);
       setPartnerTotalCalories(json?.totalCalories || 0);
       if (json?.partner?.name) {
@@ -146,6 +207,16 @@ const MealTrackerSection = () => {
       params: mealType ? { ...params, mealType } : params,
     });
   }, [router]);
+
+  const handleUpdateWater = useCallback(async (glasses) => {
+    if (activeUser !== 'me') return;
+
+    try {
+      await setWaterTotal(glasses * 250);
+    } catch (e) {
+      console.error('Water update error:', e);
+    }
+  }, [activeUser, setWaterTotal]);
 
   useEffect(() => {
     fetchTodayMeals();
@@ -169,50 +240,34 @@ const MealTrackerSection = () => {
   }, [activeUser, fetchPartnerMeals]);
 
   // Optimized State Selection
-  const { currentMeals, currentDailyCals, currentWater, currentWaterMl, isLoading } = useMemo(() => ({
+  const { currentMeals, currentDailyCals, currentWater, isLoading } = useMemo(() => ({
     currentMeals: activeUser === 'me' ? meals : partnerMeals,
     currentDailyCals: activeUser === 'me' ? dailyTotalCalories : partnerTotalCalories,
     currentWater: activeUser === 'me' ? glassCount : (partnerData?.waterMl ? Math.floor(partnerData.waterMl / 250) : 0),
-    currentWaterMl: activeUser === 'me' ? waterMl : (partnerData?.waterMl || 0),
     isLoading: activeUser === 'me' ? loading : (partnerLoading || partnerSummaryLoading)
-  }), [activeUser, meals, partnerMeals, dailyTotalCalories, partnerTotalCalories, glassCount, waterMl, loading, partnerLoading, partnerData, partnerSummaryLoading]);
+  }), [activeUser, meals, partnerMeals, dailyTotalCalories, partnerTotalCalories, glassCount, loading, partnerLoading, partnerData, partnerSummaryLoading]);
 
   const totalSugar = useMemo(() => Math.round(currentDailyCals * 0.05), [currentDailyCals]);
   const sugarLimit = 40;
-  
-  // Calculate if partner's last water log was > 6 hours ago
-  const partnerDehydrated = useMemo(() => {
-    if (activeUser !== 'partner' || !partnerData) return false;
-    
-    const now = new Date();
-    const currentHour = now.getHours();
+  const showPartnerWaterNudge = useMemo(
+    () => (__DEV__ && devForceWaterNudge) || (hasPartner && partnerNeedsWaterNudge(partnerData)),
+    [devForceWaterNudge, hasPartner, partnerData],
+  );
+  const shouldShowWaterNudgeBanner = showPartnerWaterNudge
+    && (activeUser === 'partner' || (__DEV__ && devForceWaterNudge));
+  const partnerReminderName = partnerName || partnerData?.name || 'Partner';
+  const partnerFirstName = partnerReminderName.split(/\s+/)[0] || 'Partner';
 
-    // If NO water logged today at all
-    if (partnerData.waterMl === 0) {
-      // Show nudge if it's past 10 AM and they haven't logged anything
-      return currentHour >= 10;
+  const handleSendWaterReminder = useCallback((message) => {
+    if (sendMessage) {
+      sendMessage(message);
     }
-    
-    // If they have logged water, check the last update time
-    if (!partnerData.lastWaterUpdate) return false;
 
-    const diff = Date.now() - new Date(partnerData.lastWaterUpdate).getTime();
-    return diff > 6 * 60 * 60 * 1000;
-  }, [partnerData, activeUser]);
-
-  const showPartnerWaterNudge = partnerDehydrated;
-
-  const handleSendNudge = () => {
-    const funnyMessages = [
-      `HEY ${partnerName.toUpperCase()}! Your kidneys called. They're thirsty. 🏜️`,
-      `DRINK WATER you raisin! 🏜️`,
-      `The desert is jealous of your hydration levels. Drink up! 🐫`,
-      `Water is life. Don't be a ghost. 👻`,
-      `Log some water or I'm calling the H2O police. 📉`
-    ];
-    const msg = funnyMessages[Math.floor(Math.random() * funnyMessages.length)];
-    sendMessage(msg);
-  };
+    setWaterNudgeSent(true);
+    setTimeout(() => {
+      setWaterNudgeSent(false);
+    }, 3000);
+  }, [sendMessage]);
 
   return (
     <View style={styles.container}>
@@ -229,74 +284,6 @@ const MealTrackerSection = () => {
           </TouchableOpacity>
         </View>
       </View>
-
-      {showPartnerWaterNudge && !nudgeSentAt && (
-        <View style={[styles.alertCard, { backgroundColor: COLORS.water, flexDirection: 'column', paddingBottom: nudgeExpanded ? 14 : 12 }]}>
-          <TouchableOpacity 
-            style={{ flexDirection: 'row', alignItems: 'center' }}
-            onPress={() => setNudgeExpanded(!nudgeExpanded)}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.alertCircle, { backgroundColor: 'rgba(255,255,255,0.3)' }]}>
-              <Droplets size={20} color={COLORS.white} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.alertTitle}>Dry Spell! 🏜️</Text>
-              <Text style={styles.alertSub}>Tap to nudge {partnerName}</Text>
-            </View>
-            <Zap size={24} color={COLORS.white} />
-          </TouchableOpacity>
-
-          {nudgeExpanded && (
-            <View style={{ marginTop: 10 }}>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                {[
-                  `DRINK WATER you raisin! 🏜️`,
-                  `Your kidneys called... 💧`,
-                  `Don't be a desert 🐫`,
-                ].map((preset, i) => (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => { sendMessage(preset); setNudgeSentAt(Date.now()); setNudgeExpanded(false); }}
-                    style={{ backgroundColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 }}
-                  >
-                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>{preset}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, paddingHorizontal: 10 }}>
-                <TextInput
-                  value={customNudge}
-                  onChangeText={setCustomNudge}
-                  placeholder="Type your own nudge..."
-                  placeholderTextColor="rgba(255,255,255,0.6)"
-                  style={{ flex: 1, color: '#fff', fontSize: 13, paddingVertical: 8 }}
-                />
-                <TouchableOpacity 
-                  onPress={() => { 
-                    if (customNudge.trim()) { sendMessage(customNudge.trim()); setCustomNudge(''); setNudgeSentAt(Date.now()); setNudgeExpanded(false); }
-                  }}
-                  style={{ padding: 6 }}
-                >
-                  <MessageSquare size={18} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-        </View>
-      )}
-
-      {nudgeSentAt && showPartnerWaterNudge && (
-        <View style={[styles.alertCard, { backgroundColor: '#10B981' }]}>
-          <View style={[styles.alertCircle, { backgroundColor: 'rgba(255,255,255,0.3)' }]}>
-            <Droplets size={20} color={COLORS.white} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.alertTitle}>Nudge Sent ✓</Text>
-            <Text style={styles.alertSub}>You'll be able to nudge again in 1hr</Text>
-          </View>
-        </View>
-      )}
 
       <View style={styles.sectionHeaderRow}>
         <Text style={styles.miniLabel}>DAILY INTAKE</Text>
@@ -378,17 +365,57 @@ const MealTrackerSection = () => {
             <Droplets size={16} color={COLORS.water} />
             <Text style={styles.miniLabel}>HYDRATION</Text>
           </View>
-          <Text style={styles.waterCount}>{currentWaterMl}ml</Text>
+          <Text style={styles.waterCount}>
+            {currentWater} of {WATER_GLASS_GOAL} glasses
+          </Text>
         </View>
-        <View style={styles.waterGrid}>
-          {[...Array(8)].map((_, i) => (
+
+        {shouldShowWaterNudgeBanner ? (
+          <View style={styles.partnerWaterAlert}>
+            <View style={styles.partnerWaterAlertCopy}>
+              <Droplets size={16} color={COLORS.water} />
+              <Text style={styles.partnerWaterAlertText}>
+                {partnerFirstName} hasn&apos;t drunk water for a while now
+              </Text>
+            </View>
             <TouchableOpacity
+              style={styles.partnerWaterAlertBtn}
+              onPress={() => setShowWaterReminderSheet(true)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.partnerWaterAlertBtnText}>Remind now</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        <View style={styles.glassRow}>
+          {[...Array(WATER_GLASS_GOAL)].map((_, i) => (
+            <HydrationGlass
               key={i}
-              onPress={() => activeUser === 'me' && i >= currentWater && logWater()}
-              style={[styles.waterDrop, i < currentWater ? { backgroundColor: COLORS.water } : { backgroundColor: '#F1F5F9' }]}
+              index={i}
+              filled={i < currentWater}
+              onPress={() => handleUpdateWater(i + 1)}
+              disabled={activeUser !== 'me'}
             />
           ))}
         </View>
+
+        {__DEV__ ? (
+          <TouchableOpacity
+            style={[styles.devWaterToggle, devForceWaterNudge && styles.devWaterToggleActive]}
+            onPress={() => setDevForceWaterNudge((current) => !current)}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={[
+                styles.devWaterToggleText,
+                devForceWaterNudge && styles.devWaterToggleTextActive,
+              ]}
+            >
+              {devForceWaterNudge ? 'Dev: water nudge on' : 'Dev: water nudge'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <View style={styles.sugarSection}>
@@ -403,23 +430,38 @@ const MealTrackerSection = () => {
           }]} />
         </View>
       </View>
+
+      <ReminderPartnerSheet
+        visible={showWaterReminderSheet}
+        onClose={() => setShowWaterReminderSheet(false)}
+        bottomInset={insets.bottom}
+        partnerName={partnerReminderName}
+        pointsBalance={pointsBalance}
+        chatConnected={chatConnected}
+        categories={HYDRATION_REMINDER_CATEGORIES}
+        onSendReminder={handleSendWaterReminder}
+      />
+
+      {waterNudgeSent ? (
+        <Reanimated.View entering={FadeInUp} exiting={FadeOut} style={styles.sentOverlay}>
+          <View style={styles.sentPill}>
+            <Check size={14} color="#FFF" strokeWidth={2.5} />
+            <Text style={styles.sentPillText}>Sent to {partnerFirstName}</Text>
+          </View>
+        </Reanimated.View>
+      ) : null}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { paddingVertical: 10 },
+  container: { paddingVertical: 10, position: 'relative' },
   topNav: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 25 },
   sectionTitle: { fontSize: 18, fontWeight: '900', color: COLORS.text, letterSpacing: -0.5 },
   pillSelector: { flexDirection: 'row', backgroundColor: '#F1F5F9', padding: 4, borderRadius: 100 },
   pill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 100, gap: 6 },
   pillActive: { backgroundColor: COLORS.white, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 },
   pillText: { fontSize: 13, fontWeight: '700', color: COLORS.textMuted },
-
-  alertCard: { backgroundColor: COLORS.danger, borderRadius: 24, padding: 20, flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 25 },
-  alertCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
-  alertTitle: { color: 'white', fontWeight: '900', fontSize: 16 },
-  alertSub: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
 
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   logBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primary, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 100 },
@@ -447,14 +489,108 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   miniLabel: { fontSize: 11, fontWeight: '900', color: COLORS.textMuted, letterSpacing: 1 },
   waterCount: { fontSize: 14, fontWeight: '800', color: COLORS.water },
-  waterGrid: { flexDirection: 'row', gap: 8 },
-  waterDrop: { flex: 1, height: 35, borderRadius: 10 },
+  partnerWaterAlert: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: '#F0F9FF',
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+  },
+  partnerWaterAlertCopy: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  partnerWaterAlertText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    color: '#0C4A6E',
+  },
+  partnerWaterAlertBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: COLORS.water,
+  },
+  partnerWaterAlertBtnText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: COLORS.white,
+    letterSpacing: 0.2,
+  },
+  glassRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'space-between',
+  },
+  glassBtn: {
+    width: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  devWaterToggle: {
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+  },
+  devWaterToggleActive: {
+    backgroundColor: '#F0F9FF',
+    borderColor: COLORS.water,
+  },
+  devWaterToggleText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+  },
+  devWaterToggleTextActive: {
+    color: '#0369A1',
+  },
 
   sugarSection: { paddingBottom: 40 },
   progressTrack: { height: 10, backgroundColor: '#F1F5F9', borderRadius: 5, overflow: 'hidden', marginTop: 8 },
   progressBar: { height: '100%', borderRadius: 5 },
-
-  
+  sentOverlay: {
+    position: 'absolute',
+    bottom: 8,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  sentPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    backgroundColor: COLORS.water,
+    gap: 8,
+    shadowColor: COLORS.water,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  sentPillText: {
+    color: COLORS.white,
+    fontWeight: '700',
+    fontSize: 13,
+    letterSpacing: -0.1,
+  },
 });
 
 export default MealTrackerSection;

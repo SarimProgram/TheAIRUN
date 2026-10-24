@@ -128,6 +128,19 @@ const MIGRATIONS = [
       );
     `,
     },
+    {
+        name: '006_run_session_workout_metadata',
+        sql: `
+      ALTER TABLE run_sessions ADD COLUMN workoutType TEXT DEFAULT 'RUN';
+      ALTER TABLE run_sessions ADD COLUMN title TEXT;
+    `,
+    },
+    {
+        name: '007_run_session_perceived_effort',
+        sql: `
+      ALTER TABLE run_sessions ADD COLUMN perceivedEffort TEXT;
+    `,
+    },
 ];
 
 // ============ Step Samples (Local Only) ============
@@ -476,6 +489,9 @@ export type LocalRunRow = {
     durationSeconds: number;
     totalDistanceMeters: number;
     avgPaceSecPerKm: number | null;
+    workoutType: 'RUN' | 'WALK' | null;
+    title: string | null;
+    perceivedEffort: 'TOO_EASY' | 'ABOUT_RIGHT' | 'TOO_HARD' | null;
     calories: number;
     routeJson: string | null;
     synced: number;
@@ -486,14 +502,17 @@ export async function insertRunSession(row: Omit<LocalRunRow, 'synced'> & { sync
     const db = await getDatabase();
     await db.runAsync(
         `INSERT OR REPLACE INTO run_sessions 
-     (id, startedAt, endedAt, durationSeconds, totalDistanceMeters, avgPaceSecPerKm, calories, routeJson, synced, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, startedAt, endedAt, durationSeconds, totalDistanceMeters, avgPaceSecPerKm, workoutType, title, perceivedEffort, calories, routeJson, synced, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         row.id,
         row.startedAt,
         row.endedAt ?? null,
         row.durationSeconds,
         row.totalDistanceMeters,
         row.avgPaceSecPerKm ?? null,
+        row.workoutType ?? 'RUN',
+        row.title ?? null,
+        row.perceivedEffort ?? null,
         row.calories ?? 0,
         row.routeJson ?? null,
         row.synced ?? 0,

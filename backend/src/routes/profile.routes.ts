@@ -4,6 +4,13 @@ import prisma from '../db/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { presentUser } from './presenters';
 import { mergeNotificationPreferences, normalizeNotificationPreferences } from '../lib/notificationPreferences';
+import {
+  ensurePaceProfile,
+  presentPaceProfile,
+  recalculatePaces,
+  resetPaces,
+  undoLastPaceChange,
+} from '../services/pacePersonalisation';
 
 const router = Router();
 
@@ -60,6 +67,11 @@ const notificationPreferencesSchema = z.object({
   }),
 });
 
+const paceAutoAdjustSchema = z.object({ autoAdjust: z.boolean() }).strict();
+const paceUndoSchema = z.object({
+  mode: z.enum(['RUNNING', 'WALKING']).optional(),
+}).strict();
+
 router.get('/', async (req: AuthRequest, res, next) => {
   try {
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
@@ -79,11 +91,42 @@ router.post('/', async (req: AuthRequest, res, next) => {
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
     const body = updateProfileSchema.parse(req.body);
 
+    const existingUser = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { weightKg: true },
+    });
+
     const user = await (prisma as any).user.update({
       where: { id: req.user.id },
       data: body,
       include: { billingProfile: true },
     });
+
+    const nextWeightKg =
+      typeof body.weightKg === 'number'
+        ? body.weightKg
+        : typeof body.weightLbs === 'number'
+          ? body.weightLbs / 2.20462
+          : null;
+    if (
+      nextWeightKg != null &&
+      existingUser?.weightKg != null &&
+      Math.abs(nextWeightKg - existingUser.weightKg) >= 0.05
+    ) {
+      await prisma.weightHistory.create({
+        data: {
+          userId: req.user.id,
+          weightKg: nextWeightKg,
+        },
+      });
+    } else if (nextWeightKg != null && existingUser?.weightKg == null) {
+      await prisma.weightHistory.create({
+        data: {
+          userId: req.user.id,
+          weightKg: nextWeightKg,
+        },
+      });
+    }
 
     if (body.timezone) {
       // Update timezone in all daily summaries for this user to keep it consistent
@@ -94,6 +137,62 @@ router.post('/', async (req: AuthRequest, res, next) => {
     }
 
     return res.json({ user: presentUser(user) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/pace', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    const profile = await ensurePaceProfile(prisma, req.user.id);
+    return res.json(presentPaceProfile(profile));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.patch('/pace', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    const { autoAdjust } = paceAutoAdjustSchema.parse(req.body);
+    await ensurePaceProfile(prisma, req.user.id);
+    const profile = await (prisma as any).paceProfile.update({
+      where: { userId: req.user.id },
+      data: { autoAdjust },
+    });
+    return res.json(presentPaceProfile(profile));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/pace/recalculate', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    const profile = await prisma.$transaction((tx) => recalculatePaces(tx, req.user!.id));
+    return res.json(presentPaceProfile(profile));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/pace/reset', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    const profile = await prisma.$transaction((tx) => resetPaces(tx, req.user!.id));
+    return res.json(presentPaceProfile(profile));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/pace/undo', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    const { mode } = paceUndoSchema.parse(req.body ?? {});
+    const profile = await prisma.$transaction((tx) => undoLastPaceChange(tx, req.user!.id, mode));
+    return res.json(presentPaceProfile(profile));
   } catch (err) {
     return next(err);
   }

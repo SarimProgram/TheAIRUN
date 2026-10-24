@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Dimensions, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Dimensions, ActivityIndicator, Alert, BackHandler } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import MapView, { Marker, Polyline, type LatLng } from "react-native-maps";
@@ -17,6 +17,7 @@ import Animated, {
 // Removed the old IntervalProgressStrip import to use the modern one defined below
 import { MOCK_INTERVAL_SESSION, INTERVAL_COLORS } from '@/types/IntervalValues';
 import { useRunTracker } from "@/hooks/useRunTracker";
+import { matchesRunTypeAliases } from '@/constants/runDetails';
 import { getRunTemplate } from "@/lib/run-templates";
 import { RunType } from "@/types/RunTemplate";
 import { RunResultScreen } from "./RunPhotoCaptur";
@@ -24,16 +25,23 @@ import { useAuth } from '@/src/auth/authContext';
 import { useTabBar } from '@/contexts/TabBarContext';
 import { API_BASE_URL } from '@/config/api';
 import { haversineDistanceMeters } from '@/lib/geo';
+import { estimateDistanceCalories } from '@/lib/calorie-burn';
+import { saveRun, syncPendingRuns } from '@/lib/run-storage';
+import type { Run } from '@/types/run';
 import {
+    applyIntervalRunTargetsToSteps,
     applyIntervalWalkTargetsToSteps,
-    buildIntervalWalkDistanceSteps,
+    buildIntervalRunPaceTargets,
     buildIntervalWalkPaceTargets,
+} from '@/lib/interval-pace-targets';
+import {
+    buildIntervalWalkDistanceSteps,
     buildIntervalWalkQuickSteps,
     IntervalWalkPaceTargets,
     IntervalWorkoutKind,
     IntervalWorkoutStep,
-    loadIntervalWalkPaceTargets,
 } from '@/lib/interval-workout';
+import { usePaceProfile } from '@/hooks/usePaceProfile';
 
 const { width, height } = Dimensions.get('window');
 
@@ -189,16 +197,6 @@ type IntervalScreenConfig = {
     counterLabel: string;
     fallbackRunTypeAliases: string[];
 };
-
-function normalizeText(value: string | null | undefined) {
-    return (value || '').trim().toLowerCase();
-}
-
-function matchesRunTypeAliases(runType: string | null | undefined, aliases: string[]) {
-    const normalized = normalizeText(runType);
-    if (!normalized) return false;
-    return aliases.some((alias) => normalized.includes(alias) || alias.includes(normalized));
-}
 
 function getIntervalScreenConfig(workoutKind: IntervalWorkoutKind): IntervalScreenConfig {
     if (workoutKind === 'interval_walk') {
@@ -385,7 +383,8 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
         weekContext?: string;
         intervalMode?: string;
     }>();
-    const { authFetch } = useAuth();
+    const { authFetch, user } = useAuth();
+    const userWeightKg = typeof user?.weightKg === 'number' && user.weightKg > 0 ? user.weightKg : undefined;
     const { setTabBarVisible } = useTabBar();
     const screenConfig = useMemo(() => getIntervalScreenConfig(workoutKind), [workoutKind]);
     const requestedDistanceKm = useMemo(() => parseDistanceKmParam(params.distanceKm), [params.distanceKm]);
@@ -399,6 +398,8 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
         resumeRun,
         finishRun,
         resetRun,
+        startTime,
+        endTime,
         distanceM,
         elapsedSec,
         paceSecPerKm,
@@ -406,7 +407,9 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
     } = useRunTracker();
 
     const template = useMemo(() => getRunTemplate(screenConfig.templateId), [screenConfig.templateId]);
-    const [walkPaces, setWalkPaces] = useState<IntervalWalkPaceTargets>(() => buildIntervalWalkPaceTargets({}));
+    const { profile: paceProfile } = usePaceProfile(true);
+    const intervalRunTargets = useMemo(() => buildIntervalRunPaceTargets(paceProfile), [paceProfile]);
+    const [walkPaces, setWalkPaces] = useState<IntervalWalkPaceTargets>(() => buildIntervalWalkPaceTargets(null));
 
     // 2. Local Interval State
     const [segments, setSegments] = useState<IntervalSegment[]>(MOCK_INTERVAL_SESSION);
@@ -417,6 +420,8 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
     const [segmentStartTime, setSegmentStartTime] = useState<Date | null>(null); // Track when segment started
     const [segmentStartDistanceM, setSegmentStartDistanceM] = useState(0); // Track distance at start of segment
     const [isFollowingUser, setIsFollowingUser] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
+    const handleBackPressRef = useRef<() => void>(() => {});
 
     const currentSegment = segments[currentSegmentIndex] || segments[0];
     const currentStep = uiSteps?.[currentSegmentIndex];
@@ -474,12 +479,9 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
         const loadPlanSession = async () => {
             setSegmentsLoading(true);
             try {
-                let activeWalkPaces = walkPaces;
-                if (screenConfig.workoutKind === 'interval_walk') {
-                    activeWalkPaces = await loadIntervalWalkPaceTargets(authFetch);
-                    if (isActive) {
-                        setWalkPaces(activeWalkPaces);
-                    }
+                let activeWalkPaces = buildIntervalWalkPaceTargets(paceProfile);
+                if (screenConfig.workoutKind === 'interval_walk' && isActive) {
+                    setWalkPaces(activeWalkPaces);
                 }
 
                 const launchMode = params.intervalMode === 'time' || params.intervalMode === 'distance'
@@ -495,7 +497,10 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
                 );
 
                 if (shouldUseCustomWalkDistance) {
-                    const quickSteps = buildIntervalWalkDistanceSteps(requestedDistanceKm, activeWalkPaces);
+                    const quickSteps = applyIntervalWalkTargetsToSteps(
+                        buildIntervalWalkDistanceSteps(requestedDistanceKm, activeWalkPaces),
+                        activeWalkPaces,
+                    );
                     const mapped = uiStepsToSegments(quickSteps, template);
                     if (mapped.length > 0 && isActive) {
                         setSegments(mapped);
@@ -505,7 +510,12 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
                 }
 
                 if (launchMode && shouldUseQuickLaunch) {
-                    const quickSteps = buildQuickWorkoutSteps(screenConfig, launchMode, activeWalkPaces);
+                    let quickSteps = buildQuickWorkoutSteps(screenConfig, launchMode, activeWalkPaces);
+                    if (screenConfig.workoutKind === 'interval_run') {
+                        quickSteps = applyIntervalRunTargetsToSteps(quickSteps, intervalRunTargets);
+                    } else {
+                        quickSteps = applyIntervalWalkTargetsToSteps(quickSteps, activeWalkPaces);
+                    }
                     const mapped = uiStepsToSegments(quickSteps, template);
                     if (mapped.length > 0 && isActive) {
                         setSegments(mapped);
@@ -560,10 +570,24 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
                     }
                 }
 
+                if (!steps && screenConfig.workoutKind === 'interval_run') {
+                    steps = applyIntervalRunTargetsToSteps(
+                        buildQuickIntervalSteps(launchMode ?? 'time'),
+                        intervalRunTargets,
+                    );
+                }
+
+                if (!steps && screenConfig.workoutKind === 'interval_walk') {
+                    steps = applyIntervalWalkTargetsToSteps(
+                        buildIntervalWalkQuickSteps(activeWalkPaces),
+                        activeWalkPaces,
+                    );
+                }
+
                 if (Array.isArray(steps)) {
                     const normalizedSteps = screenConfig.workoutKind === 'interval_walk'
                         ? applyIntervalWalkTargetsToSteps(steps, activeWalkPaces)
-                        : steps;
+                        : applyIntervalRunTargetsToSteps(steps, intervalRunTargets);
                     const mapped = uiStepsToSegments(normalizedSteps, template);
                     if (mapped.length > 0 && isActive) {
                         setSegments(mapped);
@@ -582,7 +606,7 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
         return () => {
             isActive = false;
         };
-    }, [params.distanceKm, params.intervalMode, params.sessionId, authFetch, requestedDistanceKm, screenConfig, template]);
+    }, [params.distanceKm, params.intervalMode, params.sessionId, authFetch, requestedDistanceKm, screenConfig, template, intervalRunTargets, paceProfile]);
 
     useEffect(() => {
         if (segments.length === 0) return;
@@ -652,10 +676,86 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
         router.back();
     };
 
+    const saveAndExitCurrentSession = async () => {
+        if (!startTime || isSaving) return;
+
+        const finalEndTime = endTime ?? new Date();
+        const workoutType: NonNullable<Run['workoutType']> =
+            screenConfig.workoutKind === 'interval_walk' ? 'WALK' : 'RUN';
+        const partialRun: Run = {
+            id: `${startTime.toISOString()}_${finalEndTime.toISOString()}`,
+            startedAt: startTime.toISOString(),
+            endedAt: finalEndTime.toISOString(),
+            durationSeconds: elapsedSec,
+            totalDistanceMeters: distanceM,
+            avgPaceSecPerKm: distanceM > 10 ? elapsedSec / (distanceM / 1000) : null,
+            workoutType,
+            title: template.title,
+            calories: estimateDistanceCalories(
+                distanceM,
+                screenConfig.workoutKind === 'interval_walk' ? 'WALK' : 'RUN',
+                userWeightKg,
+            ),
+            route: runRoute,
+        };
+
+        try {
+            setIsSaving(true);
+            await finishRun();
+            await saveRun(partialRun);
+            void syncPendingRuns(authFetch).catch(() => {});
+            router.back();
+        } catch (error) {
+            console.warn('Failed to save partial interval workout before exit', error);
+            Alert.alert(
+                'Could not save workout',
+                'Your workout is still open. Please try again so your distance is not lost.'
+            );
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleBackPress = () => {
+        if (isSaving) return;
+
+        if (runState === 'idle' || !startTime) {
+            router.back();
+            return;
+        }
+
+        const activityName = screenConfig.workoutKind === 'interval_walk' ? 'walk' : 'run';
+        Alert.alert(
+            `Save and exit this ${activityName}?`,
+            `Your completed ${(distanceM / 1000).toFixed(2)} km will be saved to your activity history.`,
+            [
+                { text: 'Keep Going', style: 'cancel' },
+                {
+                    text: 'Save & Exit',
+                    onPress: () => {
+                        void saveAndExitCurrentSession();
+                    },
+                },
+            ]
+        );
+    };
+
+    handleBackPressRef.current = handleBackPress;
+
+    useEffect(() => {
+        const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+            handleBackPressRef.current();
+            return true;
+        });
+
+        return () => subscription.remove();
+    }, []);
+
     // Derived values
     const currentKm = (distanceM / 1000).toFixed(2);
     const elapsedTimeLabel = formatDurationShort(elapsedSec);
-    const calories = Math.floor(distanceM * 0.065);
+    const intervalWorkoutType = screenConfig.workoutKind === 'interval_walk' ? 'WALK' : 'RUN';
+    const calories = estimateDistanceCalories(distanceM, intervalWorkoutType, userWeightKg);
     const formatTime = (sec: number) => {
         const h = Math.floor(sec / 3600);
         const m = Math.floor((sec % 3600) / 60);
@@ -822,7 +922,7 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
                 {/* HEADER (Only show back button when idle to avoid overlapping HUD) */}
                 {runState === 'idle' && (
                     <View style={styles.header}>
-                        <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
+                        <TouchableOpacity onPress={handleBackPress} style={styles.iconButton}>
                             <ChevronLeft color={COLORS.textDark} size={24} />
                         </TouchableOpacity>
                     </View>

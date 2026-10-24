@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Runtogether",
+    "name": "RunTogether",
     "slug": "app",
-    "version": "1.1",
+    "version": "1.2.2",
     "orientation": "portrait",
     "icon": "./assets/iosicon.png",
     "scheme": "app",
@@ -10,16 +10,17 @@
     "ios": {
       "bundleIdentifier": "au.com.msarim.theaicoach",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "buildNumber": "10",
+      "buildNumber": "13",
       "supportsTablet": false,
       "infoPlist": {
         "NSHealthShareUsageDescription": "We use your step count to sync and compare progress with your partner.",
         "NSHealthUpdateUsageDescription": "We may write workouts or activity sessions to your Health data to track progress.",
-        "NSMotionUsageDescription": "Runtogether uses motion activity to count steps for step battles, such as showing your live steps during a race.",
+        "NSMotionUsageDescription": "RunTogether uses motion activity to count steps for step battles, such as showing your live steps during a race.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location in the background to track your running route and distance.",
-        "NSLocationAlwaysUsageDescription": "Runtogether uses background location to keep tracking your route and distance when your screen locks during a run.",
+        "NSLocationAlwaysUsageDescription": "RunTogether uses background location to keep tracking your route and distance when your screen locks during a run.",
         "NSLocationWhenInUseUsageDescription": "We need your location to track your running route and distance.",
         "ITSAppUsesNonExemptEncryption": false,
+        "FirebaseAutomaticScreenReportingEnabled": false,
         "BGTaskSchedulerPermittedIdentifiers": [
           "com.expo.modules.backgroundtask.processing"
         ],
@@ -27,9 +28,13 @@
           "processing",
           "location",
           "remote-notification"
+        ],
+        "LSApplicationQueriesSchemes": [
+          "whatsapp",
+          "tg"
         ]
       },
-      "runtimeVersion": "1.1"
+      "runtimeVersion": "1.2"
     },
     "android": {
       "googleServicesFile": "./google-services.json",
@@ -63,13 +68,14 @@
         "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "au.com.msarim.theaicoach",
-      "runtimeVersion": "1.1"
+      "runtimeVersion": "1.2"
     },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "expo-dev-client",
       "expo-router",
       "@react-native-firebase/app",
       [

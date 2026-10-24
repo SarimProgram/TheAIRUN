@@ -3,7 +3,9 @@
   "main": "expo-router/entry",
   "version": "1.0.1",
   "scripts": {
-    "start": "expo start",
+    "start": "node ./scripts/start-dev.js",
+    "start:tunnel": "node ./scripts/start-dev.js --tunnel",
+    "start:clear": "node ./scripts/start-dev.js --clear",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
@@ -35,6 +37,7 @@
     "expo-constants": "~55.0.9",
     "expo-crypto": "~55.0.14",
     "expo-dev-client": "~55.0.32",
+    "expo-file-system": "~55.0.10",
     "expo-font": "~55.0.4",
     "expo-haptics": "~55.0.14",
     "expo-image": "~55.0.10",

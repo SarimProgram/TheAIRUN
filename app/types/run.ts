@@ -27,6 +27,9 @@ export type Run = {
 
   totalDistanceMeters: number;
   avgPaceSecPerKm: number | null;
+  workoutType?: 'RUN' | 'WALK';
+  title?: string;
+  perceivedEffort?: 'TOO_EASY' | 'ABOUT_RIGHT' | 'TOO_HARD';
 
   route: RunPoint[];
 

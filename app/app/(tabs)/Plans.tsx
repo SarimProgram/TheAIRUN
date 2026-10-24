@@ -12,14 +12,15 @@ import {
   Modal,
   PanResponder,
   Alert,
+  InteractionManager,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  Footprints, Droplets, Flame, X,
+  Footprints, Flame, X,
   Sun, Sunset, Moon, Check, Zap, Activity, ChevronDown, ChevronUp, Plus
 } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useAuth } from '@/src/auth/authContext';
 import { API_BASE_URL } from '../../config/api';
 import { useDailySummary } from '../../hooks/useDailySummary';
@@ -28,17 +29,26 @@ import { useWaterSync } from '../../hooks/useWaterSync';
 import { useTabBar } from '../../contexts/TabBarContext';
 
 // Components
-import { PlanWeeklyTab, WeekPlan } from '../../components/plan/PlanWeeklyTab';
+import { PlanWeeklyTab, WeekPlan, type ManualAdjustDirection } from '../../components/plan/PlanWeeklyTab';
 import { MobilityExercises } from '../../components/plan/MobilityExercises';
 import { useDailyPoints } from '../../hooks/useDailyPoints';
 import { PointsProgressCard } from '../../components/plan/PointsProgressCard';
-import { getMappedDays } from '../../utils/planProjection';
-import { getRunMeta } from '../../constants/runDetails';
+import { getDateForPlanWeekDay, getMappedDays } from '../../utils/planProjection';
+import { getRunMeta, getPlanSessionStartLabel } from '../../constants/runDetails';
 import { getIntervalWorkoutRouteFromTemplateId } from '../../lib/interval-workout';
 import { PlanHero, COLORS, RunStatusMap } from '../../components/plan/PlanHero';
 import { DailyTab, DailyTargetFromAPI } from '../../components/plan/DailyTab';
+import { usePaceProfile } from '../../hooks/usePaceProfile';
+import {
+  formatPaceRange,
+  getPaceRange,
+  getPaceStateForWorkout,
+  getPaceStatusText,
+  getPaceTargetKey,
+} from '../../lib/pace-personalization';
 const { width } = Dimensions.get('window');
 const TRAINING_TIME_PREFERENCE_KEY = 'plans_training_time_preference_v1';
+const PLAN_HERO_WELCOME_KEY_PREFIX = 'plan_hero_welcome_seen_v1';
 const STEPS_PER_KM = 1250;
 const GOAL_PRACTICE_RUN_TYPE = 'Goal Practice Run';
 
@@ -79,26 +89,6 @@ const MinimalTaskRow = ({ icon, label, value, target, unit, isComplete, color, o
   </TouchableOpacity>
 );
 
-// Hydration with water icons
-const HydrationIcons = ({ current, total, color, onTap }: any) => (
-  <View style={styles.hydrationIconRow}>
-    {[...Array(total)].map((_, i) => (
-      <TouchableOpacity
-        key={i}
-        onPress={() => onTap(i + 1)}
-        style={styles.hydrationIconBtn}
-      >
-        <Droplets
-          size={22}
-          color={i < current ? color : '#E0E0E0'}
-          fill={i < current ? color : 'transparent'}
-          strokeWidth={2}
-        />
-      </TouchableOpacity>
-    ))}
-  </View>
-);
-
 // Types for daily targets from backend
 type DailyTarget = {
   dayOfWeek: number;
@@ -129,12 +119,13 @@ type TrainingPlanSession = {
 export default function TimelinePlanScreen() {
   const { authFetch, isAuthenticated, accessToken, user } = useAuth();
   const router = useRouter();
+  const params = useLocalSearchParams<{ action?: string }>();
 
   // Selected date state (defaults to today)
   const [selectedDate, setSelectedDate] = useState(new Date());
   
   // Real-time hydration sync for today
-  const { glassCount: todayGlassCount, logWater } = useWaterSync({ accessToken });
+  const { glassCount: todayGlassCount, setWaterTotal } = useWaterSync({ accessToken });
 
   // Helper to format date as YYYY-MM-DD for backend
   const formatDayKey = (date: Date): string => {
@@ -156,6 +147,9 @@ export default function TimelinePlanScreen() {
   });
 
   const [weeklyPlan, setWeeklyPlan] = useState<WeekPlan[]>([]);
+  const [planGoalType, setPlanGoalType] = useState<string | null>(null);
+  const [planStartingWeightKg, setPlanStartingWeightKg] = useState<number | null>(null);
+  const [planTargetWeightKg, setPlanTargetWeightKg] = useState<number | null>(null);
   const [latestPlanPrompt, setLatestPlanPrompt] = useState<string | null>(null);
   const [availableDays, setAvailableDays] = useState<number[]>([0, 2, 4]);
   const [dailyTargets, setDailyTargets] = useState<DailyTarget[]>([]);
@@ -163,9 +157,9 @@ export default function TimelinePlanScreen() {
   const [planLoading, setPlanLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [scheduleUpdating, setScheduleUpdating] = useState(false);
+  const [adjustingPlan, setAdjustingPlan] = useState(false);
   const [showWeeklyModal, setShowWeeklyModal] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState<WeekPlan | null>(null);
-  const [scheduleExpanded, setScheduleExpanded] = useState(true);
   const [mobilityModalVisible, setMobilityModalVisible] = useState(false);
   const [showRunDetails, setShowRunDetails] = useState(false);
   const [runDetailsExpanded, setRunDetailsExpanded] = useState({
@@ -175,18 +169,49 @@ export default function TimelinePlanScreen() {
     tips: false,
   });
   const [currentWeek, setCurrentWeek] = useState(1);
+  const [planWeekToday, setPlanWeekToday] = useState(1);
   const [allPlanSessions, setAllPlanSessions] = useState<TrainingPlanSession[]>([]);
   const [planStartDate, setPlanStartDate] = useState<Date | null>(null);
   const todayWeekRef = useRef(1);
   const currentWeekAnchorDateRef = useRef<Date | null>(null);
   const [runStatuses, setRunStatuses] = useState<RunStatusMap>({});
   const [mobilityCompleted, setMobilityCompleted] = useState(false);
+  const [isFirstPlanHeroVisit, setIsFirstPlanHeroVisit] = useState(false);
   const [trainingTimePreference, setTrainingTimePreference] = useState<'morning' | 'afternoon' | 'evening'>('morning');
   const [userGender, setUserGender] = useState<string | null>(
     typeof user?.gender === 'string' ? user.gender : null
   );
   const hasLoadedTrainingTimePreference = useRef(false);
   const { setTabBarVisible } = useTabBar();
+  const isPlansFocused = useIsFocused();
+
+  useEffect(() => {
+    const userKey = user?.id || user?.email;
+    if (!userKey) return;
+
+    let cancelled = false;
+    const storageKey = `${PLAN_HERO_WELCOME_KEY_PREFIX}:${String(userKey)}`;
+
+    AsyncStorage.getItem(storageKey)
+      .then((seen) => {
+        if (cancelled) return;
+        setIsFirstPlanHeroVisit(seen !== 'true');
+        if (seen !== 'true') {
+          AsyncStorage.setItem(storageKey, 'true').catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.email, user?.id]);
+
+  useEffect(() => {
+    if (params.action !== 'exercises') return;
+    setMobilityModalVisible(true);
+    router.setParams({ action: undefined });
+  }, [params.action, router]);
 
   // Get current hour for time period (only relevant for today)
   const currentHour = now.getHours();
@@ -277,10 +302,26 @@ export default function TimelinePlanScreen() {
   };
 
   const openWeeklyModal = useCallback(() => {
-    const activeWeek = weeklyPlan.find((week) => week.Week === currentWeek) ?? null;
-    setSelectedWeek(activeWeek);
+    setSelectedWeek(null);
     setShowWeeklyModal(true);
-  }, [weeklyPlan, currentWeek]);
+  }, []);
+
+  const handleWeeklySessionDayPress = useCallback((weekNumber: number, dayIdx: number) => {
+    let targetDate: Date;
+    if (planStartDate) {
+      targetDate = getDateForPlanWeekDay(planStartDate, weekNumber, dayIdx);
+    } else {
+      const targetDateFromWeek = new Date(getMondayForDate(selectedDate));
+      targetDateFromWeek.setDate(
+        targetDateFromWeek.getDate() + (weekNumber - planWeekToday) * 7 + dayIdx,
+      );
+      targetDate = targetDateFromWeek;
+    }
+
+    selectDay(targetDate);
+    setShowWeeklyModal(false);
+    setSelectedWeek(null);
+  }, [planStartDate, selectedDate, planWeekToday, getMondayForDate, selectDay]);
 
   const handleLogFoodForPeriod = useCallback((period: 'morning' | 'afternoon' | 'evening') => {
     const mealType = period === 'morning' ? 'BREAKFAST' : period === 'afternoon' ? 'LUNCH' : 'DINNER';
@@ -450,7 +491,19 @@ export default function TimelinePlanScreen() {
       const response = await authFetch(`${API_BASE_URL}/plan`);
       if (!response.ok) return;
       const data = await response.json();
-      const planDays = Array.isArray(data?.plan?.availableDays) ? data.plan.availableDays : null;
+      const plan = data?.plan;
+      if (plan) {
+        if (typeof plan.goalType === 'string') {
+          setPlanGoalType(plan.goalType);
+        }
+        if (typeof plan.weightKg === 'number' && Number.isFinite(plan.weightKg)) {
+          setPlanStartingWeightKg(plan.weightKg);
+        }
+        if (typeof plan.targetWeightKg === 'number' && Number.isFinite(plan.targetWeightKg)) {
+          setPlanTargetWeightKg(plan.targetWeightKg);
+        }
+      }
+      const planDays = Array.isArray(plan?.availableDays) ? plan.availableDays : null;
       if (planDays?.length) {
         setAvailableDays(planDays.map((day: unknown) => Number(day)).filter((day: number) => Number.isInteger(day) && day >= 0 && day <= 6));
       }
@@ -532,6 +585,36 @@ export default function TimelinePlanScreen() {
     }
   };
 
+  const adjustPlanManually = async (direction: ManualAdjustDirection) => {
+    if (!isAuthenticated) return;
+    try {
+      setAdjustingPlan(true);
+      const response = await authFetch(`${API_BASE_URL}/plan/adjust-manual`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ direction }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to adjust plan');
+      }
+
+      const data = await response.json();
+      setWeeklyPlan(data['Weekly Plan Table'] || []);
+      await fetchDailyTargets();
+      await fetchPlanSettings();
+    } catch (err) {
+      console.error('Error adjusting plan:', err);
+      Alert.alert('Plan Update Failed', err instanceof Error ? err.message : 'Failed to adjust plan');
+      throw err;
+    } finally {
+      setAdjustingPlan(false);
+    }
+  };
+
   // Fetch daily targets for current week
   const fetchDailyTargets = useCallback(async () => {
     if (!isAuthenticated) return;
@@ -562,6 +645,7 @@ export default function TimelinePlanScreen() {
         const weekData = await weekResponse.json();
         if (typeof weekData?.currentWeek === 'number' && Number.isFinite(weekData.currentWeek)) {
           const anchorDate = new Date();
+          setPlanWeekToday(weekData.currentWeek);
           todayWeekRef.current = weekData.currentWeek;
           currentWeekAnchorDateRef.current = anchorDate;
           setCurrentWeek(calculateWeekFromAnchor(selectedDate, anchorDate, weekData.currentWeek));
@@ -581,7 +665,9 @@ export default function TimelinePlanScreen() {
         
         if (!currentWeekAnchorDateRef.current) {
           const today = new Date();
-          todayWeekRef.current = calculateWeekNum(today, start);
+          const todayWeek = calculateWeekNum(today, start);
+          setPlanWeekToday(todayWeek);
+          todayWeekRef.current = todayWeek;
           setCurrentWeek(calculateWeekNum(selectedDate, start));
         }
       }
@@ -667,12 +753,6 @@ export default function TimelinePlanScreen() {
     const today = new Date();
     todayWeekRef.current = calculateWeekNum(today, planStartDate);
   }, [selectedDate, planStartDate, calculateWeekFromAnchor, calculateWeekNum]);
-
-  useEffect(() => {
-    if (!showWeeklyModal) return;
-    const activeWeek = weeklyPlan.find((week) => week.Week === currentWeek) ?? null;
-    setSelectedWeek(activeWeek);
-  }, [showWeeklyModal, weeklyPlan, currentWeek]);
 
   // --- Fetch run statuses for the current week ---
   const fetchRunStatuses = useCallback(async () => {
@@ -856,7 +936,7 @@ export default function TimelinePlanScreen() {
       if (category.key === 'MOBILITY') {
         return {
           ...category,
-          metricText: mobilityCompleted ? 'COMPLETE' : 'INCOMPLETE',
+          metricText: mobilityCompleted ? 'Done' : 'Start workout',
           info: 'Complete your exercise session today to earn these points.',
         };
       }
@@ -867,6 +947,12 @@ export default function TimelinePlanScreen() {
 
   const runMeta = useMemo(() => getRunMeta(projectedRunInfo.runType), [projectedRunInfo.runType]);
   const runInfo = runMeta.details;
+  const paceTargetKey = getPaceTargetKey(projectedRunInfo.runType);
+  const supportsPersonalPace = paceTargetKey !== null;
+  const { profile: paceProfile, loading: paceLoading } = usePaceProfile(showRunDetails && supportsPersonalPace);
+  const runPaceRange = getPaceRange(paceProfile, paceTargetKey);
+  const runPaceState = getPaceStateForWorkout(paceProfile, paceTargetKey);
+  const runPaceStatusText = getPaceStatusText(runPaceState);
   const planDayNumber = useMemo(() => {
     if (planStartDate) {
       return calculatePlanDayNumber(selectedDate, planStartDate);
@@ -895,25 +981,33 @@ export default function TimelinePlanScreen() {
       params: {
         sessionId: projectedRunInfo.sessionId || '',
         templateId: runMeta.templateId,
+        runType: projectedRunInfo.runType,
         distanceKm: String(projectedRunInfo.runKm || 5),
         weekContext: `Week ${currentWeek}`
       }
     });
-  }, [router, runMeta, projectedRunInfo.sessionId, projectedRunInfo.runKm, currentWeek]);
+  }, [router, runMeta, projectedRunInfo.sessionId, projectedRunInfo.runType, projectedRunInfo.runKm, currentWeek]);
 
   const shouldBypassRunDetails = projectedRunInfo.runType === GOAL_PRACTICE_RUN_TYPE;
 
   // Refresh data when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      if (isAuthenticated) {
+      let active = true;
+      const task = InteractionManager.runAfterInteractions(() => {
+        if (!active || !isAuthenticated) return;
         fetchWeeklyPlan();
         fetchDailyTargets();
         fetchTrainingPlanData();
         fetchRunStatuses();
         refetchSummary();
         refetchPoints();
-      }
+      });
+
+      return () => {
+        active = false;
+        task.cancel?.();
+      };
     }, [isAuthenticated, fetchWeeklyPlan, fetchDailyTargets, fetchTrainingPlanData, fetchRunStatuses, refetchSummary, refetchPoints])
   );
 
@@ -941,6 +1035,8 @@ export default function TimelinePlanScreen() {
           onGoToPreviousWeek={goToPreviousWeek}
           onSelectDay={selectDay}
           userGender={userGender}
+          isActive={isPlansFocused}
+          showWelcomeMessage={planDayNumber === 1 || (isFirstPlanHeroVisit && isToday)}
           onMissedRunAction={(action, dayKey) => {
             if (action === 'run_now') {
               // Navigate to the run screen to start this run now
@@ -967,8 +1063,8 @@ export default function TimelinePlanScreen() {
           <View style={styles.bodyContent}>
             <View style={styles.sectionHeaderRow}>
               <View>
-                <Text style={styles.sectionTitle}>WEEK {currentWeek}</Text>
-                <Text style={styles.pointsEarnedHint}>Earn {totalMaxPoints} pts if completed</Text>
+                <Text style={styles.sectionTitle}>Your daily rewards</Text>
+                <Text style={styles.pointsEarnedHint}>Finish your goals and collect {totalMaxPoints} points</Text>
               </View>
               <TouchableOpacity onPress={handleGoToToday}>
                 <Text style={styles.goToToday}>Go to Today</Text>
@@ -985,6 +1081,11 @@ export default function TimelinePlanScreen() {
                 <PointsProgressCard
                   key={category.key}
                   category={category}
+                  onPress={
+                    category.key === 'MOBILITY' && !mobilityCompleted && !category.isAwarded
+                      ? () => setMobilityModalVisible(true)
+                      : undefined
+                  }
                   onClaim={() => {
                     if (!category.isAwarded && (category.claimable ?? category.progress >= 1)) {
                       claimPoints(category.key);
@@ -996,6 +1097,7 @@ export default function TimelinePlanScreen() {
 
             {/* Daily Tab Section */}
             <DailyTab
+              selectedDate={selectedDate}
               loadingDaily={summaryLoading}
               dailyTargets={dailyTargets as DailyTargetFromAPI[]}
               todayTarget={projectedTodayTarget as DailyTargetFromAPI}
@@ -1004,9 +1106,11 @@ export default function TimelinePlanScreen() {
               currentCalories={totalCaloriesFromBackend}
               calorieTarget={totalDailyCalories}
               waterIntake={waterActual}
-              onIncrementWater={() => isToday && logWater()}
-              scheduleExpanded={scheduleExpanded}
-              onToggleSchedule={() => setScheduleExpanded(!scheduleExpanded)}
+              onSetWaterGlasses={(glasses) => {
+                if (isToday) {
+                  setWaterTotal(glasses * 250);
+                }
+              }}
               stepSlots={{ 
                 morning: morningStepsActual, 
                 afternoon: afternoonStepsActual, 
@@ -1065,6 +1169,19 @@ export default function TimelinePlanScreen() {
                   <Text style={[styles.runDetailsStatValue, { color: runInfo.color }]}>{runInfo.intensity}</Text>
                 </View>
               </View>
+
+              {supportsPersonalPace ? (
+                <View style={[styles.runDetailsPaceCard, { borderColor: `${runInfo.color}2E` }]}>
+                  <View style={styles.runDetailsPaceTopRow}>
+                    <Text style={styles.runDetailsStatLabel}>SUGGESTED PACE FOR THIS SESSION</Text>
+                    <View style={[styles.runDetailsPaceDot, { backgroundColor: runInfo.color }]} />
+                  </View>
+                  <Text style={[styles.runDetailsPaceValue, { color: runInfo.color }]}>
+                    {paceLoading && !runPaceRange ? 'Loading pace' : formatPaceRange(runPaceRange)}
+                  </Text>
+                  {runPaceStatusText ? <Text style={styles.runDetailsPaceStatus}>{runPaceStatusText}</Text> : null}
+                </View>
+              ) : null}
 
               <TouchableOpacity
                 style={styles.runDetailsSectionHeader}
@@ -1125,7 +1242,9 @@ export default function TimelinePlanScreen() {
 
             <TouchableOpacity style={[styles.runDetailsStartBtn, { backgroundColor: runInfo.color }]} onPress={startPlanRun}>
               <Activity size={16} color="#FFF" />
-              <Text style={styles.runDetailsStartBtnText}>Start Training Session</Text>
+              <Text style={styles.runDetailsStartBtnText}>
+                {getPlanSessionStartLabel(projectedRunInfo.runType, projectedRunInfo.runKm)}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1141,42 +1260,33 @@ export default function TimelinePlanScreen() {
         }}
       >
         <SafeAreaView style={styles.fullPlanOverlay}>
-          <View style={styles.modalHeader}>
-            <View>
-              <Text style={styles.modalHeaderEyebrow}>TRAINING PLAN</Text>
-              <Text style={styles.modalHeaderTitle}>Weekly Plan</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.modalCloseBtn}
-              onPress={() => {
-                setShowWeeklyModal(false);
-                setSelectedWeek(null);
-              }}
-            >
-              <X size={20} color={COLORS.textMain} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView 
-            style={styles.modalScrollView} 
-            showsVerticalScrollIndicator={false}
-          >
-            <PlanWeeklyTab
-              weeklyPlan={weeklyPlan}
-              currentWeek={currentWeek}
-              loading={planLoading}
-              selectedWeek={selectedWeek}
-              onSelectWeek={setSelectedWeek}
-              availableDays={availableDays}
-              onChangeScheduleDays={updateScheduleDays}
-              scheduleUpdating={scheduleUpdating}
-              trainingTimePreference={trainingTimePreference}
-              onChangeTrainingTimePreference={setTrainingTimePreference}
-              onRegeneratePlan={() => generatePlan(true)}
-              devPrompt={latestPlanPrompt}
-              regenerating={generating}
-            />
-          </ScrollView>
+          <PlanWeeklyTab
+            weeklyPlan={weeklyPlan}
+            planWeekToday={planWeekToday}
+            planStartDate={planStartDate}
+            loading={planLoading}
+            selectedWeek={selectedWeek}
+            onSelectWeek={setSelectedWeek}
+            onClose={() => {
+              setShowWeeklyModal(false);
+              setSelectedWeek(null);
+            }}
+            onSelectSessionDay={handleWeeklySessionDayPress}
+            goalType={planGoalType}
+            startingWeightKg={planStartingWeightKg}
+            targetWeightKg={planTargetWeightKg}
+            usesImperial={user?.units === 'imperial'}
+            availableDays={availableDays}
+            onChangeScheduleDays={updateScheduleDays}
+            scheduleUpdating={scheduleUpdating}
+            trainingTimePreference={trainingTimePreference}
+            onChangeTrainingTimePreference={setTrainingTimePreference}
+            onAdjustPlanManually={adjustPlanManually}
+            adjusting={adjustingPlan}
+            onRegeneratePlan={() => generatePlan(true)}
+            devPrompt={latestPlanPrompt}
+            regenerating={generating}
+          />
         </SafeAreaView>
       </Modal>
 
@@ -1261,9 +1371,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   runDetailsCloseBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#F5F6F7',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1298,6 +1408,37 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
     color: COLORS.textMain,
+  },
+  runDetailsPaceCard: {
+    backgroundColor: '#F8FAFC',
+    borderCurve: 'continuous',
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  runDetailsPaceTopRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  runDetailsPaceDot: {
+    borderRadius: 4,
+    height: 8,
+    width: 8,
+  },
+  runDetailsPaceValue: {
+    fontSize: 20,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '900',
+    marginTop: 5,
+  },
+  runDetailsPaceStatus: {
+    color: COLORS.textSub,
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 3,
   },
   runDetailsSectionHeader: {
     flexDirection: 'row',
@@ -1471,28 +1612,7 @@ const styles = StyleSheet.create({
   // Weekly Plan Overlay (Replaces Modal)
   fullPlanOverlay: {
     flex: 1,
-    backgroundColor: '#FFF',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    paddingBottom: 14,
-    backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F3F5',
-  },
-  modalHeaderEyebrow: { fontSize: 11, fontWeight: '900', color: COLORS.accent, letterSpacing: 1 },
-  modalHeaderTitle: { fontSize: 24, fontWeight: '900', color: COLORS.textMain, letterSpacing: -0.5 },
-  modalCloseBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center',
-    alignItems: 'center'
+    backgroundColor: '#FFFFFF',
   },
 
 

@@ -15,6 +15,7 @@ export interface MarketplaceItem {
     isCustom?: boolean;
     createdByUserId?: string | null;
     canManage?: boolean;
+    canDelete?: boolean;
 }
 
 export interface WalletItem {

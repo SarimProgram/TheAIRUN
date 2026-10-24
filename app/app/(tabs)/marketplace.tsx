@@ -22,6 +22,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { usePoints } from '../../hooks/usePoints';
 import { useMarketplace, MarketplaceItem } from '../../hooks/useMarketplace';
 import { useAuth } from '@/src/auth/authContext';
+import { useRouter } from 'expo-router';
 import HowToEarn, { HowToEarnButton } from '../../components/marketplace/HowToEarn';
 
 // --- Theme Colors ---
@@ -29,10 +30,12 @@ const COLORS = {
   primary: '#FF6B6B',      // Coral Red (Main Theme)
   secondary: '#2EC4B6',    // Teal (Secondary Theme)
   accent: '#10B981',       // Emerald (Success)
-  bg: '#F8FAFC',           // Soft Slate BG
-  surface: '#FFFFFF',
+  bg: '#FFFFFF',           // White Page
+  surface: '#F1F5F9',      // Soft slate card
+  surfaceStrong: '#E2E8F0', // Stronger slate
   text: '#0F172A',         // Deep Navy
   textMuted: '#64748B',    // Slate Muted
+  textSubtle: '#94A3B8',   // Subtler slate
   border: '#E2E8F0',       // Slate Border
   primaryLight: '#FFF1F2', // Coral 50
   secondaryLight: '#F0FDFA', // Teal 50
@@ -45,7 +48,9 @@ const COLORS = {
 };
 
 const { width } = Dimensions.get('window');
-const CARD_WIDTH = (width / 2) - 24;
+const H_PADDING = 24;
+const GRID_GAP = 12;
+const CARD_WIDTH = (width - H_PADDING * 2 - GRID_GAP) / 2;
 const CATEGORY_TABS = ['All', 'Romantic', 'Fun', 'Chore', 'Relaxation'] as const;
 const CATEGORY_OPTIONS = ['Romantic', 'Fun', 'Chore', 'Relaxation'] as const;
 
@@ -60,6 +65,7 @@ const toStoredCategory = (category: DisplayMarketplaceCategory): StoredMarketpla
   category === 'Relaxation' ? 'Spicy' : category;
 
 export default function ModernMarketplace() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<MarketplaceTab>('All');
   const [manageStoreVisible, setManageStoreVisible] = useState(false);
   const [howToEarnVisible, setHowToEarnVisible] = useState(false);
@@ -313,7 +319,15 @@ export default function ModernMarketplace() {
 
         {/* --- Header --- */}
         <View style={styles.header}>
-          <View>
+          <View style={styles.headerLead}>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)/Partner')}
+              accessibilityRole="button"
+              accessibilityLabel="Back to Partner"
+            >
+              <Ionicons name="chevron-back" size={22} color={COLORS.text} />
+            </TouchableOpacity>
             <Text style={styles.headerTitle}>Marketplace</Text>
           </View>
 
@@ -334,35 +348,55 @@ export default function ModernMarketplace() {
         )}
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => { resetCustomItem(); setManageStoreVisible(true); }}
+            style={styles.heroCard}
+          >
+            <Text style={styles.heroTitle}>Design a reward</Text>
+            <Text style={styles.heroSubtitle}>
+              A date night, a favor, or a sweet surprise. Make it personal.
+            </Text>
+
+            <View style={styles.heroCtaRow}>
+              <View style={styles.heroCtaBtn}>
+                <Text style={styles.heroCtaText}>Create now</Text>
+                <Ionicons name="arrow-forward" size={14} color={COLORS.primary} />
+              </View>
+              <View style={styles.heroMetaRow}>
+                <View style={styles.heroMetaDot} />
+                <Text style={styles.heroMetaText}>Takes 30s</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+
           <View style={styles.topSummaryRow}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.topSummaryCard, walletFilter === 'rewards' && styles.topSummaryCardActive]}
               onPress={() => setWalletFilter('rewards')}
             >
-              <View style={styles.topSummaryHeader}>
-                <Ionicons name="gift" size={18} color={walletFilter === 'rewards' ? COLORS.white : COLORS.primary} />
-                <Text style={[styles.topSummaryLabel, walletFilter === 'rewards' && styles.topSummaryLabelActive]}>Your Rewards</Text>
+              <Ionicons name="gift" size={14} color={walletFilter === 'rewards' ? COLORS.white : COLORS.primary} />
+              <Text style={[styles.topSummaryLabel, walletFilter === 'rewards' && styles.topSummaryLabelActive]}>Your Rewards</Text>
+              <View style={[styles.topSummaryBadge, walletFilter === 'rewards' && styles.topSummaryBadgeActive]}>
+                <Text style={[styles.topSummaryCount, walletFilter === 'rewards' && styles.topSummaryCountActive]}>{owedToYouItems.length}</Text>
               </View>
-              <Text style={[styles.topSummaryCount, walletFilter === 'rewards' && styles.topSummaryCountActive]}>{owedToYouItems.length}</Text>
-              <Text style={[styles.topSummarySub, walletFilter === 'rewards' && styles.topSummarySubActive]}>Active & Ready</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.topSummaryCard, walletFilter === 'owe' && styles.topSummaryCardActive, { borderLeftWidth: 1, borderLeftColor: COLORS.border }]}
+            <TouchableOpacity
+              style={[styles.topSummaryCard, walletFilter === 'owe' && styles.topSummaryCardActiveOwe]}
               onPress={() => setWalletFilter('owe')}
             >
-              <View style={styles.topSummaryHeader}>
-                <Ionicons name="receipt" size={18} color={walletFilter === 'owe' ? COLORS.white : COLORS.secondary} />
-                <Text style={[styles.topSummaryLabel, walletFilter === 'owe' && styles.topSummaryLabelActive]}>You Owe</Text>
+              <Ionicons name="receipt" size={14} color={walletFilter === 'owe' ? COLORS.white : COLORS.secondary} />
+              <Text style={[styles.topSummaryLabel, walletFilter === 'owe' && styles.topSummaryLabelActive]}>You Owe</Text>
+              <View style={[styles.topSummaryBadge, walletFilter === 'owe' && styles.topSummaryBadgeActiveOwe]}>
+                <Text style={[styles.topSummaryCount, walletFilter === 'owe' && styles.topSummaryCountActive]}>{youOweItems.length}</Text>
               </View>
-              <Text style={[styles.topSummaryCount, walletFilter === 'owe' && styles.topSummaryCountActive]}>{youOweItems.length}</Text>
-              <Text style={[styles.topSummarySub, walletFilter === 'owe' && styles.topSummarySubActive]}>Pending Tasks</Text>
             </TouchableOpacity>
           </View>
 
           {/* --- Section 1: Active Wallet --- */}
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Active Wallet</Text>
+            <Text style={styles.sectionTitle}>Active Reward</Text>
             <TouchableOpacity onPress={async () => { await refetchHistory(); setHistoryVisible(true); }}>
               <Text style={styles.seeAll}>History</Text>
             </TouchableOpacity>
@@ -433,7 +467,7 @@ export default function ModernMarketplace() {
 
           {/* --- Section 2: Categories --- */}
           <View style={styles.categoryContainer}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 24 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: H_PADDING }}>
               {CATEGORY_TABS.map((cat) => (
                 <TouchableOpacity
                   key={cat}
@@ -453,24 +487,46 @@ export default function ModernMarketplace() {
               style={[styles.itemCard, styles.defaultCard]}
               onPress={() => { resetCustomItem(); setManageStoreVisible(true); }}
             >
-              <View style={styles.defaultEmojiBg}>
-                <Ionicons name="add-circle-outline" size={40} color={COLORS.primary} />
+              <View style={[styles.itemEmojiBg, styles.defaultEmojiBg]}>
+                <Ionicons name="add" size={32} color={COLORS.primary} />
               </View>
               <View style={styles.cardInfo}>
                 <Text style={styles.itemCategory}>CUSTOM</Text>
                 <Text style={styles.itemTitle}>Create Reward</Text>
-                <Text style={styles.priceText}>Free</Text>
+                <View style={styles.priceRow}>
+                  <Text style={[styles.priceText, { color: COLORS.primary }]}>Free</Text>
+                  <View style={[styles.buyBtn, { backgroundColor: COLORS.text }]}>
+                    <Ionicons name="arrow-forward" size={16} color={COLORS.white} />
+                  </View>
+                </View>
               </View>
             </TouchableOpacity>
 
             {filteredItems.map((item) => (
               <View key={item.id} style={styles.itemCard}>
+                {!item.isCustom && item.canDelete && (
+                  <TouchableOpacity
+                    style={styles.itemDeleteBtn}
+                    onPress={() => handleDeleteItem(item)}
+                    disabled={deletingItemId === item.id}
+                    hitSlop={8}
+                    accessibilityRole={'button'}
+                    accessibilityLabel={`Delete ${item.title}`}
+                    accessibilityHint={'Shows a confirmation before deleting this reward'}
+                  >
+                    {deletingItemId === item.id ? (
+                      <ActivityIndicator size={'small'} color={COLORS.primary} />
+                    ) : (
+                      <Ionicons name={'trash-outline'} size={14} color={COLORS.primary} />
+                    )}
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity activeOpacity={0.9} onPress={() => handleBuy(item)}>
                   <View style={styles.itemEmojiBg}>
                     <Text style={{ fontSize: 40 }}>{item.emoji}</Text>
                   </View>
                   <View style={styles.cardInfo}>
-                    <Text style={styles.itemCategory}>{toDisplayCategory(item.category)}</Text>
+                    <Text style={styles.itemCategory}>{toDisplayCategory(item.category).toString().toUpperCase()}</Text>
                     <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
                     <View style={styles.priceRow}>
                       <Text style={styles.priceText}>{item.cost} <Text style={styles.ptsLabel}>pts</Text></Text>
@@ -481,7 +537,7 @@ export default function ModernMarketplace() {
                 {item.isCustom && item.canManage && (
                   <View style={styles.manageRow}>
                     <TouchableOpacity style={styles.manageBtn} onPress={() => handleEditItem(item)}>
-                      <Ionicons name="create-outline" size={14} color={COLORS.text} />
+                      <Ionicons name="create-outline" size={13} color={COLORS.text} />
                       <Text style={styles.manageBtnText}>Edit</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.manageBtn} onPress={() => handleDeleteItem(item)} disabled={deletingItemId === item.id}>
@@ -489,7 +545,7 @@ export default function ModernMarketplace() {
                         <ActivityIndicator size="small" color={COLORS.primary} />
                       ) : (
                         <>
-                          <Ionicons name="trash-outline" size={14} color={COLORS.primary} />
+                          <Ionicons name="trash-outline" size={13} color={COLORS.primary} />
                           <Text style={[styles.manageBtnText, { color: COLORS.primary }]}>Delete</Text>
                         </>
                       )}
@@ -651,120 +707,222 @@ export default function ModernMarketplace() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 20 },
-  headerTitle: { fontSize: 28, fontWeight: '800', color: COLORS.text, letterSpacing: -0.5 },
-  headerRight: { flexDirection: 'row', alignItems: 'center' },
-  pointsBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.white, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: COLORS.primary },
-  pointsText: { marginLeft: 6, fontWeight: '800', color: COLORS.primary, fontSize: 16 },
-  errorBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 24, marginBottom: 8, backgroundColor: COLORS.warningBg, padding: 10, borderRadius: 10 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: H_PADDING, paddingTop: 20, paddingBottom: 24 },
+  headerLead: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
+  backButton: { width: 44, height: 44, borderRadius: 22, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.surface },
+  headerTitle: { fontSize: 26, fontWeight: '800', color: COLORS.text, letterSpacing: -0.8 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  pointsBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 24 },
+  pointsText: { marginLeft: 6, fontWeight: '800', color: COLORS.text, fontSize: 15 },
+  errorBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: H_PADDING, marginBottom: 12, backgroundColor: COLORS.warningBg, padding: 12, borderRadius: 14 },
   errorBannerText: { color: COLORS.warningText, fontSize: 12, fontWeight: '700', flex: 1 },
-  scrollContent: { paddingBottom: 120 },
-  topSummaryRow: {
-    flexDirection: 'row',
-    marginHorizontal: 24,
-    marginBottom: 24,
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    padding: 6,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    elevation: 8,
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-  },
-  topSummaryCard: {
-    flex: 1,
-    paddingVertical: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 18,
-  },
-  topSummaryCardActive: {
+  scrollContent: { paddingBottom: 140 },
+
+  /* Hero */
+  heroCard: {
+    marginHorizontal: H_PADDING,
+    marginBottom: 20,
+    padding: 18,
     backgroundColor: COLORS.primary,
+    borderRadius: 24,
+    overflow: 'hidden',
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.28,
+    shadowRadius: 20,
+    elevation: 6,
   },
-  topSummaryHeader: {
+  heroTitle: {
+    fontSize: 23,
+    fontWeight: '800',
+    color: COLORS.white,
+    letterSpacing: -0.8,
+    lineHeight: 27,
+    marginBottom: 6,
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.9)',
+    fontWeight: '500',
+    lineHeight: 19,
+    marginBottom: 16,
+  },
+  heroCtaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  heroCtaBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 14,
+  },
+  heroCtaText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.primary,
+    letterSpacing: -0.2,
+  },
+  heroMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 8,
+  },
+  heroMetaDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: COLORS.white,
+  },
+  heroMetaText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.9)',
+  },
+
+  /* Wallet filter tabs */
+  topSummaryRow: {
+    flexDirection: 'row',
+    marginHorizontal: H_PADDING,
+    marginBottom: 28,
+    backgroundColor: COLORS.surface,
+    borderRadius: 16,
+    padding: 4,
+    gap: 4,
+  },
+  topSummaryCard: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    gap: 8,
+  },
+  topSummaryCardActive: {
+    backgroundColor: COLORS.text,
+  },
+  topSummaryCardActiveOwe: {
+    backgroundColor: COLORS.text,
   },
   topSummaryLabel: {
-    fontSize: 12,
-    fontWeight: '700',
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
     color: COLORS.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   topSummaryLabelActive: {
     color: COLORS.white,
-    opacity: 0.8,
+  },
+  topSummaryBadge: {
+    minWidth: 24,
+    height: 22,
+    paddingHorizontal: 7,
+    borderRadius: 11,
+    backgroundColor: COLORS.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topSummaryBadgeActive: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  topSummaryBadgeActiveOwe: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
   topSummaryCount: {
-    fontSize: 28,
-    fontWeight: '900',
+    fontSize: 12,
+    fontWeight: '800',
     color: COLORS.text,
   },
   topSummaryCountActive: {
     color: COLORS.white,
   },
-  topSummarySub: {
-    fontSize: 10,
-    color: COLORS.textMuted,
-    fontWeight: '700',
-    marginTop: 2,
-    letterSpacing: 0.3,
+
+  /* Section headers */
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: H_PADDING, marginBottom: 16 },
+  sectionTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text, letterSpacing: -0.4 },
+  seeAll: { fontSize: 14, color: COLORS.textMuted, fontWeight: '600' },
+
+  /* Wallet cards */
+  walletScroll: { paddingLeft: H_PADDING, paddingRight: 12, gap: 12, paddingBottom: 4 },
+  walletCard: {
+    width: width * 0.7,
+    padding: 20,
+    borderRadius: 24,
+    marginRight: 12,
+    minHeight: 180,
+    backgroundColor: COLORS.surface,
   },
-  topSummarySubActive: {
-    color: COLORS.white,
-    opacity: 0.9,
-  },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, marginBottom: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text },
-  seeAll: { fontSize: 14, color: COLORS.primary, fontWeight: '600' },
-  walletScroll: { paddingLeft: 24, paddingRight: 12 },
-  walletCard: { width: width * 0.68, padding: 16, borderRadius: 24, marginRight: 12, minHeight: 168, justifyContent: 'space-between' },
-  emptyWalletCard: { width: width * 0.6, padding: 20, borderRadius: 24, marginRight: 12, height: 140, borderStyle: 'dashed', borderWidth: 2, borderColor: COLORS.border, alignItems: 'center', justifyContent: 'center' },
+  emptyWalletCard: { width: width * 0.6, padding: 24, borderRadius: 24, marginRight: 12, height: 160, backgroundColor: COLORS.surface, alignItems: 'center', justifyContent: 'center', gap: 8 },
   walletTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   walletEmoji: { fontSize: 32 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
-  statusText: { fontSize: 10, fontWeight: '800' },
-  walletTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
-  walletSub: { fontSize: 12, color: COLORS.textMuted },
-  walletActionRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  walletActionBtn: { flex: 1, height: 32, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
-  walletActionPrimary: { backgroundColor: COLORS.secondary },
-  walletActionSecondary: { backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border },
-  walletActionPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 12 },
-  walletActionSecondaryText: { color: COLORS.text, fontWeight: '700', fontSize: 12 },
-  categoryContainer: { marginVertical: 24 },
-  categoryPill: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, backgroundColor: COLORS.border, marginRight: 8 },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+  statusText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  walletTitle: { fontSize: 17, fontWeight: '800', color: COLORS.text, letterSpacing: -0.3, marginTop: 12 },
+  walletSub: { fontSize: 13, color: COLORS.textMuted, marginTop: 2 },
+  walletActionRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  walletActionBtn: { flex: 1, height: 38, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
+  walletActionPrimary: { backgroundColor: COLORS.text },
+  walletActionSecondary: { backgroundColor: COLORS.white },
+  walletActionPrimaryText: { color: COLORS.white, fontWeight: '700', fontSize: 13 },
+  walletActionSecondaryText: { color: COLORS.text, fontWeight: '700', fontSize: 13 },
+
+  /* Categories */
+  categoryContainer: { marginBottom: 20, marginTop: 32 },
+  categoryPill: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 22, backgroundColor: COLORS.surface, marginRight: 8 },
   categoryPillActive: { backgroundColor: COLORS.text },
-  categoryText: { fontWeight: '600', color: COLORS.textMuted },
+  categoryText: { fontWeight: '600', color: COLORS.textMuted, fontSize: 13 },
   categoryTextActive: { color: COLORS.white },
-  gridContainer: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 20, justifyContent: 'space-between' },
-  itemCard: { width: CARD_WIDTH, backgroundColor: COLORS.white, borderRadius: 24, marginBottom: 16, padding: 10, borderWidth: 1, borderColor: COLORS.border },
-  defaultCard: { borderStyle: 'dashed', borderColor: COLORS.primary, borderWidth: 2 },
-  itemEmojiBg: { height: 110, backgroundColor: COLORS.primaryLight, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
-  defaultEmojiBg: { height: 110, backgroundColor: COLORS.secondaryLight, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
-  cardInfo: { padding: 4 },
-  itemCategory: { fontSize: 10, fontWeight: '800', color: COLORS.textMuted, marginBottom: 4 },
-  itemTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
+
+  /* Item grid */
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: H_PADDING,
+    gap: GRID_GAP,
+  },
+  itemCard: {
+    width: CARD_WIDTH,
+    backgroundColor: COLORS.surface,
+    borderRadius: 22,
+    padding: 10,
+  },
+  defaultCard: {
+    backgroundColor: COLORS.surface,
+  },
+  itemEmojiBg: {
+    height: 130,
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  defaultEmojiBg: {
+    backgroundColor: COLORS.white,
+  },
+  cardInfo: { paddingHorizontal: 6, paddingBottom: 6, paddingTop: 2 },
+  itemCategory: { fontSize: 10, fontWeight: '800', color: COLORS.textSubtle, marginBottom: 6, letterSpacing: 0.6 },
+  itemTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text, marginBottom: 12, letterSpacing: -0.2 },
   priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  priceText: { fontSize: 16, fontWeight: '800', color: COLORS.text },
-  ptsLabel: { fontSize: 12, fontWeight: '400', color: COLORS.textMuted },
-  buyBtn: { backgroundColor: COLORS.primary, width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
-  manageRow: { flexDirection: 'row', gap: 8, marginTop: 8, paddingHorizontal: 4, paddingBottom: 4 },
-  manageBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.border, paddingHorizontal: 8, paddingVertical: 6, borderRadius: 10 },
+  priceText: { fontSize: 16, fontWeight: '800', color: COLORS.text, letterSpacing: -0.2 },
+  ptsLabel: { fontSize: 12, fontWeight: '500', color: COLORS.textMuted },
+  buyBtn: { backgroundColor: COLORS.text, width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  itemDeleteBtn: { position: 'absolute', top: 16, right: 16, zIndex: 2, width: 28, height: 28, borderRadius: 14, backgroundColor: COLORS.white, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4, elevation: 3 },
+  manageRow: { flexDirection: 'row', gap: 6, marginTop: 8, paddingHorizontal: 4, paddingBottom: 4 },
+  manageBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.white, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10 },
   manageBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.text },
-  fab: { position: 'absolute', bottom: 30, alignSelf: 'center' },
+  fab: { position: 'absolute', bottom: 30, alignSelf: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 16, elevation: 8 },
   fabGradient: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 16, borderRadius: 32 },
   fabText: { color: 'white', fontWeight: '700', marginLeft: 8 },
   modalContainer: { flex: 1, backgroundColor: 'white' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   modalTitle: { fontSize: 18, fontWeight: '700' },
-  historyCard: { backgroundColor: COLORS.white, borderRadius: 16, borderWidth: 1, borderColor: COLORS.border, padding: 14, marginBottom: 10 },
+  historyCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 10 },
   historyTop: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
   historyEmoji: { fontSize: 26 },
   historyTitle: { fontWeight: '800', color: COLORS.text, fontSize: 15 },
@@ -826,4 +984,3 @@ const styles = StyleSheet.create({
   modernSliderThumb: { position: 'absolute', width: 32, height: 32, backgroundColor: COLORS.white, borderRadius: 16, elevation: 8, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, borderWidth: 4, borderColor: COLORS.primary },
   sliderLabelCurrent: { fontSize: 11, fontWeight: '900', color: COLORS.textMuted, letterSpacing: 0.5 },
 });
-

@@ -7,16 +7,14 @@ import {
   TouchableOpacity,
   Animated,
   StatusBar,
-  Dimensions,
   Platform,
   ScrollView,
 } from 'react-native';
-import { Target, Scale, Zap, Activity, ChevronLeft, ArrowRight } from 'lucide-react-native';
+import { Target, ChevronLeft, ArrowRight } from 'lucide-react-native';
+import type { SvgProps } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image } from 'expo-image';
-
-const { width: windowWidth } = Dimensions.get('window');
-const width = Math.min(windowWidth, 480);
+import { ExerciseGoalIcon, RunningGoalIcon, WeightGoalIcon } from './HealthGoalIcons';
 
 const COLORS = {
   coral: '#FF6B6B',
@@ -32,22 +30,23 @@ const COLORS = {
 interface GoalOption {
   id: string;
   title: string;
-  icon: any;
+  icon: React.ComponentType<SvgProps>;
 }
 
 const GOALS: GoalOption[] = [
-  { id: 'weightloss', title: 'Weight loss', icon: Scale },
-  { id: 'running', title: 'Running', icon: Zap },
-  { id: 'both', title: 'Weight loss while preparing for a run', icon: Activity },
+  { id: 'weightloss', title: 'Lose weight and feel healthier', icon: WeightGoalIcon },
+  { id: 'running', title: 'Become a stronger runner', icon: RunningGoalIcon },
+  { id: 'both', title: 'Lose weight while training for a run', icon: ExerciseGoalIcon },
 ];
 
 interface Props {
   onContinue: (goal: string | null) => void;
   onBack: () => void;
   gender?: string | null;
+  joinedWithPartner?: boolean;
 }
 
-export default function Phase5Dummy({ onContinue, onBack, gender }: Props) {
+export default function Phase5Dummy({ onContinue, onBack, gender, joinedWithPartner = false }: Props) {
   const [selectedGoal, setSelectedGoal] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
@@ -66,7 +65,7 @@ export default function Phase5Dummy({ onContinue, onBack, gender }: Props) {
     Animated.stagger(100, staggerAnims.map(anim =>
       Animated.spring(anim, { toValue: 1, friction: 7, useNativeDriver: true })
     )).start();
-  }, []);
+  }, [fadeAnim, slideAnim, staggerAnims]);
 
   const Option = ({ goal, index }: { goal: GoalOption; index: number }) => {
     const isSelected = selectedGoal === goal.id;
@@ -86,7 +85,11 @@ export default function Phase5Dummy({ onContinue, onBack, gender }: Props) {
           ]}
         >
           <View style={[styles.iconBox, isSelected && styles.selectedIconBox]}>
-            <Icon color={isSelected ? COLORS.coral : COLORS.muted} size={22} strokeWidth={2.5} />
+            <Icon
+              color={isSelected ? COLORS.coral : COLORS.muted}
+              width={24}
+              height={24}
+            />
           </View>
           <View style={styles.cardContent}>
             <Text style={[styles.cardTitle, isSelected && styles.selectedCardTitle]}>
@@ -125,9 +128,14 @@ export default function Phase5Dummy({ onContinue, onBack, gender }: Props) {
                 <View style={styles.headerTextSide}>
                   <View style={styles.badge}>
                     <Target color={COLORS.coral} size={14} strokeWidth={2.5} />
-                    <Text style={styles.badgeText}>YOUR OBJECTIVE</Text>
+                    <Text style={styles.badgeText}>YOUR GOAL</Text>
                   </View>
-                  <Text style={styles.title}>Primary{"\n"}<Text style={{ color: COLORS.coral }}>Goal?</Text></Text>
+                  <Text style={[styles.title, joinedWithPartner && styles.partnerTitle]}>
+                    What would you{"\n"}
+                    <Text style={{ color: COLORS.coral }}>
+                      {joinedWithPartner ? 'love to achieve with your partner?' : 'love to achieve?'}
+                    </Text>
+                  </Text>
                 </View>
 
                 <View style={[
@@ -141,7 +149,6 @@ export default function Phase5Dummy({ onContinue, onBack, gender }: Props) {
                   />
                 </View>
               </View>
-              <Text style={styles.subtitle}>Helping us customize your training path to what matters most.</Text>
             </Animated.View>
 
             <View style={styles.optionsContainer}>
@@ -256,6 +263,11 @@ const styles = StyleSheet.create({
     lineHeight: 38,
     letterSpacing: -1,
     marginBottom: 8,
+  },
+  partnerTitle: {
+    fontSize: 29,
+    lineHeight: 35,
+    letterSpacing: -0.8,
   },
   subtitle: {
     fontSize: 15,

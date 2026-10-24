@@ -4,8 +4,18 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { getTodayUtcMidnight } from '../utils/date';
 import { emitStepUpdateToPartner } from '../socket';
 import { pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
+import { sendBackgroundWakePush } from '../lib/apns';
+import { refreshDailyActiveCalories } from '../lib/activeCalories';
 
 const router = Router();
+
+// How stale the partner's step total can be before we bother waking their phone.
+const PARTNER_REFRESH_STALE_THRESHOLD_MS = 2 * 60_000;
+
+// How often the same viewer can trigger a background wake for the same partner.
+// In-memory throttle; resets on process restart, which is acceptable.
+const PARTNER_REFRESH_MIN_INTERVAL_MS = 30_000;
+const partnerRefreshLastRequestAt = new Map<string, number>();
 
 function parseDayKey(dayKey: string): { year: number; month: number; day: number } {
   const [year, month, day] = dayKey.split('-').map(Number);
@@ -82,6 +92,18 @@ async function getStepsByDayKey(userId: string, dayKey: string): Promise<number>
   return row?.steps ?? 0;
 }
 
+async function getStepsInfoByDayKey(
+  userId: string,
+  dayKey: string,
+): Promise<{ steps: number; updatedAt: Date | null }> {
+  const date = dayKeyToUtcDate(dayKey);
+  const row = await prisma.dailyStep.findUnique({
+    where: { userId_date: { userId, date } },
+    select: { steps: true, updatedAt: true },
+  });
+  return { steps: row?.steps ?? 0, updatedAt: row?.updatedAt ?? null };
+}
+
 async function getStepMapByDayKeys(userId: string, dayKeys: string[]): Promise<Map<string, number>> {
   const uniqueDayKeys = [...new Set(dayKeys)];
   const dates = uniqueDayKeys.map(dayKeyToUtcDate);
@@ -152,16 +174,19 @@ router.get('/steps/tracer-state', authMiddleware, async (req, res, next) => {
     const partnerYesterdayKey = addDaysToDayKey(partnerTodayKey, -1);
 
     const [
-      youLiveTodaySteps,
-      partnerLiveTodaySteps,
+      youTodayInfo,
+      partnerTodayInfo,
       youLastDaySteps,
       partnerLastDaySteps
     ] = await Promise.all([
-      getStepsByDayKey(user.id, youTodayKey),
-      getStepsByDayKey(user.partner.id, partnerTodayKey),
+      getStepsInfoByDayKey(user.id, youTodayKey),
+      getStepsInfoByDayKey(user.partner.id, partnerTodayKey),
       getStepsByDayKey(user.id, youYesterdayKey),
       getStepsByDayKey(user.partner.id, partnerYesterdayKey),
     ]);
+
+    const youLiveTodaySteps = youTodayInfo.steps;
+    const partnerLiveTodaySteps = partnerTodayInfo.steps;
 
     const youNextMidnightUtc = getNextMidnightUtcIso(youTimezone, now);
     const partnerNextMidnightUtc = getNextMidnightUtcIso(partnerTimezone, now);
@@ -253,6 +278,7 @@ router.get('/steps/tracer-state', authMiddleware, async (req, res, next) => {
           liveTodaySteps: youLiveTodaySteps,
           lastDaySteps: youLastDaySteps,
           nextMidnightUtc: youNextMidnightUtc,
+          stepsUpdatedAt: youTodayInfo.updatedAt?.toISOString() ?? null,
         },
         partner: {
           name: user.partner.displayName || 'Partner',
@@ -260,6 +286,7 @@ router.get('/steps/tracer-state', authMiddleware, async (req, res, next) => {
           liveTodaySteps: partnerLiveTodaySteps,
           lastDaySteps: partnerLastDaySteps,
           nextMidnightUtc: partnerNextMidnightUtc,
+          stepsUpdatedAt: partnerTodayInfo.updatedAt?.toISOString() ?? null,
         }
       },
       transition: {
@@ -281,6 +308,106 @@ router.get('/steps/tracer-state', authMiddleware, async (req, res, next) => {
         days: dayBreakdown,
       }
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /activity/steps/request-partner-refresh
+// Sends a silent iOS background push to the caller's partner asking their
+// phone to sync steps from HealthKit. No-ops if the partner's data is fresh,
+// they have no APNs token, or a request was already issued recently.
+router.post('/steps/request-partner-refresh', authMiddleware, async (req, res, next) => {
+  try {
+    const userId = (req as AuthRequest).user!.id;
+
+    const viewer = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        partnerId: true,
+        partner: {
+          select: {
+            id: true,
+            timezone: true,
+            apnsDeviceToken: true,
+          },
+        },
+      },
+    });
+
+    if (!viewer?.partnerId || !viewer.partner) {
+      return res.json({ requested: false, reason: 'no_partner' });
+    }
+
+    if (!viewer.partner.apnsDeviceToken) {
+      return res.json({ requested: false, reason: 'partner_no_apns_token' });
+    }
+
+    const throttleKey = `${viewer.id}:${viewer.partner.id}`;
+    const lastAt = partnerRefreshLastRequestAt.get(throttleKey) ?? 0;
+    const nowMs = Date.now();
+    if (nowMs - lastAt < PARTNER_REFRESH_MIN_INTERVAL_MS) {
+      return res.json({ requested: false, reason: 'throttled' });
+    }
+
+    const partnerTimezone = viewer.partner.timezone || 'UTC';
+    const partnerTodayKey = dayKeyInTimezone(new Date(nowMs), partnerTimezone);
+    const partnerTodayInfo = await getStepsInfoByDayKey(viewer.partner.id, partnerTodayKey);
+
+    const partnerUpdatedAtMs = partnerTodayInfo.updatedAt?.getTime() ?? null;
+    const partnerIsFresh =
+      partnerUpdatedAtMs !== null && nowMs - partnerUpdatedAtMs < PARTNER_REFRESH_STALE_THRESHOLD_MS;
+
+    if (partnerIsFresh) {
+      return res.json({
+        requested: false,
+        reason: 'fresh',
+        partnerStepsUpdatedAt: partnerTodayInfo.updatedAt?.toISOString() ?? null,
+      });
+    }
+
+    // Reserve the throttle slot before awaiting the push so overlapping
+    // requests during the send fail-fast on the throttle path.
+    partnerRefreshLastRequestAt.set(throttleKey, nowMs);
+
+    try {
+      const result = await sendBackgroundWakePush({
+        deviceToken: viewer.partner.apnsDeviceToken,
+        data: {
+          type: 'steps_refresh_request',
+          requestedByUserId: viewer.id,
+          requestedAt: new Date(nowMs).toISOString(),
+        },
+      });
+
+      if (result.skipped) {
+        // APNs isn't configured on this environment; release the throttle so a
+        // properly configured server can retry immediately.
+        partnerRefreshLastRequestAt.delete(throttleKey);
+        return res.json({ requested: false, reason: 'apns_not_configured' });
+      }
+
+      return res.json({
+        requested: true,
+        partnerStepsUpdatedAt: partnerTodayInfo.updatedAt?.toISOString() ?? null,
+      });
+    } catch (pushErr: any) {
+      partnerRefreshLastRequestAt.delete(throttleKey);
+      const message = pushErr?.message || '';
+      // If APNs says the token is dead, drop it so we stop trying.
+      if (/BadDeviceToken|Unregistered|410/i.test(message)) {
+        await prisma.user.update({
+          where: { id: viewer.partner.id },
+          data: {
+            apnsDeviceToken: null,
+            apnsDeviceTokenUpdatedAt: null,
+          },
+        }).catch(() => {});
+      }
+      console.error('[Steps] request-partner-refresh push failed:', message);
+      return res.json({ requested: false, reason: 'push_failed' });
+    }
   } catch (err) {
     next(err);
   }
@@ -440,6 +567,10 @@ router.post('/steps/sync', authMiddleware, async (req, res, next) => {
     }
 
     void pushPartnerSurfaceUpdateForChangedUser(userId, 'steps_synced');
+    void refreshDailyActiveCalories(
+      userId,
+      dayKey || dateForRecord.toISOString().split('T')[0],
+    );
   } catch (err) {
     next(err);
   }
@@ -501,6 +632,7 @@ router.put('/steps/correct', authMiddleware, async (req, res, next) => {
     }
 
     void pushPartnerSurfaceUpdateForChangedUser(userId, 'steps_corrected');
+    void refreshDailyActiveCalories(userId, dayKey || dateForRecord.toISOString().split('T')[0]);
   } catch (err) {
     next(err);
   }

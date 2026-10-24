@@ -39,6 +39,7 @@ export function presentPlan(plan: UserPlan) {
     dailyCalorieTarget: plan.dailyCalorieTarget,
     dailyActivityMins: plan.dailyActivityMins,
     currentWeek: plan.currentWeek,
+    trainingStyle: plan.trainingStyle,
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt,
   };

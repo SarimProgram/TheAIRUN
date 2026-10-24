@@ -3,7 +3,7 @@ import type { RunInstructionRule } from "@/lib/run-instruction-config";
 export const EASY_RUN_INSTRUCTION_RULES: RunInstructionRule[] = [
     {
         id: "easy-run-start",
-        message: "This is your warm up. Start easy and relax.",
+        message: "Start with a slow walk or a very easy jog. Let your body warm up.",
         priority: 220,
         triggerOn: ["phase_start"],
         templateIds: ["easy"],
@@ -13,7 +13,7 @@ export const EASY_RUN_INSTRUCTION_RULES: RunInstructionRule[] = [
     },
     {
         id: "easy-run-main",
-        message: "Now settle into your easy run. Keep it light and comfortable.",
+        message: "Begin your easy run now. Choose a pace where you can still talk.",
         priority: 220,
         triggerOn: ["phase_start"],
         templateIds: ["easy"],
@@ -23,7 +23,7 @@ export const EASY_RUN_INSTRUCTION_RULES: RunInstructionRule[] = [
     },
     {
         id: "easy-run-halfway",
-        message: "You are doing well. Just keep going easy.",
+        message: "You are halfway. If breathing feels hard, slow down or walk.",
         priority: 190,
         triggerOn: ["periodic", "manual"],
         templateIds: ["easy"],
@@ -34,7 +34,7 @@ export const EASY_RUN_INSTRUCTION_RULES: RunInstructionRule[] = [
     },
     {
         id: "easy-run-finish",
-        message: "Almost done. Stay relaxed and finish easy.",
+        message: "You are nearly done. Keep it easy; you do not need to speed up.",
         priority: 195,
         triggerOn: ["periodic", "manual"],
         templateIds: ["easy"],
@@ -44,7 +44,7 @@ export const EASY_RUN_INSTRUCTION_RULES: RunInstructionRule[] = [
     },
     {
         id: "easy-run-cooldown",
-        message: "Now slow down. Let your body relax.",
+        message: "Slow to a walk now. Keep walking until your breathing feels normal.",
         priority: 220,
         triggerOn: ["phase_start"],
         templateIds: ["easy"],

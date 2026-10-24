@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import {
   SafeAreaView,
   ScrollView,
@@ -11,9 +11,16 @@ import {
   StatusBar,
   Animated,
 } from 'react-native';
-import { Bell, ChevronRight, Eye, Heart, ShoppingBag, Sparkles, Users } from 'lucide-react-native';
+import { Bell, CheckCircle2, ChevronRight, Eye, Heart, ShoppingBag, Sparkles, Users } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image } from 'expo-image';
+import { useAuth } from '@/src/auth/authContext';
+import { useEntitlement } from '@/src/billing';
+import { API_BASE_URL } from '../../config/api';
+import {
+  getPartnerPlanStatusMessage,
+  type PartnerPlanSummary,
+} from '@/utils/partnerPlanStatus';
 
 const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
 const height = Math.min(windowHeight, 800);
@@ -36,18 +43,20 @@ type Props = {
   userName?: string;
   userGender?: string | null;
   partnerName?: string;
+  joinedWithCode?: boolean;
   weeklyPlan?: any[];
   currentWeight?: string | number;
   weightUnit?: string;
   mainGoal?: 'weightloss' | 'running' | 'both' | string | null;
   onBack: () => void;
-  onContinue: () => void;
+  onContinue: (opts?: { skipPaywall?: boolean }) => void;
 };
 
 export default function Phase19PlanTimeline({
   userName = 'YOU',
   userGender,
   partnerName,
+  joinedWithCode = false,
   weeklyPlan = [],
   currentWeight,
   weightUnit = 'kg',
@@ -55,8 +64,55 @@ export default function Phase19PlanTimeline({
   onBack,
   onContinue,
 }: Props) {
+  const { authFetch } = useAuth();
+  const { access, refreshAccess } = useEntitlement();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
+  const [fetchedPartnerName, setFetchedPartnerName] = useState<string | null>(null);
+  const [partnerPlanSummary, setPartnerPlanSummary] = useState<PartnerPlanSummary | null>(null);
+  const [hasLinkedPartner, setHasLinkedPartner] = useState(false);
+
+  const resolvedPartnerName = partnerName || fetchedPartnerName;
+  const showPartnerName = !!resolvedPartnerName && (joinedWithCode || hasLinkedPartner || !!partnerPlanSummary);
+
+  const loadPartnerContext = useCallback(async () => {
+    try {
+      const [partnerRes, pendingRes] = await Promise.all([
+        authFetch(`${API_BASE_URL}/partner`),
+        authFetch(`${API_BASE_URL}/partner/invites/pending`),
+      ]);
+
+      const partnerData = partnerRes.ok ? await partnerRes.json() : null;
+      const pendingData = pendingRes.ok ? await pendingRes.json() : null;
+
+      if (partnerData?.hasPartner && partnerData?.partner) {
+        setHasLinkedPartner(true);
+        setFetchedPartnerName(partnerData.partner.displayName || null);
+        setPartnerPlanSummary(partnerData.partner.planSummary ?? null);
+        return;
+      }
+
+      const invites = Array.isArray(pendingData?.invites) ? pendingData.invites : [];
+      const pendingInvite = invites[0];
+      if (pendingInvite?.fromUser) {
+        setHasLinkedPartner(false);
+        setFetchedPartnerName(pendingInvite.fromUser.displayName || null);
+        setPartnerPlanSummary(pendingInvite.fromUser.planSummary ?? null);
+        return;
+      }
+
+      setHasLinkedPartner(false);
+      setPartnerPlanSummary(null);
+    } catch {
+      setHasLinkedPartner(false);
+      setPartnerPlanSummary(null);
+    }
+  }, [authFetch]);
+
+  useEffect(() => {
+    refreshAccess().catch(() => {});
+    loadPartnerContext();
+  }, [loadPartnerContext, refreshAccess]);
 
   useEffect(() => {
     Animated.parallel([
@@ -64,6 +120,41 @@ export default function Phase19PlanTimeline({
       Animated.spring(slideAnim, { toValue: 0, tension: 20, useNativeDriver: true }),
     ]).start();
   }, []);
+
+  const goalMode = useMemo(() => {
+    const safePlan = Array.isArray(weeklyPlan) ? weeklyPlan : [];
+    const hasRuns = safePlan.some((item) => Number(item?.['Run km/week']) > 0);
+
+    if (mainGoal === 'both') return 'combined';
+    if (mainGoal === 'running') return 'running';
+    if (mainGoal === 'weightloss') return 'weight';
+    return hasRuns ? 'running' : 'weight';
+  }, [mainGoal, weeklyPlan]);
+
+  const planColumnLabel = useMemo(() => {
+    if (goalMode === 'combined') return 'Weight Loss & Running';
+    if (goalMode === 'running') return 'Running Plan';
+    return 'Your Plan';
+  }, [goalMode]);
+
+  const motivationCopy = useMemo(() => {
+    if (goalMode === 'combined') {
+      return {
+        line: 'Lose weight while building your running fitness.',
+        punch: 'Your weight loss & running plan is ready.',
+      };
+    }
+    if (goalMode === 'running') {
+      return {
+        line: 'Build pace, distance, and consistency week by week.',
+        punch: 'Your running plan is ready. No excuses.',
+      };
+    }
+    return {
+      line: "It's easier when you're not doing it alone.",
+      punch: 'Your plan is ready. No excuses.',
+    };
+  }, [goalMode]);
 
   const roadmapCheckpoints = useMemo(() => {
     const safePlan = Array.isArray(weeklyPlan) ? weeklyPlan : [];
@@ -80,16 +171,6 @@ export default function Phase19PlanTimeline({
 
     const totalWeeks = Math.max(1, normalizedPlan[normalizedPlan.length - 1]?.week ?? normalizedPlan.length ?? 1);
     const currentWeightNum = typeof currentWeight === 'number' ? currentWeight : typeof currentWeight === 'string' ? Number(currentWeight) : NaN;
-    const goalMode =
-      mainGoal === 'both'
-        ? 'combined'
-        : mainGoal === 'running'
-          ? 'running'
-          : mainGoal === 'weightloss'
-            ? 'weight'
-            : normalizedPlan.some((item) => item.runKm > 0)
-              ? 'running'
-              : 'weight';
 
     const checkpointWeeks = Array.from(
       new Set([
@@ -123,14 +204,14 @@ export default function Phase19PlanTimeline({
           key: `checkpoint-${week}`,
           weekLabel: isStart ? 'Today' : `Week ${week}`,
           summary: isStart
-            ? 'Your fat-loss run plan starts.'
+            ? 'Your weight loss & running plan starts.'
             : isFinal
-              ? `You finish leaner and stronger.`
+              ? 'You finish leaner, fitter, and stronger.'
               : index === 1
                 ? diff && diff > 0
-                  ? `You may be down about ${diff} ${weightUnit}.`
-                  : 'You should feel lighter and steadier.'
-                : `You build toward ${runValue}.`,
+                  ? `You may lose about ${diff} ${weightUnit} while runs get easier.`
+                  : 'Weight starts shifting as your runs feel smoother.'
+                : `You build toward ${runValue} while staying on track to lose weight.`,
         };
       }
 
@@ -167,7 +248,23 @@ export default function Phase19PlanTimeline({
     });
 
     return checkpoints.slice(0, 4);
-  }, [currentWeight, mainGoal, weightUnit, weeklyPlan]);
+  }, [currentWeight, goalMode, weightUnit, weeklyPlan]);
+
+  const partnerStatusMessage = useMemo(
+    () =>
+      getPartnerPlanStatusMessage({
+        partnerName: resolvedPartnerName,
+        selfAccess: access,
+        partnerPlan: partnerPlanSummary,
+        hasLinkedPartner,
+      }),
+    [access, hasLinkedPartner, partnerPlanSummary, resolvedPartnerName]
+  );
+
+  const footerNote = partnerStatusMessage?.skipPaywall
+    ? 'Your partner already covered your access.'
+    : 'Invite your partner after you start.';
+  const ctaText = partnerStatusMessage?.skipPaywall ? 'CONTINUE' : 'START MY JOURNEY';
 
   const userAvatarSource = useMemo(() => {
     const normalizedGender = String(userGender || '').trim().toLowerCase();
@@ -218,8 +315,8 @@ export default function Phase19PlanTimeline({
                         style={styles.mainAvatar} 
                         contentFit="contain"
                     />
-                    <Text style={[styles.avatarNameLabel, { opacity: partnerName ? 1 : 0.6 }]}>
-                        {partnerName || 'AWAITING...'}
+                    <Text style={[styles.avatarNameLabel, { opacity: showPartnerName ? 1 : 0.6 }]}>
+                        {showPartnerName ? resolvedPartnerName : 'AWAITING...'}
                     </Text>
                 </View>
             </View>
@@ -236,14 +333,39 @@ export default function Phase19PlanTimeline({
           contentContainerStyle={styles.overlapScrollContent}
           showsVerticalScrollIndicator={false}
         >
-        <View style={[styles.cardHeader, useCompactLayout && styles.cardHeaderCompact]}>
-            <Text style={styles.cardHeaderTitle}>Your Plan, Better Together</Text>
-        </View>
+        {partnerStatusMessage?.skipPaywall && (
+          <View style={[styles.cardHeader, useCompactLayout && styles.cardHeaderCompact]}>
+              <Text style={styles.cardHeaderTitle}>Your Plan, Better Together</Text>
+          </View>
+        )}
+
+        {partnerStatusMessage?.skipPaywall ? (
+          <View style={styles.coverageCard}>
+            <View style={styles.coverageIconWrap}>
+              <CheckCircle2 size={16} color={COLORS.success} strokeWidth={2.4} />
+            </View>
+            <View style={styles.coverageText}>
+              <Text style={styles.coverageTitle}>{partnerStatusMessage.title}</Text>
+              <Text style={styles.coverageSubtitle}>{partnerStatusMessage.subtitle}</Text>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.motivationCard}>
+            <View style={styles.motivationTop}>
+              <Text style={styles.motivationStat}>70%</Text>
+              <Text style={styles.motivationStatLabel}>quit going alone</Text>
+            </View>
+            <Text style={styles.motivationLine}>
+            {motivationCopy.line}
+            </Text>
+            <Text style={styles.motivationPunch}>{motivationCopy.punch}</Text>
+          </View>
+        )}
 
         <View style={[styles.splitRow, useCompactLayout && styles.splitRowCompact]}>
             {/* Left: My Blueprint */}
             <View style={styles.column}>
-                <Text style={styles.columnLabel}>Your Plan</Text>
+                <Text style={styles.columnLabel}>{planColumnLabel}</Text>
                 <View style={[styles.blueprintBulletList, useCompactLayout && styles.blueprintBulletListCompact]}>
                     {roadmapCheckpoints.slice(0, useCompactLayout ? 3 : 4).map((item) => (
                         <View key={item.key} style={styles.blueprintBulletRow}>
@@ -307,18 +429,22 @@ export default function Phase19PlanTimeline({
 
       {/* 3. High-Impact Footer */}
       <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
-        <TouchableOpacity style={[styles.cta, useCompactLayout && styles.ctaCompact]} onPress={onContinue} activeOpacity={0.9}>
+        <TouchableOpacity
+          style={[styles.cta, useCompactLayout && styles.ctaCompact]}
+          onPress={() => onContinue({ skipPaywall: partnerStatusMessage?.skipPaywall })}
+          activeOpacity={0.9}
+        >
             <LinearGradient 
                 colors={[COLORS.brand, COLORS.brandDark]} 
                 style={styles.ctaGrad}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
             >
-                <Text style={styles.ctaText}>START MY JOURNEY</Text>
+                <Text style={styles.ctaText}>{ctaText}</Text>
                 <ChevronRight color={COLORS.white} size={20} strokeWidth={3} />
             </LinearGradient>
         </TouchableOpacity>
-        {!useCompactLayout && <Text style={styles.footerNote}>Start your plan and bring someone with you.</Text>}
+        {!useCompactLayout && <Text style={styles.footerNote}>{footerNote}</Text>}
       </View>
     </View>
   );
@@ -330,10 +456,10 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   hero: {
-    height: height * 0.38,
+    height: height * 0.32,
   },
   heroCompact: {
-    height: height * 0.3,
+    height: height * 0.26,
   },
   heroSafe: {
     flex: 1,
@@ -371,8 +497,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 5,
-    marginTop: -15, 
-    marginBottom: 5, 
+    marginTop: -10,
+    marginBottom: 0,
   },
   connectionLine: {
     position: 'absolute',
@@ -396,10 +522,10 @@ const styles = StyleSheet.create({
   },
   avatarNameLabel: {
     color: COLORS.white,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
-    letterSpacing: 1.5,
-    marginTop: 12,
+    letterSpacing: 1.2,
+    marginTop: 8,
     textTransform: 'uppercase',
   },
   syncRing: {
@@ -425,15 +551,15 @@ const styles = StyleSheet.create({
   },
   heroBadge: {
     backgroundColor: 'rgba(0,0,0,0.12)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
     borderRadius: 20,
-    marginTop: 5,
-    marginBottom: 35, // pushes it comfortably away from the bottom so it doesn't look bad
+    marginTop: 2,
+    marginBottom: 22,
   },
   heroBadgeCompact: {
-    paddingVertical: 7,
-    marginBottom: 18,
+    paddingVertical: 5,
+    marginBottom: 12,
   },
   heroBadgeText: {
     color: COLORS.white,
@@ -448,7 +574,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 40,
     borderTopRightRadius: 40,
     paddingHorizontal: 25,
-    paddingTop: 30,
+    paddingTop: 18,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowRadius: 20,
@@ -458,21 +584,21 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
     paddingHorizontal: 18,
-    paddingTop: 18,
+    paddingTop: 12,
   },
   overlapScrollContent: {
     paddingBottom: 12,
     flexGrow: 1,
   },
   cardHeader: {
-    marginBottom: 30,
-    borderBottomWidth: 1.5,
+    marginBottom: 14,
+    borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
-    paddingBottom: 20,
+    paddingBottom: 12,
   },
   cardHeaderCompact: {
-    marginBottom: 16,
-    paddingBottom: 12,
+    marginBottom: 10,
+    paddingBottom: 8,
   },
   cardHeaderTitle: {
     fontSize: 12,
@@ -481,6 +607,85 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textAlign: 'center',
     textTransform: 'uppercase',
+  },
+  coverageCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 12,
+    borderRadius: 10,
+    backgroundColor: '#F6FDFA',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  coverageIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+  },
+  coverageText: {
+    flex: 1,
+  },
+  coverageTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.ink,
+    marginBottom: 1,
+    lineHeight: 16,
+    letterSpacing: -0.1,
+  },
+  coverageSubtitle: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: COLORS.muted,
+    fontWeight: '500',
+  },
+  motivationCard: {
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 6,
+  },
+  motivationTop: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+  },
+  motivationStat: {
+    fontSize: 42,
+    fontWeight: '900',
+    color: COLORS.brand,
+    letterSpacing: -2,
+    lineHeight: 44,
+  },
+  motivationStatLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.ink,
+    letterSpacing: -0.3,
+    lineHeight: 18,
+  },
+  motivationLine: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    color: COLORS.muted,
+  },
+  motivationPunch: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    color: COLORS.ink,
   },
   splitRow: {
     flexDirection: 'row',

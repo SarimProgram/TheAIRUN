@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { ChevronLeft, ArrowRight, Mail, Lock } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import SocialAuthRow from './SocialAuthRow';
 
 const { height: windowHeight } = Dimensions.get('window');
 const height = Math.min(windowHeight, 800);
@@ -36,10 +37,26 @@ type Props = {
     onBack: () => void;
     onSuccess: () => void;
     onLogin: (email: string, password: string) => Promise<void>;
+    onApplePress?: () => void;
+    socialLoading?: 'google' | 'apple' | null;
+    userName?: string;
+    initialEmail?: string;
+    subtitle?: string;
+    onRegisterPress?: () => void;
 };
 
-export default function Phase0ManualLogin({ onBack, onSuccess, onLogin }: Props) {
-    const [email, setEmail] = useState('');
+export default function Phase0ManualLogin({
+    onBack,
+    onSuccess,
+    onLogin,
+    onApplePress,
+    socialLoading = null,
+    userName = '',
+    initialEmail = '',
+    subtitle,
+    onRegisterPress,
+}: Props) {
+    const [email, setEmail] = useState(initialEmail);
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -52,6 +69,12 @@ export default function Phase0ManualLogin({ onBack, onSuccess, onLogin }: Props)
             Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
         ]).start();
     }, []);
+
+    useEffect(() => {
+        if (initialEmail.trim()) {
+            setEmail(initialEmail.trim());
+        }
+    }, [initialEmail]);
 
     const handleSubmit = async () => {
         if (!email.trim() || !password) {
@@ -99,7 +122,22 @@ export default function Phase0ManualLogin({ onBack, onSuccess, onLogin }: Props)
                     >
                         <View style={styles.textGroup}>
                             <Text style={styles.mainTitle}>Welcome<Text style={{ color: COLORS.brand }}> back.</Text></Text>
-                            <Text style={styles.subtitle}>Log in to continue tracking progress with your partner.</Text>
+                            <Text style={styles.subtitle}>
+                                {subtitle ?? 'Log in to continue tracking progress with your partner.'}
+                            </Text>
+                        </View>
+
+                        <SocialAuthRow
+                            onSuccess={onSuccess}
+                            onApplePress={onApplePress}
+                            socialLoading={socialLoading}
+                            userName={userName}
+                        />
+
+                        <View style={styles.dividerRow}>
+                            <View style={styles.dividerLine} />
+                            <Text style={styles.dividerText}>or log in with email</Text>
+                            <View style={styles.dividerLine} />
                         </View>
 
                         <View style={styles.form}>
@@ -134,6 +172,12 @@ export default function Phase0ManualLogin({ onBack, onSuccess, onLogin }: Props)
                         </View>
 
                         <Text style={styles.encryptionNote}>Your data is private and encrypted</Text>
+
+                        {onRegisterPress ? (
+                            <TouchableOpacity onPress={onRegisterPress} style={styles.loginLink} activeOpacity={0.7}>
+                                <Text style={styles.loginLinkText}>Need an account? Register</Text>
+                            </TouchableOpacity>
+                        ) : null}
                     </ScrollView>
 
                     <View style={styles.footer}>
@@ -204,6 +248,22 @@ const styles = StyleSheet.create({
     textGroup: {
         marginBottom: 25,
     },
+    dividerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginVertical: 22,
+    },
+    dividerLine: {
+        flex: 1,
+        height: 1,
+        backgroundColor: COLORS.border,
+    },
+    dividerText: {
+        fontSize: 12,
+        color: COLORS.muted,
+        fontWeight: '600',
+    },
     mainTitle: {
         fontSize: 38,
         fontWeight: '900',
@@ -252,6 +312,17 @@ const styles = StyleSheet.create({
         color: COLORS.muted,
         fontWeight: '600',
         textAlign: 'center',
+    },
+    loginLink: {
+        marginTop: 22,
+        alignSelf: 'center',
+        marginBottom: 8,
+    },
+    loginLinkText: {
+        fontSize: 14,
+        color: COLORS.ink,
+        fontWeight: '700',
+        textDecorationLine: 'underline',
     },
     footer: {
         paddingHorizontal: 24,

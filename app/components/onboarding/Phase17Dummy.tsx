@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   Animated,
   StatusBar,
-  Dimensions,
   Platform,
   ActivityIndicator,
 } from 'react-native';
@@ -17,155 +16,184 @@ import {
   Utensils,
   DollarSign,
   Users,
-  Check,
   ChevronRight,
   ChevronLeft,
-  ShieldAlert
+  ShieldCheck,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useWager } from '../../hooks/useWager';
 
-const { width: windowWidth } = Dimensions.get('window');
-const width = Math.min(windowWidth, 480);
-
 const COLORS = {
   coral: '#FF6B6B',
   coralDark: '#EE5253',
-  coralLight: '#FFF0F0',
+  coralLight: '#FFF5F5',
+  coralBorder: '#FFDCDC',
   white: '#FFFFFF',
   black: '#1F2937',
   muted: '#6B7280',
-  bg: '#FFFFFF',
+  surface: '#F8F9FA',
+  line: '#EFEEF3',
 };
 
 const PENALTIES = [
-  { id: 'chore', label: 'Cleaning Duty', icon: Scale },
-  { id: 'dinner', label: 'Buy Dinner', icon: Utensils },
-  { id: 'fine', label: '$5 Fund', icon: DollarSign },
-  { id: 'partner', label: 'Partner Decides', icon: Users },
+  { id: 'chore', label: 'Cleaning duty', hint: 'Chores on you', icon: Scale },
+  { id: 'dinner', label: 'Buy dinner', hint: 'Treat your partner', icon: Utensils },
+  { id: 'fine', label: '$5 fund', hint: 'Into the pot', icon: DollarSign },
+  { id: 'partner', label: 'Partner decides', hint: 'They pick the stakes', icon: Users },
 ];
 
 export default function PenaltyWagerScreen({ onContinue, onBack, joinedWithCode = false }: any) {
   const [selected, setSelected] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
+  const slideAnim = useRef(new Animated.Value(16)).current;
   const { wager, loading } = useWager();
   const showExistingWager = joinedWithCode && !!wager;
+  const canContinue = showExistingWager || !!selected;
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, tension: 40, friction: 9, useNativeDriver: true })
+      Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+      Animated.spring(slideAnim, { toValue: 0, tension: 50, friction: 10, useNativeDriver: true }),
     ]).start();
   }, []);
-
-  const handleSelect = (id: string) => {
-    setSelected(id);
-  };
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
+      <LinearGradient
+        colors={['#FFFFFF', '#FDFCFB', '#FEF9F9']}
+        style={StyleSheet.absoluteFill}
+      />
+
       <SafeAreaView style={styles.flex}>
+        <View style={styles.content}>
+          <View style={styles.topNav}>
+            <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
+              <ChevronLeft color={COLORS.black} size={22} />
+            </TouchableOpacity>
+          </View>
 
-        {/* Header with Back Button */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
-            <ChevronLeft color={COLORS.black} size={30} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.main}>
-          {/* Title Section back at top */}
-          <Animated.View style={[
-            styles.topSection,
-            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
-          ]}>
-         
+          <Animated.View
+            style={[
+              styles.header,
+              { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+            ]}
+          >
+            <View style={styles.miniTag}>
+              <Scale size={13} color={COLORS.coral} />
+              <Text style={styles.miniTagText}>
+                {showExistingWager ? 'SHARED WAGER' : 'WEEKLY STAKES'}
+              </Text>
+            </View>
             <Text style={styles.title}>
-              {showExistingWager ? 'Weekly ' : 'Penalty '}<Text style={{ color: COLORS.coral }}>Wager?</Text>
+              {showExistingWager ? 'Your wager\nis set' : 'Pick a penalty'}
             </Text>
             <Text style={styles.subtitle}>
               {showExistingWager
-                ? `This is the wager ${wager?.partnerName || 'your partner'} already set for this week.`
-                : 'For your first weekly run goal, what happens if you or partner miss it?'}
+                ? `${wager?.partnerName || 'Your partner'} already chose this week's stakes.`
+                : 'If either of you misses the weekly run goal.'}
             </Text>
           </Animated.View>
 
-          <Animated.View style={[
-            styles.mainArea,
-            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
-          ]}>
+          <Animated.View
+            style={[
+              styles.mainArea,
+              { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+            ]}
+          >
             {joinedWithCode && loading ? (
               <View style={styles.loadingWrap}>
                 <ActivityIndicator color={COLORS.coral} size="large" />
               </View>
             ) : showExistingWager ? (
-              <View style={styles.existingWagerCard}>
-                <View style={styles.existingWagerBadge}>
-                  <ShieldAlert size={16} color={COLORS.coral} />
-                  <Text style={styles.existingWagerBadgeText}>{wager?.status || 'ACTIVE'}</Text>
-                </View>
-                <Text style={styles.existingWagerTitle}>{wager?.title}</Text>
-                <Text style={styles.existingWagerCopy}>
-                  This week already has a shared wager in place, so you can continue without creating another one.
-                </Text>
-                <View style={styles.existingWagerMeta}>
-                  <Text style={styles.existingWagerMetaLabel}>Partner</Text>
-                  <Text style={styles.existingWagerMetaValue}>{wager?.partnerName}</Text>
+              <View style={styles.existingCard}>
+                <Text style={styles.existingTitle}>{wager?.title}</Text>
+                <View style={styles.existingMeta}>
+                  <Text style={styles.existingMetaLabel}>With</Text>
+                  <Text style={styles.existingMetaValue}>{wager?.partnerName}</Text>
                 </View>
               </View>
             ) : (
-              <View style={styles.grid}>
+              <View style={styles.optionList}>
                 {PENALTIES.map((item) => {
                   const isSelected = selected === item.id;
                   const Icon = item.icon;
                   return (
                     <TouchableOpacity
                       key={item.id}
-                      activeOpacity={0.9}
-                      onPress={() => handleSelect(item.id)}
-                      style={[styles.card, isSelected && styles.cardSelected]}
+                      activeOpacity={0.85}
+                      onPress={() => setSelected(item.id)}
+                      style={[styles.optionRow, isSelected && styles.optionRowSelected]}
                     >
-                      <View style={[styles.iconBox, isSelected && styles.iconBoxSelected]}>
-                        <Icon color={isSelected ? COLORS.white : COLORS.coral} size={24} strokeWidth={2.5} />
+                      <View style={[styles.iconTile, isSelected && styles.iconTileSelected]}>
+                        <Icon
+                          color={isSelected ? COLORS.white : COLORS.coral}
+                          size={20}
+                          strokeWidth={2.4}
+                        />
                       </View>
-                      <Text style={[styles.cardLabel, isSelected && styles.cardLabelSelected]}>{item.label}</Text>
-                      {isSelected && (
-                        <View style={styles.checkBadge}>
-                          <Check color={COLORS.white} size={10} strokeWidth={4} />
-                        </View>
-                      )}
+                      <View style={styles.optionCopy}>
+                        <Text style={[styles.optionLabel, isSelected && styles.optionLabelSelected]}>
+                          {item.label}
+                        </Text>
+                        <Text style={styles.optionHint}>{item.hint}</Text>
+                      </View>
+                      <View style={[styles.radio, isSelected && styles.radioSelected]}>
+                        {isSelected && <View style={styles.radioDot} />}
+                      </View>
                     </TouchableOpacity>
                   );
                 })}
               </View>
             )}
           </Animated.View>
-        </View>
 
-        <View style={styles.footer}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => onContinue(showExistingWager ? wager?.title || null : selected)}
-            style={styles.mainButton}
-            disabled={joinedWithCode ? loading || (!showExistingWager && !selected) : !selected}
+          <Animated.View
+            style={[
+              styles.footer,
+              { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+            ]}
           >
-            <LinearGradient
-              colors={showExistingWager || selected ? [COLORS.coral, COLORS.coralDark] : ['#E5E7EB', '#D1D5DB']}
-              style={styles.gradientButton}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => onContinue(showExistingWager ? wager?.title || null : selected)}
+              style={[styles.primaryBtn, !canContinue && styles.primaryBtnDisabled]}
+              disabled={joinedWithCode ? loading || !canContinue : !selected}
             >
-              <Text style={styles.buttonText}>{showExistingWager ? 'Continue with This Wager' : 'Confirm & Continue'}</Text>
-              <ChevronRight color="white" size={20} strokeWidth={3} />
-            </LinearGradient>
-          </TouchableOpacity>
-
-          {!showExistingWager && (
-            <TouchableOpacity style={styles.skipBtn} onPress={() => onContinue(null)}>
-              <Text style={styles.skipBtnText}>I'll decide this later</Text>
+              <LinearGradient
+                colors={canContinue ? [COLORS.coral, COLORS.coralDark] : ['#E5E7EB', '#D1D5DB']}
+                style={styles.primaryBtnGradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+              >
+                <Text style={styles.primaryBtnText}>
+                  {showExistingWager ? 'Continue' : 'Lock it in'}
+                </Text>
+                <View style={[styles.btnArrow, !canContinue && styles.btnArrowDisabled]}>
+                  <ChevronRight color={canContinue ? COLORS.coral : '#9CA3AF'} size={18} strokeWidth={3} />
+                </View>
+              </LinearGradient>
             </TouchableOpacity>
-          )}
+
+            {!showExistingWager && (
+              <TouchableOpacity
+                style={styles.skipBtn}
+                activeOpacity={0.7}
+                onPress={() => onContinue(null)}
+              >
+                <Text style={styles.skipBtnText}>I'll decide later</Text>
+              </TouchableOpacity>
+            )}
+
+            {!showExistingWager && (
+              <View style={styles.footerTip}>
+                <View style={styles.footerShield}>
+                  <ShieldCheck color={COLORS.coral} size={14} />
+                </View>
+                <Text style={styles.footerTipText}>You can change this anytime</Text>
+              </View>
+            )}
+          </Animated.View>
         </View>
       </SafeAreaView>
     </View>
@@ -175,216 +203,246 @@ export default function PenaltyWagerScreen({ onContinue, onBack, joinedWithCode 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.white },
   flex: { flex: 1 },
-  header: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
+  content: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 12 : 4,
+    paddingBottom: Platform.OS === 'ios' ? 8 : 16,
+  },
+
+  topNav: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
   },
   backBtn: {
-    width: 44,
-    height: 44,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F1F5F9',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  main: {
-    flex: 1,
-    paddingHorizontal: 28,
-    paddingTop: 5,
+
+  header: {
+    marginBottom: 32,
   },
-  topSection: {
-    marginBottom: 20,
-  },
-  badge: {
-    backgroundColor: COLORS.coralLight,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
-    marginBottom: 8,
+  miniTag: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    marginBottom: 10,
   },
-  badgeText: {
-    fontSize: 10,
+  miniTagText: {
+    fontSize: 11,
     fontWeight: '900',
     color: COLORS.coral,
-    letterSpacing: 1.5,
+    letterSpacing: 1.2,
   },
   title: {
-    fontSize: 32,
+    fontSize: 30,
     fontWeight: '900',
     color: COLORS.black,
-    lineHeight: 38,
+    lineHeight: 34,
     letterSpacing: -1,
-    marginBottom: 4,
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '500',
     color: COLORS.muted,
-    lineHeight: 20,
+    lineHeight: 22,
+    marginTop: 8,
+    maxWidth: 320,
   },
+
   mainArea: {
     flex: 1,
     justifyContent: 'center',
-    paddingBottom: 60, // Shift grid up
   },
   loadingWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 180,
+    minHeight: 200,
   },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
+
+  optionList: {
     gap: 12,
   },
-  existingWagerCard: {
-    backgroundColor: '#FFF5F5',
-    borderRadius: 28,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#FFD9D9',
-    gap: 12,
-  },
-  existingWagerBadge: {
-    alignSelf: 'flex-start',
+  optionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
     backgroundColor: COLORS.white,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  existingWagerBadgeText: {
-    color: COLORS.coral,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  existingWagerTitle: {
-    fontSize: 26,
-    lineHeight: 32,
-    fontWeight: '900',
-    color: COLORS.black,
-  },
-  existingWagerCopy: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: COLORS.muted,
-    fontWeight: '500',
-  },
-  existingWagerMeta: {
-    marginTop: 8,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: '#FBCACA',
-  },
-  existingWagerMetaLabel: {
-    fontSize: 11,
-    color: COLORS.muted,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  existingWagerMetaValue: {
-    fontSize: 16,
-    color: COLORS.black,
-    fontWeight: '800',
-  },
-  card: {
-    width: (width - 68) / 2,
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    padding: 20,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#F1F5F9',
-    height: 120,
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    gap: 14,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
-    shadowRadius: 10,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  optionRowSelected: {
+    backgroundColor: COLORS.coralLight,
+    shadowColor: COLORS.coral,
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
     elevation: 3,
   },
-  cardSelected: {
-    borderColor: COLORS.coral,
-    backgroundColor: '#FFF5F5',
-  },
-  iconBox: {
+  iconTile: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 14,
     backgroundColor: COLORS.coralLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 10,
   },
-  iconBoxSelected: {
+  iconTileSelected: {
     backgroundColor: COLORS.coral,
   },
-  cardLabel: {
-    fontSize: 14,
+  optionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  optionLabel: {
+    fontSize: 16,
     fontWeight: '800',
     color: COLORS.black,
-    textAlign: 'center',
+    letterSpacing: -0.3,
   },
-  cardLabelSelected: {
+  optionLabelSelected: {
     color: COLORS.coral,
   },
-  checkBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    backgroundColor: COLORS.coral,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+  optionHint: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: COLORS.muted,
+  },
+  radio: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.white,
   },
+  radioSelected: {
+    borderColor: COLORS.coral,
+  },
+  radioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: COLORS.coral,
+  },
+
+  existingCard: {
+    backgroundColor: COLORS.coralLight,
+    borderRadius: 24,
+    padding: 24,
+    gap: 16,
+  },
+  existingTitle: {
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '900',
+    color: COLORS.black,
+    letterSpacing: -0.5,
+  },
+  existingMeta: {
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.coralBorder,
+    gap: 4,
+  },
+  existingMetaLabel: {
+    fontSize: 11,
+    color: COLORS.muted,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  existingMetaValue: {
+    fontSize: 17,
+    color: COLORS.black,
+    fontWeight: '800',
+  },
+
   footer: {
-    paddingHorizontal: 28,
-    paddingBottom: Platform.OS === 'ios' ? 70 : 80, // Shift footer button up
-    alignItems: 'center',
+    paddingTop: 24,
+    gap: 10,
   },
-  mainButton: {
-    width: '100%',
-    height: 64,
-    borderRadius: 22,
+  primaryBtn: {
+    height: 60,
+    borderRadius: 30,
     overflow: 'hidden',
     shadowColor: COLORS.coral,
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
     elevation: 6,
   },
-  gradientButton: {
+  primaryBtnDisabled: {
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  primaryBtnGradient: {
     flex: 1,
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 26,
+    paddingRight: 8,
+  },
+  primaryBtnText: {
+    color: COLORS.white,
+    fontSize: 17,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  btnArrow: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.white,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 12,
   },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: -0.5,
+  btnArrowDisabled: {
+    backgroundColor: '#F3F4F6',
   },
   skipBtn: {
-    marginTop: 15,
-    padding: 10,
+    paddingVertical: 8,
+    alignItems: 'center',
   },
   skipBtnText: {
     color: COLORS.muted,
     fontSize: 14,
-    fontWeight: '700',
-    textDecorationLine: 'underline',
+    fontWeight: '600',
+  },
+  footerTip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4F1F5',
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 8,
+    marginTop: 4,
+  },
+  footerShield: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: COLORS.coralLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  footerTipText: {
+    fontSize: 12,
+    color: COLORS.black,
+    fontWeight: '600',
   },
 });

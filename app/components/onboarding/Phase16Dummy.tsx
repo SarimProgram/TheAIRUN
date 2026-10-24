@@ -8,69 +8,212 @@ import {
   Animated,
   StatusBar,
   Platform,
+  ScrollView,
+  TextInput,
+  Modal,
+  Pressable,
+  KeyboardAvoidingView,
 } from 'react-native';
 import {
+  ArrowRight,
+  Check,
+  Heart,
+  ChevronLeft,
+  ShieldCheck,
+  Medal,
+  Smile,
   Coffee,
   Film,
   Gift,
-  Heart,
-  Trophy,
-  ArrowRight,
-  Check,
   Calendar,
-  ShieldCheck,
-  ChevronLeft,
-  ChevronRight,
-  Star,
-  Plus,
+  Trophy,
+  Sparkles,
+  type LucideIcon,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Image as ExpoImage } from 'expo-image';
 import { useAuth } from '@/src/auth/authContext';
 import { API_BASE_URL } from '../../config/api';
+import { Fonts } from '../../constants/theme';
+
+const H_PADDING = 28;
+const OPTION_WIDTH = 104;
+const OPTION_GAP = 14;
+
+const BENEFITS = [
+  { icon: ShieldCheck, text: 'Stay motivated' },
+  { icon: Medal, text: 'Celebrate wins' },
+  { icon: Smile, text: "They'll love it" },
+];
 
 const COLORS = {
   coral: '#FF6B6B',
   coralDark: '#EE5253',
   coralLight: '#FFF5F5',
-  coralBorder: '#FFDCDC',
   white: '#FFFFFF',
   black: '#1F2937',
   muted: '#6B7280',
-  trackBg: '#E2E8F0',
-  success: '#2ECC71',
+  border: '#F0F0F0',
+  selection: '#FFF0F0',
 };
 
-const OPTIONS = [
-  { id: 'coffee', label: 'Coffee', hint: 'A treat', icon: Coffee },
-  { id: 'movie', label: 'Movie', hint: 'Cozy night', icon: Film },
-  { id: 'gift', label: 'Gift', hint: 'Surprise', icon: Gift },
-  { id: 'date', label: 'Date', hint: 'Plan it', icon: Calendar },
-  { id: 'heart', label: 'Time', hint: 'Together', icon: Heart },
-  { id: 'trophy', label: 'Prize', hint: 'Big win', icon: Trophy },
+type RewardOption = {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  iconColor: string;
+  iconBg: string;
+  isCustom?: boolean;
+};
+
+const OPTIONS: RewardOption[] = [
+  { id: 'coffee', label: 'Coffee', icon: Coffee, iconColor: '#C2410C', iconBg: '#FFF7ED' },
+  { id: 'movie', label: 'Movie', icon: Film, iconColor: '#7C3AED', iconBg: '#F5F3FF' },
+  { id: 'gift', label: 'Gift', icon: Gift, iconColor: '#DB2777', iconBg: '#FDF2F8' },
+  { id: 'date', label: 'Date', icon: Calendar, iconColor: '#E11D48', iconBg: '#FFF1F2' },
+  { id: 'heart', label: 'Time', icon: Heart, iconColor: '#DC2626', iconBg: '#FEF2F2' },
+  { id: 'trophy', label: 'Prize', icon: Trophy, iconColor: '#2563EB', iconBg: '#EFF6FF' },
+  { id: 'custom', label: 'Custom', icon: Sparkles, iconColor: '#6366F1', iconBg: '#EEF2FF', isCustom: true },
 ];
 
-export default function PartnerRewardSelection({ onContinue, onBack, joinedWithCode = false }: any) {
+const WEEKS = [
+  {
+    key: 'week1' as const,
+    label: 'Week 1',
+    points: '700',
+    milestoneAction: 'If your partner earns',
+    milestoneSub: 'they’ll unlock this reward.',
+  },
+  {
+    key: 'week2' as const,
+    label: 'Week 2',
+    points: '1,400',
+    milestoneAction: 'If your partner earns',
+    milestoneSub: 'they’ll unlock this reward.',
+  },
+  {
+    key: 'week3' as const,
+    label: 'Week 3',
+    points: '2,100',
+    milestoneAction: 'If your partner earns',
+    milestoneSub: 'they’ll unlock this reward.',
+  },
+];
+
+type RewardMap = {
+  week1: string | null;
+  week2: string | null;
+  week3: string | null;
+};
+
+type CustomLabels = {
+  week1: string;
+  week2: string;
+  week3: string;
+};
+
+type Props = {
+  onContinue: (data: RewardMap) => void;
+  onBack?: () => void;
+  joinedWithCode?: boolean;
+};
+
+function RewardHero({ compact = false }: { compact?: boolean }) {
+  return (
+    <View style={[styles.heroScene, compact && styles.heroSceneCompact]}>
+      <View style={[styles.heroGlow, compact && styles.heroGlowCompact]} />
+      <ExpoImage
+        source={require('../../assets/bf5ea328-b200-4872-90b4-5932707e2f40.png')}
+        style={[styles.heroImage, compact && styles.heroImageCompact]}
+        contentFit="contain"
+        contentPosition="center"
+      />
+      <View style={[styles.heroHeartBadge, compact && styles.heroHeartBadgeCompact]}>
+        <Heart size={compact ? 9 : 11} color={COLORS.white} fill={COLORS.white} />
+      </View>
+    </View>
+  );
+}
+
+function RewardTile({
+  option,
+  isSelected,
+  displayLabel,
+  onPress,
+}: {
+  option: RewardOption;
+  isSelected: boolean;
+  displayLabel: string;
+  onPress: () => void;
+}) {
+  const Icon = option.icon;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.92}
+      onPress={onPress}
+      style={[
+        styles.optionCard,
+        option.isCustom && !isSelected && styles.optionCardCustom,
+        isSelected && styles.optionCardSelected,
+      ]}
+    >
+      {isSelected ? (
+        <LinearGradient
+          colors={[COLORS.coral, COLORS.coralDark]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.iconWell}
+        >
+          <Icon color={COLORS.white} size={22} strokeWidth={2} />
+        </LinearGradient>
+      ) : (
+        <View style={[styles.iconWell, { backgroundColor: option.iconBg }]}>
+          <Icon color={option.iconColor} size={22} strokeWidth={1.9} />
+        </View>
+      )}
+
+      <Text style={[styles.optionLabel, isSelected && styles.optionLabelSelected]} numberOfLines={1}>
+        {displayLabel}
+      </Text>
+
+      <View style={[styles.selectRing, isSelected && styles.selectRingActive]}>
+        {isSelected && <Check color={COLORS.white} size={10} strokeWidth={3.5} />}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+export default function PartnerRewardSelection({
+  onContinue,
+  onBack,
+  joinedWithCode = false,
+}: Props) {
   const { authFetch } = useAuth();
-  const [setupStep, setSetupStep] = useState(1); // 1-3: Setup, 4: Summary
-  const [week1Reward, setWeek1Reward] = useState<string | null>(null);
-  const [week2Reward, setWeek2Reward] = useState<string | null>(null);
-  const [week3Reward, setWeek3Reward] = useState<string | null>(null);
-  const [isCommiting, setIsCommiting] = useState(false);
-  const [partnerName, setPartnerName] = useState('your partner');
+  const [rewards, setRewards] = useState<RewardMap>({
+    week1: null,
+    week2: null,
+    week3: null,
+  });
+  const [customLabels, setCustomLabels] = useState<CustomLabels>({
+    week1: '',
+    week2: '',
+    week3: '',
+  });
+  const [customModalWeek, setCustomModalWeek] = useState<keyof RewardMap | null>(null);
+  const [customDraft, setCustomDraft] = useState('');
   const [partnerHasOnboardingRewards, setPartnerHasOnboardingRewards] = useState(false);
+  const [step, setStep] = useState<'pick' | 'review'>('pick');
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
-  const itemFades = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  const slideAnim = useRef(new Animated.Value(28)).current;
 
   useEffect(() => {
-    animateIn();
-    if (setupStep === 4) {
-      Animated.stagger(200, itemFades.map(anim =>
-        Animated.spring(anim, { toValue: 1, tension: 50, friction: 8, useNativeDriver: true })
-      )).start();
-    }
-  }, [setupStep, isCommiting]);
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+      Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
+    ]).start();
+  }, [fadeAnim, slideAnim]);
 
   useEffect(() => {
     if (!joinedWithCode) return;
@@ -81,11 +224,9 @@ export default function PartnerRewardSelection({ onContinue, onBack, joinedWithC
         const res = await authFetch(`${API_BASE_URL}/partner`);
         const data = await res.json();
         if (!mounted) return;
-        setPartnerName(data?.partner?.displayName || 'your partner');
         setPartnerHasOnboardingRewards(!!data?.partnerHasOnboardingRewards);
       } catch {
         if (!mounted) return;
-        setPartnerName('your partner');
         setPartnerHasOnboardingRewards(false);
       }
     };
@@ -96,423 +237,322 @@ export default function PartnerRewardSelection({ onContinue, onBack, joinedWithC
     };
   }, [joinedWithCode, authFetch]);
 
-  const animateIn = () => {
-    fadeAnim.setValue(0);
-    slideAnim.setValue(20);
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, tension: 40, friction: 9, useNativeDriver: true }),
-    ]).start();
-  };
-
-  const handleRewardSelect = (id: string) => {
-    if (setupStep === 1) setWeek1Reward(id);
-    else if (setupStep === 2) setWeek2Reward(id);
-    else setWeek3Reward(id);
-  };
-
-  const handleConfirmAction = () => {
-    if (setupStep < 3) {
-      setSetupStep(prev => prev + 1);
-      setIsCommiting(false);
-    } else if (setupStep === 3) {
-      setSetupStep(4);
-    } else {
-      onContinue({ week1: week1Reward, week2: week2Reward, week3: week3Reward });
+  const selectReward = (weekKey: keyof RewardMap, option: RewardOption) => {
+    if (option.isCustom) {
+      setCustomDraft(customLabels[weekKey]);
+      setCustomModalWeek(weekKey);
+      return;
     }
+
+    setRewards((prev) => ({
+      ...prev,
+      [weekKey]: prev[weekKey] === option.id ? null : option.id,
+    }));
   };
 
-  const editWeek = (weekIndex: number) => {
-    setSetupStep(weekIndex);
-    setIsCommiting(true);
+  const confirmCustomReward = () => {
+    if (!customModalWeek) return;
+    const label = customDraft.trim();
+    setCustomLabels((prev) => ({ ...prev, [customModalWeek]: label }));
+    setRewards((prev) => ({
+      ...prev,
+      [customModalWeek]: prev[customModalWeek] === 'custom' && !label ? null : 'custom',
+    }));
+    setCustomModalWeek(null);
+    setCustomDraft('');
   };
 
-  const currentSelection = setupStep === 1 ? week1Reward : setupStep === 2 ? week2Reward : week3Reward;
-  const milestonePoints = setupStep === 1 ? '700' : setupStep === 2 ? '1,400' : '2,100';
-  const nextMilestonePoints = setupStep === 1 ? '1,400' : setupStep === 2 ? '2,100' : '2,800';
-  const milestoneTime = setupStep === 1 ? '1 Week' : setupStep === 2 ? '2 Weeks' : '3 Weeks';
-  const winningWeekLabel = setupStep === 1 ? 'first' : setupStep === 2 ? 'second' : 'third';
+  const getRewardOption = (optionId: string | null) =>
+    OPTIONS.find((o) => o.id === optionId) ?? null;
+
+  const getDisplayLabel = (weekKey: keyof RewardMap, optionId: string | null) => {
+    if (!optionId) return '';
+    if (optionId === 'custom' && customLabels[weekKey].trim()) {
+      return customLabels[weekKey].trim();
+    }
+    return getRewardOption(optionId)?.label ?? '';
+  };
+
+  const selectedCount = [rewards.week1, rewards.week2, rewards.week3].filter(Boolean).length;
+  const hasAnySelection = selectedCount >= 1;
   const shouldShowPartnerStoreStory = joinedWithCode && partnerHasOnboardingRewards;
 
-  const getRewardInfo = (id: string | null) => {
-    if (!id) return { label: 'Nothing set yet', icon: Heart };
-    return OPTIONS.find(o => o.id === id) || { label: 'Reward', icon: Gift };
+  const handleBack = () => {
+    if (step === 'review') {
+      setStep('pick');
+      return;
+    }
+    onBack?.();
   };
 
-  const summaryData = [
-    { points: '700', rewardId: week1Reward, weekIndex: 1 },
-    { points: '1,400', rewardId: week2Reward, weekIndex: 2 },
-    { points: '2,100', rewardId: week3Reward, weekIndex: 3 },
-  ];
-
-  const renderTopNav = () => (
-    <View style={styles.topNav}>
-      <TouchableOpacity
-        style={styles.backBtn}
-        onPress={() => {
-          if (isCommiting) setIsCommiting(false);
-          else if (setupStep > 1) setSetupStep(prev => prev - 1);
-          else if (onBack) onBack();
-        }}
-      >
-        <ChevronLeft color={COLORS.black} size={22} />
-      </TouchableOpacity>
-      <View style={styles.stepPill}>
-        <Text style={styles.stepPillText}>
-          {setupStep === 4 ? (
-            <>3 of 3</>
-          ) : (
-            <>Step <Text style={styles.stepPillNumber}>{setupStep}</Text> of 3</>
-          )}
-        </Text>
-      </View>
-    </View>
-  );
-
-  const renderHeader = () => {
-    const isQuestion = setupStep < 4 && !isCommiting;
-    return (
-      <View style={styles.header}>
-        <View style={styles.miniTag}>
-          {setupStep === 4 ? (
-            <View style={styles.miniCheckDot}>
-              <Check color={COLORS.white} size={9} strokeWidth={4} />
-            </View>
-          ) : (
-            <Gift size={13} color={COLORS.coral} />
-          )}
-          <Text style={styles.miniTagText}>
-            {setupStep === 4
-              ? 'SETUP COMPLETE'
-              : shouldShowPartnerStoreStory
-              ? 'STORE ALREADY SET'
-              : `PARTNER REWARDS · ${setupStep} OF 3`}
-          </Text>
-        </View>
-        <Text style={styles.title}>
-          {setupStep === 4
-            ? 'Your reward\njourney'
-            : isCommiting
-            ? 'Pick a reward\nfor your partner'
-            : `Set up your partner\'s\n${winningWeekLabel} reward`}
-        </Text>
-        {setupStep === 4 && (
-          <Text style={styles.subtitle}>
-            Three milestones to keep the momentum going.
-          </Text>
-        )}
-        {isQuestion && (
-          <Text style={styles.subtitle}>
-            Choose what your partner earns when they reach <Text style={styles.subtitleAccent}>{milestonePoints} points</Text>.
-          </Text>
-        )}
-      </View>
-    );
+  const handlePrimaryAction = () => {
+    if (step === 'pick') {
+      if (hasAnySelection) setStep('review');
+      return;
+    }
+    onContinue({
+      week1: rewards.week1,
+      week2: rewards.week2,
+      week3: rewards.week3,
+    });
   };
-
-  const renderProgressDots = () => (
-    <View style={styles.progressTracker}>
-      <View style={styles.trackLine}>
-        <View
-          style={[
-            styles.trackFill,
-            { width: setupStep === 1 ? '15%' : setupStep === 2 ? '50%' : '100%' },
-          ]}
-        />
-      </View>
-      <View style={styles.dotContainer}>
-        <View style={[styles.dot, styles.dotActive]}>
-          <Text style={styles.dotText}>1</Text>
-        </View>
-        <View style={[styles.dot, setupStep >= 2 && styles.dotActive]}>
-          <Text style={[styles.dotText, setupStep < 2 && styles.dotTextInactive]}>2</Text>
-        </View>
-        <View style={[styles.dot, setupStep >= 3 && styles.dotActive]}>
-          <Text style={[styles.dotText, setupStep < 3 && styles.dotTextInactive]}>3</Text>
-        </View>
-      </View>
-    </View>
-  );
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      <LinearGradient
-        colors={['#FFFFFF', '#FDFCFB', '#FEF9F9']}
-        style={StyleSheet.absoluteFill}
-      />
 
       <SafeAreaView style={styles.flex}>
-        <View style={styles.content}>
-          {renderTopNav()}
-          {renderHeader()}
-          {setupStep < 4 && renderProgressDots()}
+        <View style={styles.topBar}>
+          <TouchableOpacity
+            onPress={handleBack}
+            style={styles.backBtn}
+            activeOpacity={0.7}
+            disabled={step === 'pick' && !onBack}
+          >
+            <ChevronLeft color={COLORS.black} size={30} />
+          </TouchableOpacity>
+        </View>
 
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <Animated.View
             style={[
-              styles.mainArea,
-              setupStep === 4 && styles.mainAreaSummary,
+              styles.flex,
               { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
             ]}
           >
-            {setupStep === 4 ? (
-              <View style={styles.summaryContainer}>
-                <View style={styles.timelineWrap}>
-                  <View style={styles.timelineTrackWrap} pointerEvents="none">
-                    <View style={styles.timelineTrack} />
-                  </View>
-
-                  {summaryData.map((item, index) => {
-                    const info = getRewardInfo(item.rewardId);
-                    const isEmpty = !item.rewardId;
-                    const RewardIcon = info.icon;
-                    return (
-                      <Animated.View
-                        key={index}
-                        style={[
-                          styles.timelineRow,
-                          {
-                            opacity: itemFades[index],
-                            transform: [
-                              {
-                                translateY: Animated.multiply(
-                                  Animated.subtract(1, itemFades[index]),
-                                  12,
-                                ),
-                              },
-                            ],
-                          },
-                        ]}
-                      >
-                        <View style={styles.timelineDotCol}>
-                          <View style={[styles.timelineDot, isEmpty && styles.timelineDotEmpty]}>
-                            {isEmpty ? (
-                              <Plus color={COLORS.coral} size={16} strokeWidth={3} />
-                            ) : (
-                              <Check color={COLORS.white} size={14} strokeWidth={4} />
-                            )}
-                          </View>
-                        </View>
-
-                        <View style={styles.timelineContent}>
-                          <View style={styles.timelinePointsRow}>
-                            <Text style={styles.timelinePoints}>{item.points}</Text>
-                            <Text style={styles.timelinePointsUnit}>pts</Text>
-                          </View>
-
-                          {isEmpty ? (
-                            <TouchableOpacity
-                              activeOpacity={0.85}
-                              onPress={() => editWeek(item.weekIndex)}
-                              style={styles.emptyRewardCard}
-                            >
-                              <View style={styles.emptyIconTile}>
-                                <Gift color={COLORS.coral} size={26} strokeWidth={2} />
-                              </View>
-                              <View style={styles.emptyTextWrap}>
-                                <Text style={styles.emptyTitle}>Add a reward</Text>
-                                <Text style={styles.emptyHint}>Choose something they'll love</Text>
-                              </View>
-                              <View style={styles.emptyChevron}>
-                                <ChevronRight color={COLORS.coral} size={18} strokeWidth={2.5} />
-                              </View>
-                            </TouchableOpacity>
-                          ) : (
-                            <View style={styles.filledRewardCard}>
-                              <View style={styles.filledIconTile}>
-                                <RewardIcon color={COLORS.coral} size={28} strokeWidth={2} />
-                              </View>
-                              <View style={styles.filledTextWrap}>
-                                <Text style={styles.filledLabel} numberOfLines={1}>
-                                  {info.label}
-                                </Text>
-                                <Text style={styles.filledHint}>Locked in</Text>
-                              </View>
-                              <TouchableOpacity
-                                activeOpacity={0.8}
-                                onPress={() => editWeek(item.weekIndex)}
-                                style={styles.editBtn}
-                              >
-                                <Text style={styles.editBtnText}>Edit</Text>
-                              </TouchableOpacity>
-                            </View>
-                          )}
-                        </View>
-                      </Animated.View>
-                    );
-                  })}
-                </View>
-
-                <View style={styles.summaryFooter}>
-                  <View style={styles.updateTip}>
-                    <View style={styles.updateTipShield}>
-                      <ShieldCheck color={COLORS.success} size={14} />
+            <ScrollView
+              style={styles.flex}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.heroBlock}>
+                <View style={styles.heroRow}>
+                  <View style={styles.heroTextCol}>
+                    <View style={styles.titleBlock}>
+                      {step === 'pick' ? (
+                        <Text style={styles.title}>
+                          Pick rewards{'\n'}
+                          <Text style={styles.titleAccent}>for your partner</Text>
+                        </Text>
+                      ) : (
+                        <>
+                          <Text style={styles.title}>Review your</Text>
+                          <Text style={styles.reviewTitleAction}>reward picks</Text>
+                        </>
+                      )}
                     </View>
-                    <Text style={styles.updateTipText}>You can update rewards anytime.</Text>
                   </View>
 
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={handleConfirmAction}
-                    style={styles.finalFinishBtn}
-                  >
-                    <LinearGradient
-                      colors={[COLORS.coral, COLORS.coralDark]}
-                      style={styles.confirmBtnGradient}
-                    >
-                      <Text style={styles.finalFinishText}>Finish setup</Text>
-                      <ArrowRight color="white" size={20} strokeWidth={3} />
-                    </LinearGradient>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => setSetupStep(3)}
-                    style={styles.backToReviewBtn}
-                  >
-                    <Text style={styles.backToReviewText}>Back to review</Text>
-                  </TouchableOpacity>
+                  <RewardHero compact={step === 'review'} />
                 </View>
+
+                <Text style={[styles.subtitle, styles.pickSubtitle]}>
+                  {step === 'pick'
+                    ? shouldShowPartnerStoreStory
+                      ? 'Your partner already set up their store — add milestones or skip for now.'
+                      : 'Choose what your partner earns when they complete their weekly tasks and reach each points milestone.'
+                    : `${selectedCount} of 3 milestones set. You can edit these anytime.`}
+                </Text>
               </View>
-            ) : !isCommiting ? (
-              <View style={styles.questionWrap}>
-                <View style={styles.statsBento}>
-                  <View style={styles.statCard}>
-                    <View style={styles.statIconTile}>
-                      <Calendar color={COLORS.coral} size={16} strokeWidth={2.4} />
-                    </View>
-                    <Text style={styles.statLabel}>After</Text>
-                    <Text style={styles.statValue}>{milestoneTime}</Text>
-                  </View>
 
-                  <View style={styles.statConnector}>
-                    <View style={styles.statConnectorLine} />
-                    <View style={styles.statConnectorCircle}>
-                      <ArrowRight color={COLORS.white} size={12} strokeWidth={3} />
-                    </View>
-                    <View style={styles.statConnectorLine} />
-                  </View>
-
-                  <View style={[styles.statCard, styles.statCardPrimary]}>
-                    <View style={[styles.statIconTile, styles.statIconTilePrimary]}>
-                      <Star color={COLORS.white} size={16} strokeWidth={2.4} fill={COLORS.white} />
-                    </View>
-                    <Text style={styles.statLabelPrimary}>Unlock</Text>
-                    <View style={styles.statValueRow}>
-                      <Text style={styles.statValuePrimary}>{milestonePoints}</Text>
-                      <Text style={styles.statUnitPrimary}>pts</Text>
-                    </View>
-                  </View>
-                </View>
-
-                <View style={styles.actionStack}>
-                  <TouchableOpacity
-                    style={styles.actionBtn}
-                    activeOpacity={0.9}
-                    onPress={() => setIsCommiting(true)}
-                  >
-                    <LinearGradient
-                      colors={[COLORS.coral, COLORS.coralDark]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={styles.btnGradient}
-                    >
-                      <Text style={styles.btnText}>Choose a reward</Text>
-                      <View style={styles.btnArrowCircle}>
-                        <ArrowRight color={COLORS.coral} size={16} strokeWidth={3} />
+              {step === 'pick' ? (
+                <View style={styles.benefitsRow}>
+                  {BENEFITS.map(({ icon: Icon, text }) => (
+                    <View key={text} style={styles.benefitItem}>
+                      <View style={styles.benefitIcon}>
+                        <Icon size={16} color={COLORS.coral} strokeWidth={2.4} />
                       </View>
-                    </LinearGradient>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.secondaryActionBtn}
-                    activeOpacity={0.8}
-                    onPress={handleConfirmAction}
-                  >
-                    <Text style={styles.secondaryActionText}>
-                      {shouldShowPartnerStoreStory
-                        ? 'Skip this milestone'
-                        : `Wait for ${nextMilestonePoints} pts`}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.tertiarySkipBtn}
-                    activeOpacity={0.7}
-                    onPress={() => onContinue({ week1: null, week2: null, week3: null })}
-                  >
-                    <Text style={styles.tertiarySkipText}>I'll decide later</Text>
-                  </TouchableOpacity>
+                      <Text style={styles.benefitText}>{text}</Text>
+                    </View>
+                  ))}
                 </View>
-              </View>
-            ) : (
-              <View style={styles.pickerArea}>
-                <Text style={styles.pickerTitle}>What are you offering?</Text>
+              ) : null}
 
-                <View style={styles.grid}>
-                  {OPTIONS.map((item) => {
-                    const isSelected = currentSelection === item.id;
-                    const Icon = item.icon;
+              <View style={styles.weeksList}>
+                {WEEKS.map((week) => {
+                  const weekKey = week.key;
+                  const selectedId = rewards[weekKey];
+                  const option = getRewardOption(selectedId);
+                  const label = getDisplayLabel(weekKey, selectedId);
+                  const isSet = Boolean(selectedId && option);
+
+                  if (step === 'pick') {
                     return (
-                      <TouchableOpacity
-                        key={item.id}
-                        activeOpacity={0.85}
-                        onPress={() => handleRewardSelect(item.id)}
-                        style={[styles.card, isSelected && styles.cardSelected]}
-                      >
-                        <View style={[styles.iconTile, isSelected && styles.iconTileSelected]}>
-                          <Icon
-                            color={isSelected ? COLORS.white : COLORS.coral}
-                            size={22}
-                            strokeWidth={2.4}
-                          />
-                        </View>
-                        <Text style={styles.cardLabel} numberOfLines={1}>
-                          {item.label}
-                        </Text>
-                        <Text style={styles.cardHint} numberOfLines={1}>
-                          {item.hint}
-                        </Text>
-                        {isSelected && (
-                          <View style={styles.checkBadge}>
-                            <Check color={COLORS.white} size={10} strokeWidth={4} />
+                      <View key={week.key} style={styles.weekSection}>
+                        <View style={styles.weekHeader}>
+                          <Text style={styles.weekLabel}>{week.label}</Text>
+                          <View style={styles.pointsRow}>
+                            <Heart size={14} color={COLORS.coral} fill={COLORS.coral} />
+                            <Text style={styles.pointsText}>
+                              {week.points}
+                              <Text style={styles.pointsUnit}> pts</Text>
+                            </Text>
                           </View>
-                        )}
-                      </TouchableOpacity>
+                        </View>
+
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.optionsRow}
+                          decelerationRate="fast"
+                        >
+                          {OPTIONS.map((optionItem) => {
+                            const isSelected = selectedId === optionItem.id;
+                            const optionLabel =
+                              optionItem.isCustom && isSelected
+                                ? getDisplayLabel(weekKey, 'custom') || 'Custom'
+                                : optionItem.label;
+
+                            return (
+                              <RewardTile
+                                key={`${week.key}-${optionItem.id}`}
+                                option={optionItem}
+                                isSelected={isSelected}
+                                displayLabel={optionLabel}
+                                onPress={() => selectReward(weekKey, optionItem)}
+                              />
+                            );
+                          })}
+                        </ScrollView>
+                      </View>
                     );
-                  })}
-                </View>
+                  }
 
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={handleConfirmAction}
-                  style={styles.confirmBtn}
-                  disabled={!currentSelection}
-                >
-                  <LinearGradient
-                    colors={currentSelection ? [COLORS.coral, COLORS.coralDark] : ['#E5E7EB', '#D1D5DB']}
-                    style={styles.confirmBtnGradient}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                  >
-                    <Text style={styles.confirmBtnText}>Lock it in</Text>
-                    <ArrowRight color="white" size={18} strokeWidth={3} />
-                  </LinearGradient>
-                </TouchableOpacity>
+                  return (
+                    <View key={week.key} style={styles.weekSection}>
+                      <View style={styles.weekHeader}>
+                        <Text style={styles.weekLabel}>{week.label}</Text>
+                        <View style={styles.pointsRow}>
+                          <Heart size={14} color={COLORS.coral} fill={COLORS.coral} />
+                          <Text style={styles.pointsText}>
+                            {week.points}
+                            <Text style={styles.pointsUnit}> pts</Text>
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.milestoneBlock}>
+                        <Text style={styles.milestoneAction}>{week.milestoneAction}</Text>
+                        <Text style={styles.milestoneValue}>
+                          {week.points}
+                          <Text style={styles.milestoneValueUnit}> pts</Text>
+                        </Text>
+                        <Text style={styles.milestoneSub}>{week.milestoneSub}</Text>
+                      </View>
+
+                      {isSet && option ? (
+                        <View style={styles.reviewCard}>
+                          <View style={[styles.reviewIconWell, { backgroundColor: option.iconBg }]}>
+                            <option.icon color={option.iconColor} size={22} strokeWidth={2} />
+                          </View>
+                          <View style={styles.reviewTextWrap}>
+                            <Text style={styles.reviewRewardLabel}>{label}</Text>
+                            <Text style={styles.reviewRewardHint}>Locked in</Text>
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => setStep('pick')}
+                            style={styles.editBtn}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={styles.editBtnText}>Edit</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ) : (
+                        <TouchableOpacity
+                          onPress={() => setStep('pick')}
+                          style={styles.reviewEmptyCard}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={styles.reviewEmptyTitle}>No reward set</Text>
+                          <Text style={styles.reviewEmptyHint}>Tap to add one</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
               </View>
-            )}
+            </ScrollView>
           </Animated.View>
+        </KeyboardAvoidingView>
 
-          {setupStep !== 4 && (
-            <View style={styles.footerTip}>
-              <View style={styles.footerShield}>
-                <ShieldCheck color={COLORS.coral} size={14} />
-              </View>
-              <Text style={styles.tipText}>You can change this anytime</Text>
-            </View>
+        <View style={styles.footer}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={handlePrimaryAction}
+            style={styles.mainButton}
+            disabled={step === 'pick' && !hasAnySelection}
+          >
+            <LinearGradient
+              colors={
+                step === 'review' || hasAnySelection
+                  ? [COLORS.coral, COLORS.coralDark]
+                  : ['#E5E7EB', '#D1D5DB']
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.gradientButton}
+            >
+              <Text style={styles.buttonText}>
+                {step === 'pick' ? 'Continue' : 'Finish setup'}
+              </Text>
+              <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
+            </LinearGradient>
+          </TouchableOpacity>
+
+          {step === 'pick' && (
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => onContinue({ week1: null, week2: null, week3: null })}
+              style={styles.skipBtn}
+            >
+              <Text style={styles.skipText}>I'll decide later</Text>
+            </TouchableOpacity>
           )}
         </View>
       </SafeAreaView>
+
+      <Modal
+        visible={customModalWeek !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCustomModalWeek(null)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setCustomModalWeek(null)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Name your reward</Text>
+            <Text style={styles.modalSubtitle}>
+              Something personal your partner will love.
+            </Text>
+            <TextInput
+              value={customDraft}
+              onChangeText={setCustomDraft}
+              placeholder="e.g. Massage, Brunch, New shoes..."
+              placeholderTextColor="#9CA3AF"
+              style={styles.modalInput}
+              autoFocus
+              maxLength={40}
+              returnKeyType="done"
+              onSubmitEditing={confirmCustomReward}
+            />
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={confirmCustomReward}
+              style={styles.modalBtn}
+            >
+              <LinearGradient
+                colors={[COLORS.coral, COLORS.coralDark]}
+                style={styles.modalBtnGradient}
+              >
+                <Text style={styles.modalBtnText}>Save reward</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -520,708 +560,458 @@ export default function PartnerRewardSelection({ onContinue, onBack, joinedWithC
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.white },
   flex: { flex: 1 },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'android' ? 12 : 4,
-    paddingBottom: Platform.OS === 'ios' ? 6 : 12,
-  },
 
-  // Top nav
-  topNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
+  topBar: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
   },
   backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#F1F5F9',
+    width: 44,
+    height: 44,
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  stepPill: {
-    backgroundColor: COLORS.coralLight,
-    borderWidth: 1,
-    borderColor: COLORS.coralBorder,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  stepPillText: {
-    color: COLORS.black,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  stepPillNumber: {
-    color: COLORS.coral,
-    fontWeight: '900',
   },
 
-  // Header
-  header: {
-    alignItems: 'flex-start',
-    marginBottom: 10,
+  scrollContent: {
+    paddingHorizontal: H_PADDING,
+    paddingTop: 12,
+    paddingBottom: 24,
   },
-  miniTag: {
+
+  heroBlock: {
+    marginBottom: 20,
+  },
+  heroRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  heroTextCol: {
+    flex: 1,
+    paddingRight: 4,
+  },
+  heroScene: {
+    width: 112,
+    height: 118,
     alignItems: 'center',
-    paddingVertical: 2,
-    gap: 6,
-    marginBottom: 8,
-  },
-  miniTagText: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: COLORS.coral,
-    letterSpacing: 1.2,
-  },
-  miniCheckDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: COLORS.coral,
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 30,
-    fontWeight: '900',
-    color: COLORS.black,
-    textAlign: 'left',
-    lineHeight: 34,
-    letterSpacing: -1,
-  },
-  subtitle: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: COLORS.muted,
-    textAlign: 'left',
-    marginTop: 6,
-    lineHeight: 18,
-  },
-  subtitleAccent: {
-    color: COLORS.coral,
-    fontWeight: '800',
-  },
-
-  // Progress tracker
-  progressTracker: {
-    height: 32,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
     marginTop: 4,
   },
-  trackLine: {
+  heroSceneCompact: {
+    width: 96,
+    height: 100,
+    marginTop: 0,
+  },
+  heroGlow: {
     position: 'absolute',
-    height: 2,
-    width: '55%',
-    backgroundColor: COLORS.trackBg,
-    borderRadius: 2,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: 'rgba(255, 107, 107, 0.12)',
   },
-  trackFill: {
-    height: '100%',
+  heroGlowCompact: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+  },
+  heroImage: {
+    width: 108,
+    height: 96,
+  },
+  heroImageCompact: {
+    width: 88,
+    height: 80,
+  },
+  heroHeartBadge: {
+    position: 'absolute',
+    bottom: 10,
+    left: 18,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: COLORS.coral,
-    borderRadius: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: COLORS.white,
+    shadowColor: COLORS.coral,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  dotContainer: {
-    width: '55%',
+  heroHeartBadgeCompact: {
+    bottom: 6,
+    left: 14,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+  },
+
+  title: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: COLORS.black,
+    lineHeight: 40,
+    letterSpacing: -1.2,
+  },
+  titleBlock: {
+    marginBottom: 10,
+  },
+  titleAccent: {
+    color: COLORS.coral,
+  },
+  subtitle: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: COLORS.muted,
+    lineHeight: 22,
+    marginBottom: 0,
+    maxWidth: 320,
+  },
+  pickSubtitle: {
+    maxWidth: '100%',
+  },
+  benefitsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 32,
+    marginTop: 12,
   },
-  dot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: COLORS.trackBg,
-    justifyContent: 'center',
+  benefitItem: {
+    flex: 1,
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFF',
+    gap: 8,
   },
-  dotActive: {
-    backgroundColor: COLORS.coral,
-  },
-  dotText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: COLORS.white,
-  },
-  dotTextInactive: {
-    color: '#94A3B8',
-  },
-
-  // Main area
-  mainArea: {
-    flex: 1,
+  benefitIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: COLORS.coralLight,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  mainAreaSummary: {
-    justifyContent: 'flex-start',
+  benefitText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.muted,
+    textAlign: 'center',
+    lineHeight: 14,
   },
 
-  // Question screen
-  questionWrap: {
-    width: '100%',
+  weeksList: {
+    gap: 36,
   },
-
-  // Bento stats row
-  statsBento: {
+  weekSection: {
+    gap: 18,
+  },
+  weekHeader: {
     flexDirection: 'row',
-    alignItems: 'stretch',
-    marginBottom: 28,
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  statCard: {
-    flex: 1,
+  weekLabel: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: COLORS.black,
+    letterSpacing: -0.5,
+  },
+  pointsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  pointsText: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: COLORS.black,
+    letterSpacing: -0.4,
+  },
+  pointsUnit: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.muted,
+    textTransform: 'uppercase',
+  },
+
+  optionsRow: {
+    gap: OPTION_GAP,
+    paddingRight: H_PADDING,
+    paddingVertical: 2,
+  },
+  optionCard: {
+    width: OPTION_WIDTH,
+    minHeight: 124,
+    backgroundColor: COLORS.white,
+    borderRadius: 24,
+    paddingTop: 16,
+    paddingBottom: 14,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#ECEEF2',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  optionCardCustom: {
+    borderStyle: 'dashed',
+    borderColor: '#D8DEE9',
+    backgroundColor: '#FCFCFD',
+  },
+  optionCardSelected: {
+    backgroundColor: '#FFFAFA',
+    borderColor: COLORS.coral,
+    borderWidth: 1.5,
+    shadowColor: COLORS.coral,
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    elevation: 4,
+  },
+  iconWell: {
+    width: 56,
+    height: 56,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  optionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: 'center',
+    letterSpacing: -0.2,
+    marginBottom: 10,
+  },
+  optionLabelSelected: {
+    color: COLORS.black,
+    fontWeight: '800',
+  },
+  selectRing: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.white,
+  },
+  selectRingActive: {
+    backgroundColor: COLORS.coral,
+    borderColor: COLORS.coral,
+  },
+
+  reviewTitleAction: {
+    fontFamily: Fonts.serif,
+    fontSize: 34,
+    lineHeight: 38,
+    color: COLORS.coral,
+    fontStyle: 'italic',
+    letterSpacing: -0.8,
+    marginTop: -4,
+  },
+  milestoneBlock: {
+    gap: 0,
+    paddingVertical: 4,
+  },
+  milestoneAction: {
+    fontFamily: Fonts.serif,
+    fontSize: 21,
+    lineHeight: 27,
+    color: COLORS.muted,
+    fontStyle: 'italic',
+    letterSpacing: -0.4,
+  },
+  milestoneValue: {
+    fontFamily: Fonts.serif,
+    fontSize: 32,
+    lineHeight: 36,
+    fontWeight: '700',
+    color: COLORS.coral,
+    letterSpacing: -1,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  milestoneValueUnit: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.muted,
+    letterSpacing: -0.2,
+  },
+  milestoneSub: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: COLORS.muted,
+    marginTop: 4,
+  },
+  reviewCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: COLORS.white,
     borderRadius: 20,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    alignItems: 'flex-start',
+    padding: 14,
     borderWidth: 1,
-    borderColor: '#F1F1F5',
+    borderColor: '#ECEEF2',
+    gap: 12,
     shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.05,
     shadowRadius: 10,
     elevation: 2,
-    minHeight: 96,
-    justifyContent: 'space-between',
   },
-  statCardPrimary: {
-    backgroundColor: COLORS.coral,
-    borderColor: COLORS.coral,
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 14,
-    elevation: 6,
-  },
-  statIconTile: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: COLORS.coralLight,
-    justifyContent: 'center',
+  reviewIconWell: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  statIconTilePrimary: {
-    backgroundColor: 'rgba(255,255,255,0.22)',
+  reviewTextWrap: {
+    flex: 1,
   },
-  statLabel: {
-    fontSize: 10.5,
+  reviewRewardLabel: {
+    fontSize: 16,
     fontWeight: '800',
-    color: COLORS.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginTop: 8,
-  },
-  statLabelPrimary: {
-    fontSize: 10.5,
-    fontWeight: '800',
-    color: 'rgba(255,255,255,0.85)',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginTop: 8,
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: '900',
     color: COLORS.black,
-    letterSpacing: -0.6,
+    letterSpacing: -0.3,
+  },
+  reviewRewardHint: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#10B981',
     marginTop: 2,
-  },
-  statValueRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-    marginTop: 2,
-  },
-  statValuePrimary: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: COLORS.white,
-    letterSpacing: -0.8,
-  },
-  statUnitPrimary: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: 'rgba(255,255,255,0.85)',
+    textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
-  statConnector: {
-    width: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  statConnectorLine: {
-    flex: 1,
-    height: 2,
-    backgroundColor: COLORS.coralBorder,
-  },
-  statConnectorCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: COLORS.coral,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-
-  questionText: {
-    fontSize: 26,
-    color: COLORS.black,
-    textAlign: 'left',
-    lineHeight: 30,
-    letterSpacing: -0.9,
-    fontWeight: '900',
-    marginBottom: 8,
-  },
-  rewardExplanation: {
-    color: COLORS.muted,
-    fontSize: 14,
-    fontWeight: '500',
-    lineHeight: 20,
-    textAlign: 'left',
-    marginBottom: 22,
-  },
-  rewardExplanationBold: {
-    color: COLORS.coral,
-    fontWeight: '800',
-  },
-
-  // Buttons
-  actionStack: {
-    gap: 10,
-  },
-  actionBtn: {
-    width: '100%',
-    height: 60,
-    borderRadius: 30,
-    overflow: 'hidden',
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.32,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  btnGradient: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingLeft: 26,
-    paddingRight: 8,
-  },
-  btnText: {
-    color: COLORS.white,
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  btnArrowCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.white,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  secondaryActionBtn: {
-    width: '100%',
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: '#FBFAFC',
-    borderWidth: 1,
-    borderColor: '#EFEEF3',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  secondaryActionText: {
-    color: COLORS.black,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  tertiarySkipBtn: {
-    paddingVertical: 6,
-    alignItems: 'center',
-  },
-  tertiarySkipText: {
-    color: COLORS.muted,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-
-  // Picker area
-  pickerArea: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'stretch',
-  },
-  pickerTitle: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: COLORS.black,
-    marginBottom: 14,
-    textAlign: 'center',
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    alignItems: 'center',
-    rowGap: 10,
-    columnGap: 10,
-  },
-  card: {
-    width: '30%',
-    aspectRatio: 0.92,
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#F1F1F5',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 1,
-  },
-  cardSelected: {
-    borderWidth: 2,
-    borderColor: COLORS.coral,
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    elevation: 6,
-    transform: [{ translateY: -2 }],
-  },
-  iconTile: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: COLORS.coralLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  iconTileSelected: {
-    backgroundColor: COLORS.coral,
-  },
-  cardLabel: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.black,
-    letterSpacing: -0.2,
-  },
-  cardHint: {
-    fontSize: 10.5,
-    fontWeight: '500',
-    color: COLORS.muted,
-    marginTop: 2,
-  },
-  checkBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: COLORS.coral,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.white,
-  },
-  confirmBtn: {
-    height: 52,
-    borderRadius: 20,
-    overflow: 'hidden',
-    marginTop: 14,
-  },
-  confirmBtnGradient: {
-    flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 10,
-  },
-  confirmBtnText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-
-  // Summary / timeline
-  summaryContainer: {
-    flex: 1,
-    paddingTop: 8,
-  },
-  summaryFooter: {
-    marginTop: 'auto',
-    paddingTop: 8,
-  },
-  timelineWrap: {
-    position: 'relative',
-    paddingTop: 4,
-  },
-  timelineTrackWrap: {
-    position: 'absolute',
-    left: 15, // dot column center: 32/2 - track/2 (2/2)
-    top: 32,
-    bottom: 32,
-    width: 2,
-  },
-  timelineTrack: {
-    flex: 1,
-    width: 2,
-    backgroundColor: COLORS.coralBorder,
-    borderRadius: 1,
-  },
-  timelineRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 16,
-  },
-  timelineDotCol: {
-    width: 32,
-    alignItems: 'center',
-    paddingTop: 24,
-    marginRight: 12,
-  },
-  timelineDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: COLORS.coral,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  timelineDotEmpty: {
-    backgroundColor: COLORS.white,
-    borderWidth: 2,
-    borderColor: COLORS.coral,
-    shadowOpacity: 0.15,
-  },
-  timelineContent: {
-    flex: 1,
-  },
-  timelinePointsRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    marginBottom: 8,
-    gap: 4,
-  },
-  timelinePoints: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: COLORS.black,
-    letterSpacing: -0.6,
-  },
-  timelinePointsUnit: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-
-  filledRewardCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: '#F1F1F5',
-    borderRadius: 20,
-    padding: 14,
-    gap: 14,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.06,
-    shadowRadius: 14,
-    elevation: 3,
-  },
-  filledIconTile: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: COLORS.coralLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  filledTextWrap: {
-    flex: 1,
-  },
-  filledLabel: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: COLORS.black,
-    letterSpacing: -0.3,
-  },
-  filledHint: {
-    fontSize: 11.5,
-    fontWeight: '600',
-    color: COLORS.success,
-    marginTop: 2,
-    letterSpacing: 0.2,
-    textTransform: 'uppercase',
-  },
   editBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: COLORS.coralLight,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 999,
+    backgroundColor: COLORS.coralLight,
   },
   editBtnText: {
     fontSize: 12,
     fontWeight: '800',
     color: COLORS.coral,
-    letterSpacing: 0.2,
+  },
+  reviewEmptyCard: {
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    borderStyle: 'dashed',
+    backgroundColor: '#FAFAFA',
+  },
+  reviewEmptyTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.muted,
+  },
+  reviewEmptyHint: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.coral,
+    marginTop: 4,
   },
 
-  emptyRewardCard: {
+  footer: {
+    paddingHorizontal: H_PADDING,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 12 : 20,
+    backgroundColor: COLORS.white,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  mainButton: {
+    height: 64,
+    borderRadius: 22,
+    overflow: 'hidden',
+    shadowColor: COLORS.coral,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  gradientButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.coralLight,
-    borderWidth: 1,
-    borderColor: COLORS.coralBorder,
-    borderRadius: 20,
-    padding: 14,
-    gap: 14,
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 2,
+    justifyContent: 'center',
+    gap: 12,
   },
-  emptyIconTile: {
-    width: 52,
+  buttonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  skipBtn: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  skipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.muted,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  modalCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 24,
+    padding: 24,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: COLORS.black,
+    letterSpacing: -0.5,
+    marginBottom: 6,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: COLORS.muted,
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  modalInput: {
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.black,
+    backgroundColor: '#FAFAFA',
+    marginBottom: 16,
+  },
+  modalBtn: {
     height: 52,
     borderRadius: 16,
-    backgroundColor: '#FFE4E4',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyTextWrap: {
-    flex: 1,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: COLORS.black,
-    letterSpacing: -0.3,
-  },
-  emptyHint: {
-    fontSize: 12.5,
-    fontWeight: '500',
-    color: COLORS.muted,
-    marginTop: 2,
-    lineHeight: 16,
-  },
-  emptyChevron: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: COLORS.coralLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  updateTip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: '#F1F1F5',
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 10,
-  },
-  updateTipShield: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#E6F7EE',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  updateTipText: {
-    fontSize: 13,
-    color: COLORS.black,
-    fontWeight: '600',
-  },
-
-  finalFinishBtn: {
-    height: 62,
-    borderRadius: 31,
     overflow: 'hidden',
-    marginTop: 14,
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.35,
-    shadowRadius: 18,
-    elevation: 10,
   },
-  finalFinishText: {
+  modalBtnGradient: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalBtnText: {
     color: COLORS.white,
-    fontSize: 17,
-    fontWeight: '900',
-    letterSpacing: -0.3,
-  },
-  backToReviewBtn: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  backToReviewText: {
-    color: COLORS.black,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
-  // Footer tip
-  footerTip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F4F1F5',
-    borderRadius: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 8,
-    marginTop: 10,
-  },
-  footerShield: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: COLORS.coralLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  tipText: {
-    fontSize: 12,
-    color: COLORS.black,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

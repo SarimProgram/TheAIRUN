@@ -1,28 +1,62 @@
+// @refresh reset
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Platform,
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   Animated,
   Easing,
-  TextInput,
   Modal,
   ScrollView,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import { Send, Zap, Ghost, Trophy, X, Swords, Pin, Footprints, Shield } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import Reanimated, { FadeInUp, FadeOut } from 'react-native-reanimated';
+import { Send, X, Pin, Footprints, Shield, Crown, Flame, Heart, Check } from 'lucide-react-native';
+import Reanimated, {
+  FadeInUp,
+  FadeOut,
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/auth/authContext';
 import { API_BASE_URL } from '../../config/api';
 import { useChat } from '../../contexts/ChatContext';
 import { useRouter } from 'expo-router';
 import { requestStepPermissions } from '../../lib/requestStepPermissions';
+import { useDailyPoints } from '../../hooks/useDailyPoints';
+import { usePoints } from '../../hooks/usePoints';
+import { useWaterSync } from '../../hooks/useWaterSync';
+import Hydration from './Hydration';
+import { ReminderPartnerSheet } from '../partner/ReminderPartnerSheet';
+import {
+  WALK_IMAGE,
+  getOppositeGender,
+  isWalkMascotMaleHalf,
+  shouldMirrorWalkMascot,
+} from '../../utils/genderMascot';
+
+const WATER_GLASS_GOAL = 8;
+const BATTLE_CAROUSEL_PEEK = 10;
+const BATTLE_CAROUSEL_GAP = 6;
+const DUEL_CARD_HEIGHT = 244;
+const WALK_MASCOT_WIDTH = 84;
+const WALK_MASCOT_HEIGHT = 108;
+
+const PARTNER_STEPS_STALE_THRESHOLD_MS = 2 * 60_000;
+const PARTNER_REFRESH_MIN_CLIENT_INTERVAL_MS = 60_000;
 
 const COLORS = {
   primary: '#FF6B6B',
+  primaryLight: '#FFF1F2',
   teal: '#1F938A',
+  partnerLight: '#F0FDFA',
   text: '#111827',
   textMuted: '#94A3B8',
   white: '#FFFFFF',
@@ -97,6 +131,147 @@ const getSplitDayDisplayState = ({
   };
 };
 
+const computeWinStreak = (days) => {
+  if (!Array.isArray(days) || days.length === 0) {
+    return { holder: null, count: 0 };
+  }
+
+  let holder = null;
+  let count = 0;
+
+  for (const day of days) {
+    if (day?.winner === 'TIE') break;
+    if (day?.winner !== 'YOU' && day?.winner !== 'PARTNER') break;
+
+    if (holder === null) {
+      holder = day.winner;
+      count = 1;
+      continue;
+    }
+
+    if (day.winner === holder) {
+      count += 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return { holder, count };
+};
+
+const formatBattleName = (name, mode = 'first') => {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return '';
+  if (mode === 'full') return trimmed.toUpperCase();
+  return trimmed.split(/\s+/)[0].toUpperCase();
+};
+
+const splitBackdropName = (name) => {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) {
+    return { line1: (parts[0] || '').toUpperCase(), line2: null };
+  }
+
+  return {
+    line1: parts[0].toUpperCase(),
+    line2: parts.slice(1).join(' ').toUpperCase(),
+  };
+};
+
+function WalkMascot({ gender, facing = 'right', style }) {
+  const isMale = isWalkMascotMaleHalf(gender);
+  const mirrored = shouldMirrorWalkMascot(gender, facing);
+
+  return (
+    <View
+      style={[
+        styles.walkMascotClip,
+        { width: WALK_MASCOT_WIDTH, height: WALK_MASCOT_HEIGHT },
+        style,
+      ]}
+    >
+      <View style={[styles.walkMascotInner, mirrored && styles.walkMascotMirrored]}>
+        <Image
+          source={WALK_IMAGE}
+          style={[
+            styles.walkMascotSprite,
+            {
+              width: WALK_MASCOT_WIDTH * 2,
+              height: WALK_MASCOT_HEIGHT,
+              marginLeft: isMale ? -WALK_MASCOT_WIDTH : 0,
+            },
+          ]}
+          resizeMode="contain"
+        />
+      </View>
+    </View>
+  );
+}
+
+function PlayerNameBackdrop({ name, color }) {
+  const { line1, line2 } = splitBackdropName(name);
+
+  return (
+    <View style={styles.playerNameBackdropWrap}>
+      <Text
+        style={[styles.playerNameBackdrop, { color }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+      >
+        {line1}
+      </Text>
+      {line2 ? (
+        <Text
+          style={[styles.playerNameBackdrop, styles.playerNameBackdropSecond, { color }]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.72}
+        >
+          {line2}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function StreakFlame({ color, urgent, size = 30 }) {
+  const scale = useSharedValue(1);
+
+  useEffect(() => {
+    if (urgent) {
+      scale.value = withRepeat(
+        withSequence(
+          withTiming(1.18, { duration: 550 }),
+          withTiming(1, { duration: 550 })
+        ),
+        -1,
+        false
+      );
+      return;
+    }
+
+    cancelAnimation(scale);
+    scale.value = withTiming(1, { duration: 200 });
+  }, [urgent, scale]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <Reanimated.View style={animatedStyle}>
+      <Flame
+        size={size}
+        color={color}
+        fill={urgent ? color : 'transparent'}
+        strokeWidth={2.5}
+      />
+    </Reanimated.View>
+  );
+}
+
 const StepSyncSection = ({
   onNudge,
   permissionEnabled,
@@ -106,20 +281,59 @@ const StepSyncSection = ({
   partnerFallbackLiveSteps = 0,
   fallbackPartnerName = 'PARTNER',
   isConnected = false,
+  onStepMetricsChange,
 }) => {
-  const { accessToken, authFetch } = useAuth();
+  const { accessToken, authFetch, user } = useAuth();
   const { sendMessage } = useChat();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { glassCount } = useWaterSync({ accessToken });
 
-  const [showOptions, setShowOptions] = useState(false);
+  const [showMotivateModal, setShowMotivateModal] = useState(false);
   const [nudgeSent, setNudgeSent] = useState(false);
-  const [sentLabel, setSentLabel] = useState('');
-  const [customText, setCustomText] = useState('');
   const [tracerState, setTracerState] = useState(null);
   const [myStepsTarget, setMyStepsTarget] = useState(null);
+  const [dailyPointsContext, setDailyPointsContext] = useState(null);
   const [countdownText, setCountdownText] = useState('');
   const [showLastMonthModal, setShowLastMonthModal] = useState(false);
   const [requestingPermission, setRequestingPermission] = useState(false);
+  const [claimingStepReward, setClaimingStepReward] = useState(false);
+  const [claimingHydrationReward, setClaimingHydrationReward] = useState(false);
+  const [battlePage, setBattlePage] = useState(0);
+  const [battlePageWidth, setBattlePageWidth] = useState(0);
+  const battlePagerRef = useRef(null);
+  const lastPartnerRefreshRequestAtRef = useRef(0);
+
+  const maybeRequestPartnerRefresh = useCallback(async (partnerStepsUpdatedAtIso) => {
+    // Only iOS partners can be woken via silent APNs push. Skipping on other
+    // platforms avoids unnecessary network calls but the server-side check is
+    // still the source of truth (it looks at the partner's apnsDeviceToken).
+    if (Platform.OS !== 'ios') return;
+
+    const nowMs = Date.now();
+    if (nowMs - lastPartnerRefreshRequestAtRef.current < PARTNER_REFRESH_MIN_CLIENT_INTERVAL_MS) {
+      return;
+    }
+
+    const partnerUpdatedAtMs = partnerStepsUpdatedAtIso
+      ? new Date(partnerStepsUpdatedAtIso).getTime()
+      : null;
+    const partnerIsStale =
+      partnerUpdatedAtMs === null ||
+      !Number.isFinite(partnerUpdatedAtMs) ||
+      nowMs - partnerUpdatedAtMs > PARTNER_STEPS_STALE_THRESHOLD_MS;
+
+    if (!partnerIsStale) return;
+
+    lastPartnerRefreshRequestAtRef.current = nowMs;
+    try {
+      await authFetch(`${API_BASE_URL}/activity/steps/request-partner-refresh`, {
+        method: 'POST',
+      });
+    } catch {
+      // Best-effort: partner will still refresh via their own background sync.
+    }
+  }, [authFetch]);
 
   const fetchTracerState = useCallback(async () => {
     if (!accessToken) return;
@@ -135,6 +349,10 @@ const StepSyncSection = ({
         const json = await tracerResult.value.json();
         setTracerState(json);
         userTimezone = json?.participants?.you?.timezone || userTimezone;
+
+        if (json?.hasPartner) {
+          maybeRequestPartnerRefresh(json?.participants?.partner?.stepsUpdatedAt);
+        }
       }
 
       if (weekResult.status === 'fulfilled' && weekResult.value.ok) {
@@ -153,6 +371,10 @@ const StepSyncSection = ({
             const nextStepsTarget = Number(todayTarget?.stepsTarget);
             if (Number.isFinite(nextStepsTarget) && nextStepsTarget > 0) {
               setMyStepsTarget(nextStepsTarget);
+              setDailyPointsContext({
+                dayKey: todayKey,
+                isRunDay: String(todayTarget?.dayType || '').toUpperCase() === 'RUN',
+              });
             }
           }
         }
@@ -160,7 +382,7 @@ const StepSyncSection = ({
     } catch {
       // Keep existing fallback UI values if tracer-state fails.
     }
-  }, [accessToken, authFetch]);
+  }, [accessToken, authFetch, maybeRequestPartnerRefresh]);
 
   useEffect(() => {
     fetchTracerState();
@@ -229,6 +451,13 @@ const StepSyncSection = ({
     lastDaySteps: partnerLastDay,
   });
 
+  useEffect(() => {
+    onStepMetricsChange?.({
+      current: myDisplaySteps,
+      target: myStepsTarget || 10000,
+    });
+  }, [myDisplaySteps, myStepsTarget, onStepMetricsChange]);
+
   const barMySteps = myDisplaySteps;
   const barPartnerSteps = partnerDisplaySteps;
   const total = (barMySteps + barPartnerSteps) || 1;
@@ -236,8 +465,101 @@ const StepSyncSection = ({
   const myTargetPercent = Math.max(15, Math.min(85, rawMyPercent));
   const amIWinning = compareMySteps >= comparePartnerSteps;
 
-  const yesterdayWinner = tracerState?.yesterday?.winner || 'TIE';
-  const partnerDisplayName = (tracerState?.participants?.partner?.name || fallbackPartnerName || 'PARTNER').split(' ')[0].toUpperCase();
+  const dailyPointsConfig = useMemo(() => ({
+    isRunDay: !!dailyPointsContext?.isRunDay,
+    hasMobility: true,
+    hasHydration: true,
+    stepsProgress: myStepsTarget
+      ? Math.min(Math.max(liveMySteps / myStepsTarget, 0), 1)
+      : 0,
+    caloriesProgress: 0,
+    mobilityProgress: 0,
+    hydrationProgress: Math.min(Math.max(glassCount / WATER_GLASS_GOAL, 0), 1),
+    walkRunProgress: 0,
+  }), [dailyPointsContext?.isRunDay, glassCount, liveMySteps, myStepsTarget]);
+
+  const { categories: dailyPointCategories, loading: dailyPointsLoading, claimPoints } = useDailyPoints({
+    accessToken,
+    dayKey: dailyPointsContext?.dayKey || '',
+    config: dailyPointsConfig,
+  });
+
+  const { balance: pointsBalance, refetch: refetchPoints } = usePoints({ accessToken });
+
+  const stepPointCategory = dailyPointCategories.find((category) => category.key === 'STEPS');
+  const hydrationPointCategory = dailyPointCategories.find((category) => category.key === 'HYDRATION');
+  const activePointCategory = battlePage === 0 ? stepPointCategory : hydrationPointCategory;
+  const stepPointsMax = stepPointCategory?.maxPoints ?? 0;
+  const hydrationPointsMax = hydrationPointCategory?.maxPoints ?? 0;
+  const stepGoalReached = !!myStepsTarget && liveMySteps >= myStepsTarget;
+  const hydrationGoalReached = glassCount >= WATER_GLASS_GOAL;
+  const stepRewardClaimable = stepPointCategory
+    ? (stepPointCategory.claimable ?? (!stepPointCategory.isAwarded && stepPointCategory.progress >= 1))
+    : false;
+  const hydrationRewardClaimable = hydrationPointCategory
+    ? (hydrationPointCategory.claimable ?? (!hydrationPointCategory.isAwarded && hydrationPointCategory.progress >= 1))
+    : false;
+  const activeRewardClaimable = battlePage === 0 ? stepRewardClaimable : hydrationRewardClaimable;
+  const showPointsCard = battlePage === 0 ? !!myStepsTarget : true;
+
+  const handleClaimStepReward = useCallback(async () => {
+    if (!stepRewardClaimable || claimingStepReward) return;
+
+    try {
+      setClaimingStepReward(true);
+      await claimPoints('STEPS');
+      await refetchPoints();
+    } finally {
+      setClaimingStepReward(false);
+    }
+  }, [claimPoints, claimingStepReward, refetchPoints, stepRewardClaimable]);
+
+  const handleClaimHydrationReward = useCallback(async () => {
+    if (!hydrationRewardClaimable || claimingHydrationReward) return;
+
+    try {
+      setClaimingHydrationReward(true);
+      await claimPoints('HYDRATION');
+      await refetchPoints();
+    } finally {
+      setClaimingHydrationReward(false);
+    }
+  }, [claimPoints, claimingHydrationReward, hydrationRewardClaimable, refetchPoints]);
+
+  const handleClaimActiveReward = useCallback(async () => {
+    if (battlePage === 0) {
+      await handleClaimStepReward();
+      return;
+    }
+    await handleClaimHydrationReward();
+  }, [battlePage, handleClaimHydrationReward, handleClaimStepReward]);
+
+  const claimingActiveReward = battlePage === 0 ? claimingStepReward : claimingHydrationReward;
+
+  const battleSlideWidth = battlePageWidth > 0
+    ? battlePageWidth - BATTLE_CAROUSEL_PEEK
+    : 0;
+  const battleSnapInterval = battleSlideWidth + BATTLE_CAROUSEL_GAP;
+
+  const scrollToBattlePage = useCallback((pageIndex) => {
+    if (!battleSnapInterval) return;
+    battlePagerRef.current?.scrollTo({ x: battleSnapInterval * pageIndex, animated: true });
+    setBattlePage(pageIndex);
+  }, [battleSnapInterval]);
+
+  const partnerDisplayName = formatBattleName(
+    tracerState?.participants?.partner?.name || fallbackPartnerName || 'PARTNER',
+    'first'
+  ) || 'PARTNER';
+  const youBackdropName = formatBattleName(
+    tracerState?.participants?.you?.name || user?.displayName || user?.name,
+    'first'
+  ) || 'YOU';
+  const partnerBackdropName = formatBattleName(
+    tracerState?.participants?.partner?.name || fallbackPartnerName || 'PARTNER',
+    'full'
+  ) || 'PARTNER';
+  const partnerGender = getOppositeGender(user?.gender);
 
   const last30Days = useMemo(() => {
     const lastMonthDays = Array.isArray(tracerState?.lastMonth?.days) ? tracerState.lastMonth.days : [];
@@ -261,6 +583,27 @@ const StepSyncSection = ({
     }, { days, youWins: 0, partnerWins: 0, ties: 0, comparedDays: 0 });
   }, [tracerState?.lastMonth?.days]);
 
+  const winStreak = useMemo(
+    () => computeWinStreak(last30Days.days),
+    [last30Days.days]
+  );
+
+  const streakLabel = useMemo(() => {
+    if (!winStreak.holder || winStreak.count < 1) return null;
+
+    return {
+      holder: winStreak.holder,
+      count: winStreak.count,
+      name: winStreak.holder === 'YOU' ? 'YOU' : partnerDisplayName,
+      color: winStreak.holder === 'YOU' ? COLORS.primary : COLORS.teal,
+    };
+  }, [winStreak, partnerDisplayName]);
+
+  const streakAtRisk = useMemo(() => {
+    if (!streakLabel || streakLabel.holder !== 'YOU') return false;
+    return compareMySteps <= comparePartnerSteps;
+  }, [streakLabel, compareMySteps, comparePartnerSteps]);
+
   const barAnim = useRef(new Animated.Value(50)).current;
   useEffect(() => {
     Animated.timing(barAnim, {
@@ -277,29 +620,22 @@ const StepSyncSection = ({
     outputRange: [100, 0],
   });
 
-  const handleMotivation = (text, label) => {
+  const partnerReminderName = String(
+    tracerState?.participants?.partner?.name || fallbackPartnerName || 'Partner'
+  ).trim() || 'Partner';
+
+  const handleSendReminder = useCallback((message, label) => {
     if (sendMessage) {
-      sendMessage(`[STEPS] ${text}`);
+      sendMessage(message);
     }
 
-    setSentLabel(label);
     setNudgeSent(true);
-
-    setTimeout(() => {
-      setShowOptions(false);
-      if (onNudge) onNudge(label);
-    }, 100);
+    onNudge?.(label);
 
     setTimeout(() => {
       setNudgeSent(false);
     }, 3000);
-  };
-
-  const motivationOptions = useMemo(() => ([
-    { id: 'tease1', label: 'ZOOM!', text: 'Catch these steps!', icon: <Zap size={16} color={COLORS.dark} strokeWidth={2.5} /> },
-    { id: 'tease2', label: 'NAP TIME?', text: 'Are you even moving?', icon: <Ghost size={16} color={COLORS.dark} strokeWidth={2.5} /> },
-    { id: 'mot2', label: 'SLAY!', text: 'Eating my dust!', icon: <Trophy size={16} color={COLORS.dark} strokeWidth={2.5} /> },
-  ]), []);
+  }, [onNudge, sendMessage]);
 
   const handleEnablePermission = useCallback(async () => {
     if (requestingPermission) {
@@ -342,9 +678,9 @@ const StepSyncSection = ({
           <Shield size={20} color={COLORS.primary} strokeWidth={2.5} />
         </View>
         <View style={styles.permissionCopy}>
-          <Text style={styles.permissionTitle}>Enable step access</Text>
+          <Text style={styles.permissionTitle}>Turn on step tracking</Text>
           <Text style={styles.permissionBody}>
-            You skipped onboarding, so step battle needs permission here before it can read your daily steps.
+            Allow step tracking to compare your daily steps with your partner.
           </Text>
         </View>
         <TouchableOpacity
@@ -367,7 +703,7 @@ const StepSyncSection = ({
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.titleGroup}>
-          <Text style={styles.headerTitle}>STEP BATTLE</Text>
+          <Text style={styles.headerTitle}>{battlePage === 0 ? 'STEP BATTLE' : 'HYDRATION'}</Text>
           <View style={styles.liveTag}>
             <View style={[
               styles.liveDot,
@@ -375,187 +711,242 @@ const StepSyncSection = ({
             ]} />
             <Text style={styles.liveText}>{isConnected ? 'LIVE' : 'OFFLINE'}</Text>
           </View>
-        </View>
-        <View style={[
-          styles.yesterdayWinnerPill,
-          yesterdayWinner === 'YOU' ? styles.yesterdayYouPill :
-          yesterdayWinner === 'PARTNER' ? styles.yesterdayPartnerPill :
-          styles.yesterdayDrawPill
-        ]}>
-          {yesterdayWinner === 'TIE' ? (
-            <Swords size={11} color="#64748B" />
-          ) : (
-            <Trophy 
-              size={11} 
-              color={yesterdayWinner === 'YOU' ? COLORS.primary : COLORS.teal} 
-              fill={yesterdayWinner === 'YOU' ? COLORS.primary : COLORS.teal} 
-            />
-          )}
-          <Text style={styles.yesterdayOneLine}>
-            <Text style={[
-              styles.yesterdayLabel,
-              { color: yesterdayWinner === 'YOU' ? COLORS.primary : yesterdayWinner === 'PARTNER' ? COLORS.teal : '#64748B' }
-            ]}>YESTERDAY </Text>
-            <Text style={[
-              styles.yesterdayValue,
-              { color: yesterdayWinner === 'YOU' ? COLORS.primary : yesterdayWinner === 'PARTNER' ? COLORS.teal : '#334155' }
-            ]}>
-              {yesterdayWinner === 'YOU' ? 'YOU' : yesterdayWinner === 'PARTNER' ? partnerDisplayName : 'DRAW'}
-            </Text>
-          </Text>
+          {battlePage === 0 && streakLabel ? (
+            <View
+              style={[
+                styles.streakPill,
+                streakLabel.holder === 'YOU' ? styles.streakPillYou : styles.streakPillPartner,
+                streakAtRisk && styles.streakPillAtRisk,
+              ]}
+            >
+              <StreakFlame
+                color={streakAtRisk ? '#EA580C' : streakLabel.color}
+                urgent={streakAtRisk}
+                size={11}
+              />
+              <Text
+                style={[
+                  styles.streakPillText,
+                  { color: streakAtRisk ? '#9A3412' : streakLabel.color },
+                ]}
+                numberOfLines={1}
+              >
+                {streakLabel.name} · {streakLabel.count}-day streak
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
 
-      {splitDay && !!countdownText && (
+      {battlePage === 0 && splitDay && !!countdownText && (
         <View style={styles.countdownPill}>
           <Text style={styles.countdownText}>{countdownText}</Text>
         </View>
       )}
 
-      <View style={styles.statsRow}>
-        <TouchableOpacity 
-          style={styles.statBlock}
-          activeOpacity={0.7}
-          onPress={() => router.push({
-            pathname: "/remaining-steps",
-            params: { current: myDisplaySteps, target: myStepsTarget || 10000 }
-          })}
-        >
-          <Text style={styles.userLabel}>YOU</Text>
-          <View style={styles.mainStatLine}>
-            {myPinned && <Pin size={14} color={COLORS.primary} fill={COLORS.primary} style={styles.pinIcon} />}
-            <Text style={[styles.bigNumber, { color: COLORS.primary }]}>{myDisplaySteps.toLocaleString()}</Text>
-            {!!myStepsTarget && (
-              <Text style={styles.inlineTargetText}>/{myStepsTarget.toLocaleString()}</Text>
-            )}
+      <View
+        style={styles.carouselWrap}
+        onLayout={(event) => setBattlePageWidth(event.nativeEvent.layout.width)}
+      >
+        {battlePageWidth > 0 ? (
+          <ScrollView
+            ref={battlePagerRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            snapToInterval={battleSnapInterval}
+            snapToAlignment="start"
+            disableIntervalMomentum
+            onMomentumScrollEnd={(event) => {
+              const x = event.nativeEvent.contentOffset.x;
+              setBattlePage(Math.round(x / battleSnapInterval));
+            }}
+            scrollEventThrottle={16}
+            contentContainerStyle={styles.carouselContent}
+          >
+            <View style={[styles.carouselSlide, { width: battleSlideWidth, minHeight: DUEL_CARD_HEIGHT }]}>
+              <TouchableOpacity
+                style={[styles.duelCard, styles.duelCardFill]}
+                activeOpacity={0.92}
+                onPress={() => setShowLastMonthModal(true)}
+              >
+        <View style={styles.duelRow}>
+          <TouchableOpacity
+            style={styles.playerColumn}
+            activeOpacity={0.85}
+            onPress={() => {
+              router.push({
+                pathname: '/remaining-steps',
+                params: { current: myDisplaySteps, target: myStepsTarget || 10000 },
+              });
+            }}
+          >
+            <View style={styles.playerAvatarWrap}>
+              <PlayerNameBackdrop name={youBackdropName} color={COLORS.primary} />
+              <WalkMascot gender={user?.gender} facing="right" style={styles.playerAvatar} />
+            </View>
+            <View style={styles.playerNumberRow}>
+              {myPinned ? <Pin size={14} color={COLORS.primary} fill={COLORS.primary} /> : null}
+              <Text
+                style={[styles.playerNumber, { color: COLORS.primary }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+              >
+                {myDisplaySteps.toLocaleString()}
+              </Text>
+              {amIWinning ? <Crown size={14} color={COLORS.primary} strokeWidth={2.5} /> : null}
+            </View>
+            <Text style={styles.playerMeta} numberOfLines={2} ellipsizeMode="tail">
+              {last30Days.youWins} {last30Days.youWins === 1 ? 'win' : 'wins'}
+            </Text>
+            {!!mySubText && <Text style={styles.playerSub}>{mySubText}</Text>}
+          </TouchableOpacity>
+
+          <View style={styles.vsColumn}>
+            <View style={styles.vsBadge}>
+              <Text style={styles.vsText}>VS</Text>
+            </View>
           </View>
-          {!!mySubText && <Text style={styles.lastDayText}>{mySubText}</Text>}
-        </TouchableOpacity>
-        <View style={[styles.statBlock, { alignItems: 'flex-end' }]}>
-          <Text style={styles.userLabel}>{partnerDisplayName}</Text>
-          <View style={styles.mainStatLine}>
-            <Text style={[styles.bigNumber, { color: COLORS.teal }]}>{partnerDisplaySteps.toLocaleString()}</Text>
-            {partnerPinned && <Pin size={14} color={COLORS.teal} fill={COLORS.teal} style={styles.pinIconRight} />}
+
+          <View style={styles.playerColumn}>
+            <View style={styles.playerAvatarWrap}>
+              <PlayerNameBackdrop name={partnerBackdropName} color={COLORS.teal} />
+              <WalkMascot gender={partnerGender} facing="left" style={styles.playerAvatar} />
+            </View>
+            <View style={styles.playerNumberRow}>
+              {!amIWinning && comparePartnerSteps > 0 ? (
+                <Crown size={14} color={COLORS.teal} strokeWidth={2.5} />
+              ) : null}
+              <Text
+                style={[styles.playerNumber, { color: COLORS.teal }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+              >
+                {partnerDisplaySteps.toLocaleString()}
+              </Text>
+              {partnerPinned ? <Pin size={14} color={COLORS.teal} fill={COLORS.teal} /> : null}
+            </View>
+            <Text style={styles.playerMeta} numberOfLines={2} ellipsizeMode="tail">
+              {last30Days.partnerWins} {last30Days.partnerWins === 1 ? 'win' : 'wins'}
+            </Text>
+            {!!partnerSubText && <Text style={styles.playerSub}>{partnerSubText}</Text>}
           </View>
-          {!!partnerSubText && <Text style={styles.lastDayText}>{partnerSubText}</Text>}
         </View>
+
+        <View style={styles.duelBarWrap}>
+          <View style={styles.barContainer}>
+            <Animated.View style={[styles.barSegment, { flex: p1Flex, backgroundColor: COLORS.primary }]} />
+            <Animated.View style={[styles.barSegment, { flex: p2Flex, backgroundColor: COLORS.teal }]} />
+          </View>
+        </View>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.carouselSlide, { width: battleSlideWidth, minHeight: DUEL_CARD_HEIGHT }]}>
+              <Hydration partnerDisplayName={partnerDisplayName} cardStyle={styles.duelCard} />
+            </View>
+          </ScrollView>
+        ) : null}
       </View>
 
-      <TouchableOpacity
-        style={styles.barWrapper}
-        activeOpacity={0.85}
-        onPress={() => setShowLastMonthModal(true)}
-      >
-        <View style={styles.barContainer}>
-          <Animated.View style={[styles.barSegment, { flex: p1Flex, backgroundColor: COLORS.primary }]} />
-          <Animated.View style={[styles.barSegment, { flex: p2Flex, backgroundColor: COLORS.teal }]} />
-        </View>
-        <View style={styles.h2hOverlay}>
-          <View style={styles.h2hSide}>
-            <Text style={styles.h2hWins}>{last30Days.youWins}</Text>
-            <Text style={styles.h2hLabel}>WINS</Text>
-          </View>
-          <View style={[styles.h2hSide, { alignItems: 'flex-end' }]}>
-            <Text style={styles.h2hWins}>{last30Days.partnerWins}</Text>
-            <Text style={styles.h2hLabel}>WINS</Text>
-          </View>
-        </View>
-        <View style={styles.vsBadge}>
-          <Text style={styles.vsText}>VS</Text>
-        </View>
-        <View style={styles.barTag}>
-          <Text style={styles.barTagText}>LAST 30 DAYS H2H</Text>
-        </View>
-      </TouchableOpacity>
+      <View style={styles.carouselDots}>
+        {[0, 1].map((page) => (
+          <TouchableOpacity
+            key={page}
+            onPress={() => scrollToBattlePage(page)}
+            activeOpacity={0.8}
+            style={styles.dotTapTarget}
+          >
+            <View
+              style={[
+                styles.carouselDot,
+                battlePage === page ? styles.carouselDotActive : styles.carouselDotInactive,
+              ]}
+            />
+          </TouchableOpacity>
+        ))}
+      </View>
 
       <View style={styles.battleZone}>
-        {!showOptions ? (
-          <View style={styles.footer}>
-            <View style={styles.statusContent}>
-              <Text style={styles.statusHeader}>STATUS</Text>
-              <Text style={styles.statusMsg}>
-                {amIWinning ? "YOU'RE WINNING" : "YOU ARE LOSING"}
-              </Text>
-              {splitDay && (
-                <Text style={styles.statusMeta}>Resets on partner’s day rollover</Text>
-              )}
-            </View>
-            <TouchableOpacity
-              onPress={() => setShowOptions(true)}
-              style={styles.battleBtn}
-              activeOpacity={0.9}
-            >
-              <LinearGradient
-                colors={['#1E293B', '#0F172A']}
-                style={styles.battleBtnGradient}
-              >
-                <Zap size={18} color={COLORS.primary} strokeWidth={3} />
-                <Text style={styles.battleBtnText}>NUDGE</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+        {showPointsCard && (dailyPointsLoading && !activePointCategory ? (
+          <View style={styles.pointsProgressCard}>
+            <ActivityIndicator size={'small'} color={COLORS.primary} />
+            <Text style={styles.pointsProgressLoading}>Loading reward</Text>
           </View>
-        ) : (
-          <View style={styles.deckContainer}>
-            <View style={styles.deckHeader}>
-              <View>
-                <Text style={styles.deckTitle}>QUICK NUDGE</Text>
-                <Text style={styles.deckSubtitle}>Send a message to Battle Deck</Text>
+        ) : activePointCategory ? (
+          <View style={styles.pointsProgressCard}>
+            <View style={styles.pointsProgressTop}>
+              <View style={styles.pointsProgressCopy}>
+                <Text style={styles.pointsProgressMeta} numberOfLines={2}>
+                  {activePointCategory.isAwarded
+                    ? 'Bonus collected today'
+                    : battlePage === 0
+                      ? `Earn ${stepPointsMax} pts at ${myStepsTarget.toLocaleString()} steps`
+                      : `Earn ${hydrationPointsMax} pts at ${WATER_GLASS_GOAL} glasses`}
+                </Text>
+                {!activePointCategory.isAwarded && (battlePage === 0 ? !stepGoalReached : !hydrationGoalReached) ? (
+                  <Text style={styles.pointsProgressHint}>When you hit your goal</Text>
+                ) : null}
+                {activeRewardClaimable ? (
+                  <TouchableOpacity
+                    style={styles.claimRewardBtn}
+                    onPress={handleClaimActiveReward}
+                    disabled={claimingActiveReward}
+                    activeOpacity={0.85}
+                  >
+                    {claimingActiveReward ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.claimRewardBtnText}>
+                        Claim {battlePage === 0 ? stepPointsMax : hydrationPointsMax} pts
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                ) : null}
               </View>
-              <TouchableOpacity onPress={() => setShowOptions(false)} style={styles.closeBtn}>
-                <X size={18} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
 
-            <View style={styles.gridContainer}>
-              {motivationOptions.map((opt) => (
-                <TouchableOpacity
-                  key={opt.id}
-                  onPress={() => handleMotivation(opt.text, opt.label)}
-                  style={styles.gridCard}
-                >
-                  <View style={styles.cardContent}>
-                    <View style={styles.cardIconWrapper}>
-                      {opt.icon}
-                    </View>
-                    <Text style={[styles.cardText, { color: COLORS.text }]}>{opt.text}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <View style={styles.deckInputRow}>
-              <TextInput
-                style={styles.deckInput}
-                placeholder="Type custom roast..."
-                placeholderTextColor="#94A3B8"
-                value={customText}
-                onChangeText={setCustomText}
-                onSubmitEditing={() => {
-                  if (customText.trim()) handleMotivation(customText, 'CUSTOM');
-                  setCustomText('');
-                }}
-              />
-              <TouchableOpacity
-                style={[styles.deckSendBtn, !customText.trim() && { opacity: 0.5 }]}
-                disabled={!customText.trim()}
-                onPress={() => {
-                  handleMotivation(customText, 'CUSTOM');
-                  setCustomText('');
-                }}
-              >
-                <Send size={16} color="#FFF" />
-              </TouchableOpacity>
+              <View style={styles.pointsTotalColumn}>
+                <Heart size={28} color="#EF4444" fill="#EF4444" />
+                <Text style={styles.pointsTotalValue}>{pointsBalance.toLocaleString()}</Text>
+              </View>
             </View>
           </View>
-        )}
+        ) : null)}
+
+        <TouchableOpacity
+          onPress={() => setShowMotivateModal(true)}
+          style={[
+            styles.battleBtn,
+            showPointsCard && (activePointCategory || dailyPointsLoading)
+              ? styles.battleBtnCompact
+              : styles.battleBtnFull,
+          ]}
+          activeOpacity={0.85}
+        >
+          <Send size={16} color="#FFFFFF" strokeWidth={2.5} />
+          <Text style={styles.battleBtnText}>Motivate</Text>
+        </TouchableOpacity>
       </View>
+
+      <ReminderPartnerSheet
+        visible={showMotivateModal}
+        onClose={() => setShowMotivateModal(false)}
+        bottomInset={insets.bottom}
+        partnerName={partnerReminderName}
+        pointsBalance={pointsBalance}
+        pointsLoading={dailyPointsLoading}
+        chatConnected={isConnected}
+        onSendReminder={handleSendReminder}
+      />
 
       {nudgeSent && (
         <Reanimated.View entering={FadeInUp} exiting={FadeOut} style={styles.sentOverlay}>
-          <LinearGradient colors={[COLORS.primary, '#F43F5E']} style={styles.sentPill}>
-            <Zap size={14} color="#FFF" fill="#FFF" />
-            <Text style={styles.sentPillText}>{sentLabel} SENT TO BATTLE</Text>
-          </LinearGradient>
+          <View style={styles.sentPill}>
+            <Check size={14} color="#FFF" strokeWidth={2.5} />
+            <Text style={styles.sentPillText}>Sent to {partnerDisplayName}</Text>
+          </View>
         </Reanimated.View>
       )}
 
@@ -569,7 +960,7 @@ const StepSyncSection = ({
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <View>
-                <Text style={styles.modalTitle}>Last 30 Days Steps</Text>
+                <Text style={styles.modalTitle}>Step History</Text>
                 <Text style={styles.modalSub}>Day by day totals</Text>
               </View>
               <TouchableOpacity onPress={() => setShowLastMonthModal(false)} style={styles.closeBtn}>
@@ -585,7 +976,7 @@ const StepSyncSection = ({
 
             <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
               {last30Days.days.length === 0 ? (
-                <Text style={styles.emptyListText}>No daily data for the last 30 days yet.</Text>
+                <Text style={styles.emptyListText}>No daily step history yet.</Text>
               ) : (
                 last30Days.days.map((day) => (
                   <View key={day.dayKey} style={styles.dayRow}>
@@ -611,6 +1002,7 @@ const StepSyncSection = ({
           </View>
         </View>
       </Modal>
+
     </View>
   );
 };
@@ -684,31 +1076,28 @@ const styles = StyleSheet.create({
   },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444' },
   liveText: { fontSize: 10, fontWeight: '900', color: COLORS.textMuted },
-  yesterdayLabel: { fontSize: 8, fontWeight: '900', letterSpacing: 0.5, opacity: 0.8 },
-  yesterdayValue: { fontSize: 9, fontWeight: '900' },
-  yesterdayOneLine: { flexDirection: 'row', alignItems: 'center' },
-  yesterdayYouPill: {
-    backgroundColor: '#FFF1F1',
-    borderColor: '#FEE2E2',
-  },
-  yesterdayPartnerPill: {
-    backgroundColor: '#F0FDFD',
-    borderColor: '#CCFBF1',
-  },
-  yesterdayDrawPill: {
-    backgroundColor: '#F8FAFC',
-    borderColor: '#E2E8F0',
-  },
-  yesterdayWinnerPill: {
+  streakPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#F8FAFC',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#F1F5F9'
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+  },
+  streakPillYou: {
+    backgroundColor: '#FFF1F2',
+  },
+  streakPillPartner: {
+    backgroundColor: '#F0FDFA',
+  },
+  streakPillAtRisk: {
+    backgroundColor: '#FFF7ED',
+  },
+  streakPillText: {
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.2,
   },
   countdownPill: {
     flexDirection: 'row',
@@ -724,211 +1113,299 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.2
   },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-    paddingHorizontal: 4
+  carouselWrap: {
+    width: '100%',
+    overflow: 'visible',
   },
-  statBlock: { gap: 2 },
-  mainStatLine: {
+  carouselContent: {
+    paddingRight: BATTLE_CAROUSEL_PEEK - BATTLE_CAROUSEL_GAP,
+  },
+  carouselSlide: {
+    marginRight: BATTLE_CAROUSEL_GAP,
+    alignSelf: 'stretch',
+  },
+  carouselDots: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 20,
   },
-  userLabel: { fontSize: 12, fontWeight: '900', color: COLORS.textMuted, letterSpacing: 1 },
-  bigNumber: { fontSize: 34, fontWeight: '900', letterSpacing: -1, fontVariant: ['tabular-nums'] },
-  inlineTargetText: {
+  dotTapTarget: {
+    padding: 4,
+  },
+  carouselDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  carouselDotActive: {
+    backgroundColor: COLORS.primary,
+    width: 18,
+  },
+  carouselDotInactive: {
+    backgroundColor: '#CBD5E1',
+  },
+  duelCard: {
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEF2F6',
+    paddingTop: 14,
+    paddingBottom: 14,
+    paddingHorizontal: 10,
+    overflow: 'hidden',
+    width: '100%',
+    minHeight: DUEL_CARD_HEIGHT,
+    justifyContent: 'space-between',
+  },
+  duelCardFill: {
+    flex: 1,
+  },
+  duelRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  playerColumn: {
+    flex: 1,
+    alignItems: 'center',
+    minWidth: 0,
+    maxWidth: '46%',
+    paddingHorizontal: 4,
+    overflow: 'hidden',
+  },
+  playerAvatarWrap: {
+    width: 96,
+    height: 118,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginBottom: 4,
+    position: 'relative',
+  },
+  playerNameBackdropWrap: {
+    position: 'absolute',
+    top: 10,
+    left: -10,
+    right: -10,
+    zIndex: 0,
+    alignItems: 'center',
+  },
+  playerNameBackdrop: {
+    width: '100%',
+    fontSize: 34,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    lineHeight: 34,
+    textAlign: 'center',
+    opacity: 0.22,
+  },
+  playerNameBackdropSecond: {
+    marginTop: -1,
+  },
+  playerAvatar: {
+    zIndex: 1,
+  },
+  walkMascotClip: {
+    overflow: 'hidden',
+  },
+  walkMascotInner: {
+    width: '100%',
+    height: '100%',
+    overflow: 'hidden',
+  },
+  walkMascotMirrored: {
+    transform: [{ scaleX: -1 }],
+  },
+  walkMascotSprite: {
+    backgroundColor: 'transparent',
+  },
+  playerNumberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    width: '100%',
+    minWidth: 0,
+    paddingHorizontal: 2,
+  },
+  playerNumber: {
+    fontSize: 44,
+    fontWeight: '900',
+    letterSpacing: -1.5,
+    fontVariant: ['tabular-nums'],
+    lineHeight: 46,
+    textAlign: 'center',
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  playerMeta: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'center',
+    width: '100%',
+  },
+  playerSub: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'center',
+    width: '100%',
+  },
+  vsColumn: {
+    width: 40,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 44,
+  },
+  vsBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.dark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vsText: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    fontStyle: 'italic',
+  },
+  duelBarWrap: {
+    marginTop: 12,
+    paddingHorizontal: 4,
+  },
+  barContainer: {
+    height: 12,
+    width: '100%',
+    flexDirection: 'row',
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: '#E2E8F0',
+  },
+  barSegment: { height: '100%' },
+  battleZone: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+    minHeight: 78,
+  },
+  pointsProgressCard: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  pointsProgressLoading: {
+    marginTop: 6,
     fontSize: 11,
     fontWeight: '700',
     color: COLORS.textMuted,
-    marginTop: 10,
+    textAlign: 'center',
   },
-  lastDayText: { fontSize: 11, fontWeight: '700', color: '#64748B' },
-  pinIcon: {
-    transform: [{ rotate: '-30deg' }],
-    marginTop: 2,
-  },
-  pinIconRight: {
-    transform: [{ rotate: '30deg' }],
-    marginTop: 2,
-  },
-  barWrapper: { height: 64, justifyContent: 'center', position: 'relative', marginBottom: 24 },
-  barContainer: {
-    height: '100%',
-    width: '100%',
+  pointsProgressTop: {
     flexDirection: 'row',
-    borderRadius: 24,
-    overflow: 'hidden',
-    backgroundColor: '#F1F5F9'
-  },
-  barSegment: { height: '100%' },
-  vsBadge: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    marginLeft: -20,
-    marginTop: -20,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: COLORS.white,
-    justifyContent: 'center',
     alignItems: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-  },
-  vsText: { fontSize: 12, fontWeight: '900', color: COLORS.textMuted, fontStyle: 'italic' },
-  h2hOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 12,
+  },
+  pointsProgressCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pointsTotalColumn: {
     alignItems: 'center',
-    paddingHorizontal: 20,
+    justifyContent: 'center',
+    minWidth: 64,
+    paddingLeft: 4,
+    gap: 4,
   },
-  h2hSide: {
-    alignItems: 'flex-start',
-    gap: 0,
+  pointsTotalValue: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: COLORS.text,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.5,
   },
-  h2hWins: {
-    fontSize: 20,
+  pointsProgressMeta: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.text,
+    lineHeight: 15,
+    fontVariant: ['tabular-nums'],
+  },
+  pointsProgressHint: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '600',
+    color: COLORS.textMuted,
+  },
+  claimRewardBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    minWidth: 72,
+    height: 28,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: COLORS.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  claimRewardBtnText: {
+    fontSize: 11,
     fontWeight: '900',
     color: '#FFFFFF',
-    textShadowColor: 'rgba(0,0,0,0.1)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    letterSpacing: 0.4,
   },
-  h2hLabel: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: 'rgba(255,255,255,0.8)',
-    letterSpacing: 0.5,
-  },
-  barTag: {
-    position: 'absolute',
-    bottom: -8,
-    alignSelf: 'center',
-    backgroundColor: COLORS.dark,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  barTagText: {
-    fontSize: 8,
-    fontWeight: '900',
-    color: '#FFF',
-    letterSpacing: 0.5,
-  },
-  battleZone: { minHeight: 80, justifyContent: 'center' },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    padding: 12,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#F1F5F9'
-  },
-  statusContent: { flex: 1 },
-  statusHeader: { fontSize: 9, fontWeight: '900', color: COLORS.textMuted, letterSpacing: 1, marginBottom: 2 },
-  statusMsg: { fontSize: 14, fontWeight: '900', color: COLORS.text },
-  statusMeta: { fontSize: 11, color: '#64748B', marginTop: 3, fontWeight: '700' },
   battleBtn: {
-    borderRadius: 14,
-    overflow: 'hidden',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 8
-  },
-  battleBtnGradient: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 8
-  },
-  battleBtnText: { color: '#FFF', fontWeight: '900', fontSize: 12, letterSpacing: 1 },
-  deckContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 10
-  },
-  deckHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 20
-  },
-  deckTitle: { fontSize: 13, fontWeight: '900', color: COLORS.text, letterSpacing: 0.5 },
-  deckSubtitle: { fontSize: 10, fontWeight: '700', color: COLORS.textMuted, marginTop: 2 },
-  closeBtn: { padding: 4 },
-  gridContainer: {
-    flexDirection: 'column',
-    gap: 10,
-  },
-  gridCard: {
-    width: '100%',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    backgroundColor: '#F8FAFC',
-    overflow: 'hidden',
-  },
-  cardContent: {
-    flexDirection: 'row',
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    gap: 14,
-  },
-  cardIconWrapper: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: '#FFF',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    elevation: 2
-  },
-  cardText: { fontSize: 13, fontWeight: '800', color: COLORS.text, flex: 1 },
-  deckInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 18,
-    paddingLeft: 16,
-    paddingRight: 6,
-    paddingVertical: 6,
-    marginTop: 15,
-    borderWidth: 1,
-    borderColor: '#E2E8F0'
-  },
-  deckInput: { flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.text },
-  deckSendBtn: {
+    gap: 8,
+    borderRadius: 16,
+    borderCurve: 'continuous',
     backgroundColor: COLORS.dark,
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center'
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignSelf: 'stretch',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 3,
   },
+  battleBtnCompact: {
+    width: 112,
+    paddingHorizontal: 12,
+  },
+  battleBtnFull: {
+    flex: 1,
+    width: 'auto',
+  },
+  battleBtnText: {
+    color: '#FFF',
+    fontWeight: '800',
+    fontSize: 14,
+    letterSpacing: -0.2,
+  },
+  closeBtn: { padding: 4 },
   sentOverlay: {
     position: 'absolute',
     bottom: -10,
@@ -940,14 +1417,24 @@ const styles = StyleSheet.create({
   sentPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 10,
     paddingHorizontal: 16,
-    borderRadius: 20,
+    borderRadius: 999,
+    borderCurve: 'continuous',
+    backgroundColor: COLORS.primary,
     gap: 8,
-    elevation: 5
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  sentPillText: { color: '#FFF', fontWeight: '900', fontSize: 10, letterSpacing: 1 }
-  ,
+  sentPillText: {
+    color: '#FFF',
+    fontWeight: '700',
+    fontSize: 13,
+    letterSpacing: -0.1,
+  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.35)',

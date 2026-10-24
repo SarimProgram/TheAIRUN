@@ -1,4 +1,5 @@
 import type { DaySchedule } from './planProjection';
+import { getDisplayContent } from '@/components/chat/partnerNoteShared';
 
 export type PartnerDaySummary = {
     dayKey: string;
@@ -25,6 +26,12 @@ export type PartnerPointsHistoryEntry = {
     earnedPoints: number;
 };
 
+export type TimelineWeightHistoryEntry = {
+    id: string;
+    weightKg: number;
+    loggedAt: string;
+};
+
 export type ScheduledPartnerRun = {
     id: string;
     scheduledTime: string;
@@ -49,6 +56,9 @@ export type TimelineEventKind =
     | 'activity'
     | 'milestone'
     | 'points'
+    | 'weight'
+    | 'memory'
+    | 'marketplace'
     | 'run_together'
     | 'wager'
     | 'alert'
@@ -64,6 +74,31 @@ export type PartnerTimelineEvent = {
     title: string;
     subtitle?: string;
     tone: 'default' | 'success' | 'warning' | 'info';
+    weightChange?: 'loss' | 'gain';
+    memoryId?: string;
+    imageUri?: string | null;
+    imageAvailable?: boolean;
+    marketplaceEmoji?: string;
+};
+
+export type PartnerMemoryEntry = {
+    id: string;
+    authorUserId: string;
+    caption: string | null;
+    createdAt: string;
+    imageAvailable: boolean;
+    localImageUri?: string | null;
+};
+
+export type PartnerMarketplaceHistoryEntry = {
+    id: string;
+    title: string;
+    icon: string;
+    status: string;
+    boughtByUserId: string | null;
+    owedByUserId: string;
+    boughtAt: string;
+    fulfilledAt: string | null;
 };
 
 type WagerCard = {
@@ -73,6 +108,28 @@ type WagerCard = {
     status?: string;
 };
 
+type WagerLeader = {
+    yourWeek?: { totalDistanceKm?: number };
+    partnerWeek?: { totalDistanceKm?: number };
+    statusLabel?: string;
+};
+
+function formatWagerTimelineSubtitle(
+    wager: WagerCard,
+    partnerName: string,
+    leader?: WagerLeader | null,
+) {
+    if (leader?.statusLabel) {
+        return leader.statusLabel;
+    }
+    if (leader) {
+        return `You ${(leader.yourWeek?.totalDistanceKm ?? 0).toFixed(1)} km · ${partnerName} ${(leader.partnerWeek?.totalDistanceKm ?? 0).toFixed(1)} km`;
+    }
+    if (wager.status === 'ACTIVE') return 'Wager week in progress';
+    if (wager.status === 'PENDING') return 'Wager waiting to start';
+    return 'Weekly wager';
+}
+
 type MyTodaySummary = {
     steps: number;
     stepsTarget?: number;
@@ -80,6 +137,84 @@ type MyTodaySummary = {
     runKmTarget: number;
     exerciseMinutes: number;
 };
+
+function formatWeightValue(weightKg: number, usesImperial: boolean) {
+    if (usesImperial) {
+        return `${(weightKg * 2.20462).toFixed(1)} lbs`;
+    }
+    return `${weightKg.toFixed(1)} kg`;
+}
+
+function formatWeightDelta(deltaKg: number, usesImperial: boolean) {
+    const delta = usesImperial ? Math.abs(deltaKg) * 2.20462 : Math.abs(deltaKg);
+    const unit = usesImperial ? 'lbs' : 'kg';
+    return `${delta.toFixed(1)} ${unit}`;
+}
+
+function formatWeightReduction(deltaKg: number, usesImperial: boolean) {
+    return formatWeightDelta(deltaKg, usesImperial);
+}
+
+function displayWeightToKg(weight: number, usesImperial: boolean) {
+    return usesImperial ? weight / 2.20462 : weight;
+}
+
+export function journeyStartWeightToKg(
+    startWeight: number | null | undefined,
+    usesImperial: boolean,
+): number | null {
+    if (startWeight == null || !Number.isFinite(startWeight) || startWeight <= 0) {
+        return null;
+    }
+    return displayWeightToKg(startWeight, usesImperial);
+}
+
+function pushWeightHistoryEvents(
+    pushEvent: (dayKey: string, event: PartnerTimelineEvent) => void,
+    entries: TimelineWeightHistoryEntry[],
+    actor: TimelineActor,
+    personLabel: string,
+    usesImperial: boolean,
+    baselineWeightKg?: number | null,
+) {
+    const sorted = [...entries].sort(
+        (a, b) => new Date(a.loggedAt).getTime() - new Date(b.loggedAt).getTime(),
+    );
+
+    for (let index = 0; index < sorted.length; index += 1) {
+        const entry = sorted[index];
+        const previous = index > 0 ? sorted[index - 1] : null;
+        const referenceWeightKg =
+            previous?.weightKg ??
+            (index === 0 && baselineWeightKg != null ? baselineWeightKg : null);
+        if (referenceWeightKg == null) continue;
+
+        const deltaKg = entry.weightKg - referenceWeightKg;
+        if (Math.abs(deltaKg) < 0.05) continue;
+
+        const dayKey = dayKeyFromDate(new Date(entry.loggedAt));
+        const changeLabel = formatWeightDelta(deltaKg, usesImperial);
+        const currentWeightLabel = formatWeightValue(entry.weightKg, usesImperial);
+        const isLoss = deltaKg < 0;
+        const verb = isLoss ? 'Lost' : 'Gained';
+
+        pushEvent(dayKey, {
+            id: `weight-${actor}-${entry.id}`,
+            dayKey,
+            kind: 'weight',
+            actor,
+            sortAt: entry.loggedAt,
+            timeLabel: formatTimeLabel(entry.loggedAt),
+            title:
+                actor === 'you'
+                    ? `${verb} ${changeLabel}`
+                    : `${personLabel} ${verb.toLowerCase()} ${changeLabel}`,
+            subtitle: `Now at ${currentWeightLabel}`,
+            tone: isLoss ? 'success' : 'warning',
+            weightChange: isLoss ? 'loss' : 'gain',
+        });
+    }
+}
 
 function formatTimeLabel(iso: string) {
     const date = new Date(iso);
@@ -205,8 +340,15 @@ export function collectTimelineDayKeys(params: {
     baseDays: PartnerDaySummary[];
     pointsHistory?: PartnerPointsHistoryEntry[];
     myPointsHistory?: PartnerPointsHistoryEntry[];
+    partnerWeightHistory?: TimelineWeightHistoryEntry[];
+    myWeightHistory?: TimelineWeightHistoryEntry[];
+    partnerJourneyWeightLost?: number | null;
+    partnerJourneyUpdatedAt?: string | null;
+    partnerMemories?: PartnerMemoryEntry[];
+    partnerMarketplaceHistory?: PartnerMarketplaceHistoryEntry[];
     chatMessages?: TimelineChatMessage[];
     scheduledRuns?: ScheduledPartnerRun[];
+    activeWagerWeekStart?: string | null;
 }): string[] {
     const keys = new Set(params.baseDays.map((day) => day.dayKey));
 
@@ -216,11 +358,39 @@ export function collectTimelineDayKeys(params: {
     for (const entry of params.myPointsHistory ?? []) {
         keys.add(entry.dayKey);
     }
+    for (const entry of params.partnerWeightHistory ?? []) {
+        keys.add(dayKeyFromDate(new Date(entry.loggedAt)));
+    }
+    for (const entry of params.myWeightHistory ?? []) {
+        keys.add(dayKeyFromDate(new Date(entry.loggedAt)));
+    }
+    if (
+        params.partnerJourneyWeightLost != null &&
+        params.partnerJourneyWeightLost >= 0.05
+    ) {
+        keys.add(
+            dayKeyFromDate(
+                new Date(params.partnerJourneyUpdatedAt ?? new Date().toISOString()),
+            ),
+        );
+    }
+    for (const memory of params.partnerMemories ?? []) {
+        keys.add(dayKeyFromDate(new Date(memory.createdAt)));
+    }
+    for (const entry of params.partnerMarketplaceHistory ?? []) {
+        keys.add(dayKeyFromDate(new Date(entry.boughtAt)));
+        if (entry.fulfilledAt) {
+            keys.add(dayKeyFromDate(new Date(entry.fulfilledAt)));
+        }
+    }
     for (const message of params.chatMessages ?? []) {
         keys.add(dayKeyFromDate(new Date(message.createdAt)));
     }
     for (const run of params.scheduledRuns ?? []) {
         keys.add(dayKeyFromDate(new Date(run.scheduledTime)));
+    }
+    if (params.activeWagerWeekStart) {
+        keys.add(params.activeWagerWeekStart);
     }
 
     return [...keys];
@@ -232,11 +402,23 @@ export function buildPartnerTimelineEvents(params: {
     plannedDays: DaySchedule[];
     pointsHistory: PartnerPointsHistoryEntry[];
     myPointsHistory?: PartnerPointsHistoryEntry[];
+    partnerWeightHistory?: TimelineWeightHistoryEntry[];
+    myWeightHistory?: TimelineWeightHistoryEntry[];
+    partnerUsesImperial?: boolean;
+    myUsesImperial?: boolean;
+    partnerBaselineWeightKg?: number | null;
+    myBaselineWeightKg?: number | null;
+    partnerJourneyWeightLost?: number | null;
+    partnerJourneyCurrentWeight?: number | null;
+    partnerJourneyUpdatedAt?: string | null;
+    partnerMemories?: PartnerMemoryEntry[];
+    partnerMarketplaceHistory?: PartnerMarketplaceHistoryEntry[];
+    currentUserId?: string | null;
     scheduledRuns: ScheduledPartnerRun[];
     chatMessages?: TimelineChatMessage[];
-    currentUserId?: string | null;
     myTodaySummary?: MyTodaySummary | null;
     activeWager?: WagerCard | null;
+    wagerLeader?: WagerLeader | null;
     showCaloriesWarning?: boolean;
     partnerCaloriesOverTarget?: number;
     partnerNeedsWaterNudge?: boolean;
@@ -248,11 +430,23 @@ export function buildPartnerTimelineEvents(params: {
         plannedDays,
         pointsHistory,
         myPointsHistory = [],
+        partnerWeightHistory = [],
+        myWeightHistory = [],
+        partnerUsesImperial = false,
+        myUsesImperial = false,
+        partnerBaselineWeightKg = null,
+        myBaselineWeightKg = null,
+        partnerJourneyWeightLost = null,
+        partnerJourneyCurrentWeight = null,
+        partnerJourneyUpdatedAt = null,
+        partnerMemories = [],
+        partnerMarketplaceHistory = [],
         scheduledRuns,
         chatMessages = [],
         currentUserId,
         myTodaySummary,
         activeWager,
+        wagerLeader,
         showCaloriesWarning,
         partnerCaloriesOverTarget = 0,
         partnerNeedsWaterNudge,
@@ -448,6 +642,118 @@ export function buildPartnerTimelineEvents(params: {
         });
     }
 
+    pushWeightHistoryEvents(
+        pushEvent,
+        partnerWeightHistory,
+        'partner',
+        partnerName,
+        partnerUsesImperial,
+        partnerBaselineWeightKg,
+    );
+    pushWeightHistoryEvents(
+        pushEvent,
+        myWeightHistory,
+        'you',
+        'You',
+        myUsesImperial,
+        myBaselineWeightKg,
+    );
+
+    const hasPartnerWeightEvent = [...eventsByDay.values()].some((events) =>
+        events.some((event) => event.kind === 'weight' && event.actor === 'partner'),
+    );
+    if (
+        !hasPartnerWeightEvent &&
+        params.partnerJourneyWeightLost != null &&
+        params.partnerJourneyWeightLost >= 0.05 &&
+        params.partnerJourneyCurrentWeight != null
+    ) {
+        const sortAt = params.partnerJourneyUpdatedAt ?? new Date().toISOString();
+        const dayKey = dayKeyFromDate(new Date(sortAt));
+        const reductionLabel = partnerUsesImperial
+            ? `${params.partnerJourneyWeightLost.toFixed(1)} lbs`
+            : `${params.partnerJourneyWeightLost.toFixed(1)} kg`;
+        const currentWeightLabel = partnerUsesImperial
+            ? `${params.partnerJourneyCurrentWeight.toFixed(1)} lbs`
+            : `${params.partnerJourneyCurrentWeight.toFixed(1)} kg`;
+
+        pushEvent(dayKey, {
+            id: 'weight-partner-journey',
+            dayKey,
+            kind: 'weight',
+            actor: 'partner',
+            sortAt,
+            timeLabel: formatTimeLabel(sortAt),
+            title: `${partnerName} lost ${reductionLabel}`,
+            subtitle: `Now at ${currentWeightLabel}`,
+            tone: 'success',
+            weightChange: 'loss',
+        });
+    }
+
+    for (const memory of partnerMemories) {
+        const dayKey = dayKeyFromDate(new Date(memory.createdAt));
+        const isYou = currentUserId ? memory.authorUserId === currentUserId : false;
+        pushEvent(dayKey, {
+            id: `memory-${memory.id}`,
+            dayKey,
+            kind: 'memory',
+            actor: isYou ? 'you' : 'partner',
+            sortAt: memory.createdAt,
+            timeLabel: formatTimeLabel(memory.createdAt),
+            title: isYou ? 'You shared a memory' : `${partnerName} shared a memory`,
+            subtitle: memory.caption || undefined,
+            tone: 'default',
+            memoryId: memory.id,
+            imageUri: memory.localImageUri ?? null,
+            imageAvailable: memory.imageAvailable,
+        });
+    }
+
+    for (const entry of partnerMarketplaceHistory) {
+        if (entry.status === 'EXPIRED') continue;
+
+        const redeemDayKey = dayKeyFromDate(new Date(entry.boughtAt));
+        const redeemActor: TimelineActor =
+            currentUserId && entry.boughtByUserId === currentUserId ? 'you' : 'partner';
+        pushEvent(redeemDayKey, {
+            id: `marketplace-redeemed-${entry.id}`,
+            dayKey: redeemDayKey,
+            kind: 'marketplace',
+            actor: redeemActor,
+            sortAt: entry.boughtAt,
+            timeLabel: formatTimeLabel(entry.boughtAt),
+            title:
+                redeemActor === 'you'
+                    ? `You redeemed ${entry.title}`
+                    : `${partnerName} redeemed ${entry.title}`,
+            subtitle: 'Store reward claimed',
+            tone: 'info',
+            marketplaceEmoji: entry.icon,
+        });
+
+        if (entry.status === 'COMPLETED' && entry.fulfilledAt) {
+            const fulfilledDayKey = dayKeyFromDate(new Date(entry.fulfilledAt));
+            const fulfillActor: TimelineActor =
+                currentUserId && entry.owedByUserId === currentUserId ? 'you' : 'partner';
+            pushEvent(fulfilledDayKey, {
+                id: `marketplace-completed-${entry.id}`,
+                dayKey: fulfilledDayKey,
+                kind: 'marketplace',
+                actor: fulfillActor,
+                sortAt: entry.fulfilledAt,
+                timeLabel: formatTimeLabel(entry.fulfilledAt),
+                title:
+                    fulfillActor === 'you'
+                        ? `You completed ${entry.title}`
+                        : `${partnerName} completed ${entry.title}`,
+                subtitle: 'Reward fulfilled',
+                tone: 'success',
+                marketplaceEmoji: entry.icon,
+            });
+        }
+    }
+
     for (const run of scheduledRuns) {
         const dayKey = dayKeyFromDate(new Date(run.scheduledTime));
         if (!weekDayKeys.has(dayKey)) continue;
@@ -481,12 +787,7 @@ export function buildPartnerTimelineEvents(params: {
             actor: 'partner',
             sortAt: sortAtFromDayKey(activeWager.weekStart, 9),
             title: activeWager.title || 'Weekly wager',
-            subtitle:
-                activeWager.status === 'ACTIVE'
-                    ? 'Wager week in progress'
-                    : activeWager.status === 'PENDING'
-                        ? 'Wager waiting to start'
-                        : 'Wager week',
+            subtitle: formatWagerTimelineSubtitle(activeWager, partnerName, wagerLeader),
             tone: 'info',
         });
     }
@@ -505,7 +806,7 @@ export function buildPartnerTimelineEvents(params: {
             sortAt: message.createdAt,
             timeLabel: formatTimeLabel(message.createdAt),
             title: isYou ? 'You posted' : `${message.fromName || partnerName} posted`,
-            subtitle: message.content,
+            subtitle: getDisplayContent(message.content) || 'Partner reminder',
             tone: 'default',
         });
     }
@@ -521,8 +822,11 @@ export function buildPartnerTimelineEvents(params: {
                 milestone: 3,
                 activity: 4,
                 points: 5,
-                note: 6,
-                alert: 7,
+                weight: 6,
+                memory: 7,
+                marketplace: 8,
+                note: 9,
+                alert: 10,
             };
             return kindOrder[a.kind] - kindOrder[b.kind];
         });

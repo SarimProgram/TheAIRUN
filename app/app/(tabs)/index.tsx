@@ -13,6 +13,7 @@ import {
   ScrollView,
   Alert,
   LayoutChangeEvent,
+  InteractionManager,
 } from 'react-native';
 import {
   Heart,
@@ -22,21 +23,27 @@ import {
   Plus,
   Swords,
   RefreshCw,
-  Zap,
   Users,
-  Activity,
-  LogIn,
   X,
   ChevronRight,
-  MessageCircle,
   AlertTriangle,
-  Target,
   UserCheck,
   UserX,
 } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
+
+const MENU_ICONS = {
+  partner: require('../../assets/menu/partner.png'),
+  activity: require('../../assets/menu/activity.png'),
+  exercises: require('../../assets/menu/exercises.png'),
+  water: require('../../assets/menu/water.png'),
+  goals: require('../../assets/menu/goals.png'),
+  quest: require('../../assets/menu/quest.png'),
+  settings: require('../../assets/menu/settings.png'),
+} as const;
 import Animated, {
   useSharedValue,
   withTiming,
@@ -67,9 +74,19 @@ import WeeklyProgress from '../../components/home/WeeklyProgress';
 import DailyTasks from '../../components/home/DailyTasks';
 import StepSyncSection from '../../components/home/StepTracer';
 import WeightHero from '../../components/home/WeightHero';
+import PremiumNotification from '../../components/home/PremiumNotification';
+import PremiumFullscreen from '../../components/home/PremiumFullscreen';
+import InterveneBottomSheet, { INTERVENE_ANIMATION_COST, formatPointsAlert } from '../../components/home/InterveneBottomSheet';
 import { useChat, ChatMessage } from '../../contexts/ChatContext';
+import { useInterventionCelebration, InterventionCelebrationRequest } from '../../hooks/useInterventionCelebration';
 
 const { width } = Dimensions.get('window');
+
+const HERO_PAGE = {
+  NOTIFICATION: 0,
+  CALORIES: 1,
+  CHAT: 2,
+} as const;
 
 const COLORS = {
   primary: '#FF6B6B', // This is the Coral color
@@ -136,21 +153,39 @@ const UserCard = ({
   motivateLabel?: string;
 }) => {
   const pulse = useSharedValue(1);
-  useEffect(() => {
-    pulse.value = withRepeat(
-      withSequence(withTiming(1.2, { duration: 800 }), withTiming(1, { duration: 800 })),
-      -1, true
-    );
-  }, []);
-
-  const animatedFlameStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulse.value }],
-    opacity: pulse.value - 0.1,
-  }));
-
+  const intervenePulse = useSharedValue(1);
   const remaining = data.goal - (data.food - data.exercise);
   const isNegative = remaining < 0;
   const statusColor = isNegative ? '#EF4444' : accent;
+
+  useEffect(() => {
+    const pulsePeak = isNegative ? 1.12 : 1.08;
+    pulse.value = withRepeat(
+      withSequence(withTiming(pulsePeak, { duration: 1100 }), withTiming(1, { duration: 1100 })),
+      -1, true
+    );
+  }, [isNegative]);
+
+  useEffect(() => {
+    if (!showMotivate) {
+      intervenePulse.value = 1;
+      return;
+    }
+    intervenePulse.value = withRepeat(
+      withSequence(withTiming(1.03, { duration: 1000 }), withTiming(1, { duration: 1000 })),
+      -1,
+      true
+    );
+  }, [showMotivate]);
+
+  const animatedFlameStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulse.value }],
+    opacity: 0.96 + (pulse.value - 1) * 0.35,
+  }));
+
+  const animatedInterveneStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: intervenePulse.value }],
+  }));
 
   return (
     <View style={[styles.cardOuter, isMain && { shadowColor: statusColor }]}>
@@ -164,7 +199,7 @@ const UserCard = ({
           <AnimatedCounter value={remaining} style={[styles.bigNum, isNegative && { color: '#EF4444' }]} />
           <Animated.View style={animatedFlameStyle}>
             {isNegative ? (
-              <AlertTriangle size={18} color="#EF4444" fill="#FEE2E2" />
+              <AlertTriangle size={20} color="#EF4444" fill="#FEE2E2" />
             ) : (
               <Flame size={18} color={accent} fill={accent} />
             )}
@@ -200,16 +235,20 @@ const UserCard = ({
           </TouchableOpacity>
         )}
         {!isMain && showMotivate && onMotivate && (
-          <TouchableOpacity
-            style={styles.motivateButton}
-            onPress={(e) => {
-              e.stopPropagation();
-              onMotivate();
-            }}
-          >
-            <MessageCircle size={12} color={COLORS.primary} />
-            <Text style={styles.motivateButtonText}>{motivateLabel || 'Motivate'}</Text>
-          </TouchableOpacity>
+          <Animated.View style={[styles.motivateButton, animatedInterveneStyle]}>
+            <TouchableOpacity
+              style={styles.motivateButtonPress}
+              activeOpacity={0.85}
+              onPress={(e) => {
+                e.stopPropagation();
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                onMotivate();
+              }}
+            >
+              <AlertTriangle size={13} color="#DC2626" fill="#FEE2E2" />
+              <Text style={styles.motivateButtonText}>{motivateLabel || 'Intervene!'}</Text>
+            </TouchableOpacity>
+          </Animated.View>
         )}
       </TouchableOpacity>
     </View>
@@ -305,18 +344,30 @@ export default function App() {
   const { openChat, chatJump } = useLocalSearchParams<{ openChat?: string; chatJump?: string }>();
   const mainScrollRef = useRef<Animated.ScrollView>(null);
   const heroPagerRef = useRef<Animated.ScrollView>(null);
+  const activeHeroPageRef = useRef(HERO_PAGE.CALORIES);
   const lastChatJumpRef = useRef<string | null>(null);
+  const lastRoutedCelebrationRef = useRef<string | null>(null);
+  const [fullscreenCelebration, setFullscreenCelebration] =
+    useState<InterventionCelebrationRequest | null>(null);
+  const [cardCelebration, setCardCelebration] =
+    useState<InterventionCelebrationRequest | null>(null);
   const lastMainScrollYRef = useRef(0);
   const heroLayoutRef = useRef({ y: 0, height: 0 });
   const [isRunning, setIsRunning] = useState(false);
   const [nudgeSent, setNudgeSent] = useState(false);
+  const [showInterveneSheet, setShowInterveneSheet] = useState(false);
   const [partner, setPartner] = useState<any>(null);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showPointsInfo, setShowPointsInfo] = useState(false);
-  // Track active page for dots and title
-  const [activeHeroPage, setActiveHeroPage] = useState(0);
+  const [stepRouteMetrics, setStepRouteMetrics] = useState<{ current: number; target: number } | null>(null);
+  // Track active page for dots and title (default: calories grid)
+  const [activeHeroPage, setActiveHeroPage] = useState(HERO_PAGE.CALORIES);
   const [chatModerationBusy, setChatModerationBusy] = useState(false);
+
+  useEffect(() => {
+    activeHeroPageRef.current = activeHeroPage;
+  }, [activeHeroPage]);
   const [isHeroVisibleOnScreen, setIsHeroVisibleOnScreen] = useState(true);
   const [stepPermissionEnabled, setStepPermissionEnabled] = useState<boolean | null>(null);
 
@@ -341,17 +392,17 @@ export default function App() {
 
   const heroScrollX = useSharedValue(0);
   const heroPageWidth = width - 32;
-  const isHomeChatVisible = isFocused && activeHeroPage === 1 && isHeroVisibleOnScreen;
+  const isHomeChatVisible = isFocused && activeHeroPage === HERO_PAGE.CHAT && isHeroVisibleOnScreen;
 
-  const closeMenuAndNavigate = useCallback((path: string) => {
+  const closeMenuAndNavigate = useCallback((path: Parameters<typeof router.push>[0]) => {
     setIsMenuOpen(false);
     requestAnimationFrame(() => {
-      router.push(path as any);
+      router.push(path);
     });
   }, [router]);
 
   const { accessToken, authFetch, isAuthenticated } = useAuth();
-  const { balance: points, refetch: refetchPoints } = usePoints({ accessToken });
+  const { balance: points, refetch: refetchPoints, spend: spendPoints } = usePoints({ accessToken });
   const { summary, loading, recalculate } = useDailySummary({ accessToken });
   const { partnerData: partnerSummary, hasPartner, refetch: refetchPartnerSummary } = usePartnerSummary({ accessToken });
   const { steps: liveSteps } = useStepSync({
@@ -388,12 +439,28 @@ export default function App() {
       .catch(err => console.log(err));
   }, [isAuthenticated, authFetch]);
 
-  // Refresh data when screen comes into focus
+  const resetHeroToCalories = useCallback(() => {
+    heroPagerRef.current?.scrollTo({
+      x: heroPageWidth * HERO_PAGE.CALORIES,
+      animated: false,
+    });
+    activeHeroPageRef.current = HERO_PAGE.CALORIES;
+    setActiveHeroPage(HERO_PAGE.CALORIES);
+  }, [heroPageWidth]);
+
+  // Defer refresh + hero reset until tab transition finishes.
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      const task = InteractionManager.runAfterInteractions(() => {
+        if (!active) return;
 
-      if (isAuthenticated) {
+        if (activeHeroPageRef.current !== HERO_PAGE.CALORIES) {
+          resetHeroToCalories();
+        }
+
+        if (!isAuthenticated) return;
+
         hasStepPermissionConsent()
           .then((granted) => {
             if (active) {
@@ -411,12 +478,21 @@ export default function App() {
         refetchPartnerSummary();
         fetchPartner();
         fetchPendingInvites();
-      }
+      });
 
       return () => {
         active = false;
+        task.cancel?.();
       };
-    }, [authFetch, isAuthenticated, recalculate, refetchPoints, refetchPartnerSummary, fetchPartner, fetchPendingInvites])
+    }, [
+      isAuthenticated,
+      recalculate,
+      refetchPoints,
+      refetchPartnerSummary,
+      fetchPartner,
+      fetchPendingInvites,
+      resetHeroToCalories,
+    ])
   );
 
   const myData = useMemo(() => getDashboardData(summary), [summary]);
@@ -537,13 +613,39 @@ export default function App() {
   const scrollToHeroPage = useCallback((pageIndex: number) => {
     mainScrollRef.current?.scrollTo({ y: 0, animated: true });
     heroPagerRef.current?.scrollTo({ x: heroPageWidth * pageIndex, animated: true });
+    activeHeroPageRef.current = pageIndex;
     setActiveHeroPage(pageIndex);
   }, [heroPageWidth]);
 
   const scrollToChat = useCallback(() => {
-    // Scroll the main vertical container to top to reveal the hero section
-    scrollToHeroPage(1);
+    scrollToHeroPage(HERO_PAGE.CHAT);
   }, [scrollToHeroPage]);
+
+  const interventionCelebration = useInterventionCelebration({
+    messages: chatMessages,
+    currentUserId,
+  });
+
+  useEffect(() => {
+    if (!interventionCelebration?.key) return;
+    if (lastRoutedCelebrationRef.current === interventionCelebration.key) return;
+    lastRoutedCelebrationRef.current = interventionCelebration.key;
+
+    if (interventionCelebration.copy.fromPartner) {
+      setFullscreenCelebration(interventionCelebration);
+      setCardCelebration(interventionCelebration);
+      requestAnimationFrame(() => {
+        scrollToHeroPage(HERO_PAGE.NOTIFICATION);
+      });
+      return;
+    }
+
+    setCardCelebration(null);
+  }, [interventionCelebration, scrollToHeroPage]);
+
+  const handleFullscreenFinish = useCallback(() => {
+    setFullscreenCelebration(null);
+  }, []);
 
   const refreshPartnerState = useCallback(() => {
     recalculate();
@@ -567,38 +669,33 @@ export default function App() {
 
   const handleMotivatePartnerCalories = useCallback(() => {
     if (!hasPartner || !partner) return;
-    Alert.alert(
-      'Motivate Partner',
-      `Send ${partner.displayName || 'your partner'} a calorie nudge?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Gentle',
-          onPress: () => {
-            sendMessage("You’ve got this. Small reset and finish strong on calories today ❤️");
-            setNudgeSent(true);
-            setTimeout(() => setNudgeSent(false), 2500);
-          }
-        },
-        {
-          text: 'Coach',
-          onPress: () => {
-            sendMessage("Quick calorie nudge: keep the next meal lighter and you can still recover today 💪");
-            setNudgeSent(true);
-            setTimeout(() => setNudgeSent(false), 2500);
-          }
-        },
-        {
-          text: 'Funny',
-          onPress: () => {
-            sendMessage("Calories are getting spicy 😅 One smart choice and you're back in the game.");
-            setNudgeSent(true);
-            setTimeout(() => setNudgeSent(false), 2500);
-          }
-        },
-      ]
-    );
-  }, [hasPartner, partner, sendMessage]);
+    setShowInterveneSheet(true);
+  }, [hasPartner, partner]);
+
+  const handleInterveneMessage = useCallback((text: string, _label: string) => {
+    sendMessage(`[KCAL] ${text}`);
+    setNudgeSent(true);
+    setTimeout(() => setNudgeSent(false), 2500);
+  }, [sendMessage]);
+
+  const handleInterveneAnimation = useCallback(async (option: { mode: string; text: string }) => {
+    if (points < INTERVENE_ANIMATION_COST) {
+      Alert.alert('Not enough points', formatPointsAlert(INTERVENE_ANIMATION_COST));
+      return false;
+    }
+
+    const spent = await spendPoints(INTERVENE_ANIMATION_COST, 'calorie_intervention_animation');
+    if (!spent) {
+      Alert.alert('Not enough points', formatPointsAlert(INTERVENE_ANIMATION_COST));
+      return false;
+    }
+
+    sendMessage(`[KCAL:${option.mode}] ${option.text}`);
+    setNudgeSent(true);
+    refetchPoints();
+    setTimeout(() => setNudgeSent(false), 2500);
+    return true;
+  }, [points, spendPoints, sendMessage, refetchPoints]);
 
   const submitChatReport = useCallback(async () => {
     try {
@@ -653,7 +750,7 @@ export default function App() {
       }
 
       refreshPartnerState();
-      scrollToHeroPage(0);
+      scrollToHeroPage(HERO_PAGE.CALORIES);
       Alert.alert('Partner blocked', 'Chat has been closed and the partner connection has been removed.');
     } catch (err: any) {
       Alert.alert('Error', err.message);
@@ -675,24 +772,24 @@ export default function App() {
 
   // --- ANIMATED STYLES (Moved to top level to fix hook rules) ---
   const headerAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(activeHeroPage === 0 ? 1 : 0),
-    transform: [{ translateY: withTiming(activeHeroPage === 0 ? 0 : -20) }]
+    opacity: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0),
+    transform: [{ translateY: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 0 : -20) }]
   }));
 
   const heroHeaderAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(activeHeroPage === 0 ? 1 : 0),
-    height: withTiming(activeHeroPage === 0 ? 50 : 0),
-    marginBottom: withTiming(activeHeroPage === 0 ? 8 : 0),
+    opacity: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0),
+    height: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 50 : 0),
+    marginBottom: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 8 : 0),
   }));
 
   const mascotAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(activeHeroPage === 0 ? 1 : 0),
-    transform: [{ scale: withTiming(activeHeroPage === 0 ? 1 : 0.8) }]
+    opacity: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0),
+    transform: [{ scale: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0.8) }]
   }));
 
   const pagerAnimatedStyle = useAnimatedStyle(() => ({
-    height: withTiming(activeHeroPage === 0 ? 235 : 430),
-    marginTop: withTiming(activeHeroPage === 0 ? 0 : -50)
+    height: withTiming(activeHeroPage === HERO_PAGE.CHAT ? 430 : 235),
+    marginTop: withTiming(activeHeroPage === HERO_PAGE.CHAT ? -50 : 0)
   }));
 
 
@@ -720,21 +817,10 @@ export default function App() {
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => closeMenuAndNavigate('/Partner')}
-              >
-                <View style={[styles.menuIconBox, { backgroundColor: '#FFF1F2' }]}>
-                  <Users size={18} color={COLORS.primary} />
-                </View>
-                <Text style={styles.menuItemText}>Partner</Text>
-                <ChevronRight size={14} color={COLORS.textMuted} />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.menuItem}
                 onPress={() => closeMenuAndNavigate('/activity')}
               >
-                <View style={[styles.menuIconBox, { backgroundColor: '#FFF1F2' }]}>
-                  <Activity size={18} color={COLORS.primary} />
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.activity} style={styles.menuIconImage} resizeMode="contain" />
                 </View>
                 <Text style={styles.menuItemText}>Activity</Text>
                 <ChevronRight size={14} color={COLORS.textMuted} />
@@ -742,21 +828,10 @@ export default function App() {
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => closeMenuAndNavigate('/explore')}
-              >
-                <View style={[styles.menuIconBox, { backgroundColor: '#FFF1F2' }]}>
-                  <Target size={18} color={COLORS.primary} />
-                </View>
-                <Text style={styles.menuItemText}>Goals</Text>
-                <ChevronRight size={14} color={COLORS.textMuted} />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.menuItem}
                 onPress={() => closeMenuAndNavigate('/quest')}
               >
-                <View style={[styles.menuIconBox, { backgroundColor: '#FFF1F2' }]}>
-                  <Zap size={18} color={COLORS.primary} />
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.quest} style={styles.menuIconImage} resizeMode="contain" />
                 </View>
                 <Text style={styles.menuItemText}>Quest</Text>
                 <ChevronRight size={14} color={COLORS.textMuted} />
@@ -764,10 +839,71 @@ export default function App() {
 
               <TouchableOpacity
                 style={styles.menuItem}
+                onPress={() => closeMenuAndNavigate('/Plans?action=exercises')}
+              >
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.exercises} style={styles.menuIconImage} resizeMode="contain" />
+                </View>
+                <Text style={styles.menuItemText}>Exercises</Text>
+                <ChevronRight size={14} color={COLORS.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => closeMenuAndNavigate('/activity?action=water')}
+              >
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.water} style={styles.menuIconImage} resizeMode="contain" />
+                </View>
+                <Text style={styles.menuItemText}>Water Tracking</Text>
+                <ChevronRight size={14} color={COLORS.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => closeMenuAndNavigate('/(tabs)/marketplace')}
+              >
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.quest} style={styles.menuIconImage} resizeMode="contain" />
+                </View>
+                <Text style={styles.menuItemText}>Marketplace</Text>
+                <ChevronRight size={14} color={COLORS.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => closeMenuAndNavigate('/explore')}
+              >
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.goals} style={styles.menuIconImage} resizeMode="contain" />
+                </View>
+                <Text style={styles.menuItemText}>Goals</Text>
+                <ChevronRight size={14} color={COLORS.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => closeMenuAndNavigate({
+                  pathname: '/remaining-steps',
+                  params: {
+                    current: stepRouteMetrics?.current ?? Math.max(liveSteps || 0, myData.steps || 0),
+                    target: stepRouteMetrics?.target ?? myData.stepsTarget ?? 10000,
+                  },
+                })}
+              >
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.quest} style={styles.menuIconImage} resizeMode="contain" />
+                </View>
+                <Text style={styles.menuItemText}>Steps</Text>
+                <ChevronRight size={14} color={COLORS.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
                 onPress={() => closeMenuAndNavigate('/Login')}
               >
-                <View style={[styles.menuIconBox, { backgroundColor: '#FFF1F2' }]}>
-                  <LogIn size={18} color={COLORS.primary} />
+                <View style={styles.menuIconBox}>
+                  <Image source={MENU_ICONS.settings} style={styles.menuIconImage} resizeMode="contain" />
                 </View>
                 <Text style={styles.menuItemText}>Settings</Text>
                 <ChevronRight size={14} color={COLORS.textMuted} />
@@ -898,33 +1034,39 @@ export default function App() {
                 horizontal
                 pagingEnabled
                 showsHorizontalScrollIndicator={false}
+                contentOffset={{ x: heroPageWidth * HERO_PAGE.CALORIES, y: 0 }}
                 onScroll={(e) => {
                   heroScrollX.value = e.nativeEvent.contentOffset.x;
                 }}
                 onMomentumScrollEnd={(e) => {
                   const x = e.nativeEvent.contentOffset.x;
-                  setActiveHeroPage(Math.round(x / heroPageWidth));
+                  const page = Math.round(x / heroPageWidth);
+                  activeHeroPageRef.current = page;
+                  setActiveHeroPage(page);
                 }}
                 scrollEventThrottle={16}
                 style={[styles.heroPager, pagerAnimatedStyle]}
               >
 
+                {/* PAGE 0: PARTNER NOTIFICATIONS */}
+                <View style={[styles.waterHeroPage, { width: heroPageWidth, height: 235 }]}>
+                  <PremiumNotification
+                    celebrationRequest={cardCelebration}
+                    onDismiss={() => {
+                      setCardCelebration(null);
+                      scrollToHeroPage(HERO_PAGE.CALORIES);
+                    }}
+                  />
+                </View>
 
-                {/* PAGE 1: VS GRID */}
+                {/* PAGE 1: TODAY'S DETAIL (default) */}
                 <View style={[styles.grid, { width: heroPageWidth, height: 235 }]}>
 
                   <Animated.View style={{ flex: 1 }} entering={FadeInDown.delay(200)}>
                         <UserCard 
                           isMain={true}
                           onLog={() => router.push({ pathname: '/activity', params: { action: 'logFood', t: Date.now() } })}
-                          onPress={() => router.push({
-                            pathname: '/kcal-detail',
-                            params: {
-                              myData: JSON.stringify(myData),
-                              partnerData: JSON.stringify(partnerSummary),
-                              partnerName: partner?.displayName || 'Partner'
-                            }
-                          })}
+                          onPress={() => router.push({ pathname: '/activity', params: { tab: 'NUTRITION' } })}
                           title="YOU" 
                           data={myData} 
                           accent={COLORS.primary} 
@@ -953,7 +1095,7 @@ export default function App() {
                           accent="#1F938A" 
                           showMotivate={partnerIsNegative}
                           onMotivate={handleMotivatePartnerCalories}
-                          motivateLabel={nudgeSent ? 'Sent' : 'Motivate'}
+                          motivateLabel={nudgeSent ? 'Sent' : 'Intervene!'}
                         />
                       ) : (
                         <PartnerPlaceholderCard 
@@ -980,6 +1122,7 @@ export default function App() {
                     onReport={hasPartner ? handleReportPartnerChat : undefined}
                     onBlock={hasPartner ? handleBlockPartner : undefined}
                     moderationBusy={chatModerationBusy}
+                    hasPartner={hasPartner}
                     showStatusText={false}
                     compactModeration
                     onExpand={() =>
@@ -1002,10 +1145,14 @@ export default function App() {
                 alignSelf: 'center',
                 borderWidth: 1,
                 borderColor: 'rgba(255, 255, 255, 0.2)',
-                marginTop: activeHeroPage === 0 ? 5 : -20, // Move dots up when full screen
+                marginTop: activeHeroPage === HERO_PAGE.CALORIES ? 5 : -20, // Move dots up when full screen
               }]}>
 
-                {[0, 1].map((i) => (
+                {[
+                  HERO_PAGE.NOTIFICATION,
+                  HERO_PAGE.CALORIES,
+                  HERO_PAGE.CHAT,
+                ].map((i) => (
                   <TouchableOpacity
                     key={i}
                     onPress={() => scrollToHeroPage(i)}
@@ -1030,7 +1177,10 @@ export default function App() {
           {/* Invitation prompt moved to PartnerPlaceholderCard */}
           {/* @ts-ignore */}
           <StepSyncSection
-            onNudge={() => { setNudgeSent(true); scrollToChat(); }}
+            onNudge={() => {
+              setNudgeSent(true);
+              setTimeout(() => setNudgeSent(false), 2500);
+            }}
             permissionEnabled={stepPermissionEnabled}
             onPermissionChange={setStepPermissionEnabled}
             onPermissionGranted={handleStepPermissionGranted}
@@ -1038,6 +1188,7 @@ export default function App() {
             partnerFallbackLiveSteps={partnerLiveSteps}
             fallbackPartnerName={livePartnerName}
             isConnected={isPartnerLiveConnected}
+            onStepMetricsChange={setStepRouteMetrics}
           />
           <View style={styles.divider} />
           <WeeklyProgress />
@@ -1047,6 +1198,21 @@ export default function App() {
         </View>
 
       </Animated.ScrollView>
+
+      <PremiumFullscreen
+        visible={!!fullscreenCelebration}
+        request={fullscreenCelebration}
+        onFinish={handleFullscreenFinish}
+      />
+
+      <InterveneBottomSheet
+        visible={showInterveneSheet}
+        onClose={() => setShowInterveneSheet(false)}
+        bottomInset={insets.bottom}
+        pointsBalance={points}
+        onSendMessage={handleInterveneMessage}
+        onSendAnimation={handleInterveneAnimation}
+      />
 
     </View>
   );
@@ -1268,11 +1434,16 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   menuIconBox: {
-    width: 32,
-    height: 32,
+    width: 40,
+    height: 40,
     borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  menuIconImage: {
+    width: 40,
+    height: 40,
   },
   menuItemText: {
     flex: 1,
@@ -1299,7 +1470,7 @@ const styles = StyleSheet.create({
 
   grid: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   cardOuter: { backgroundColor: '#FFF', padding: 4, borderRadius: 24, elevation: 8, shadowOpacity: 0.1, shadowRadius: 15, position: 'relative' },
-  cardInner: { padding: 12, borderRadius: 20, alignItems: 'center', height: 195 },
+  cardInner: { padding: 12, borderRadius: 20, alignItems: 'center', height: 195, overflow: 'visible' },
   microTag: { fontSize: 9, fontWeight: '900', letterSpacing: 1.2, marginBottom: 8 },
   mainStatRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   bigNum: { fontSize: 32, fontWeight: '900', color: COLORS.textMain },
@@ -1333,27 +1504,31 @@ const styles = StyleSheet.create({
   },
   motivateButton: {
     position: 'absolute',
-    bottom: -8,
-    right: -4,
+    bottom: -10,
+    right: -5,
+    zIndex: 20,
+    elevation: 8,
+    shadowColor: '#DC2626',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+  },
+  motivateButtonPress: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     backgroundColor: '#FFF',
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    paddingVertical: 7,
-    paddingHorizontal: 10,
+    borderWidth: 1.5,
+    borderColor: '#FCA5A5',
+    paddingVertical: 8,
+    paddingHorizontal: 11,
     borderRadius: 14,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
   },
   motivateButtonText: {
-    color: COLORS.primary,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.4,
+    color: '#DC2626',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
   placeholderCardInner: {
     borderWidth: 1,
@@ -1454,6 +1629,7 @@ const styles = StyleSheet.create({
     zIndex: 5,
   },
   weightHeroPage: {},
+  waterHeroPage: {},
 
 
   // --- UPDATED PAGINATION STYLES ---

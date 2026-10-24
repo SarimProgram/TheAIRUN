@@ -43,7 +43,9 @@ function getPairKey(userId: string, partnerId: string): string {
     return [userId, partnerId].sort((a, b) => a.localeCompare(b)).join(':');
 }
 
-function formatMarketplaceItem(item: any, pairKey: string | null) {
+function formatMarketplaceItem(item: any, pairKey: string | null, userId: string) {
+    const belongsToPair = Boolean(pairKey && item.pairKey && item.pairKey === pairKey);
+    const belongsToUser = item.pairKey === null && item.createdByUserId === userId;
     return {
         id: item.id,
         title: item.title,
@@ -54,7 +56,8 @@ function formatMarketplaceItem(item: any, pairKey: string | null) {
         color: [item.colorFrom, item.colorTo],
         isCustom: item.isCustom,
         createdByUserId: item.createdByUserId ?? null,
-        canManage: Boolean(pairKey && item.pairKey && item.pairKey === pairKey && item.isCustom),
+        canManage: (belongsToPair || belongsToUser) && item.isCustom,
+        canDelete: belongsToPair || belongsToUser,
     };
 }
 
@@ -102,7 +105,6 @@ router.get('/items', authMiddleware, async (req: AuthRequest, res: Response) => 
         if (pairKey) {
             const pairOnboardingItems = await prisma.marketplaceItem.findMany({
                 where: {
-                    isActive: true,
                     source: 'ONBOARDING',
                     pairKey,
                 },
@@ -110,13 +112,16 @@ router.get('/items', authMiddleware, async (req: AuthRequest, res: Response) => 
             });
 
             if (pairOnboardingItems.length > 0) {
-                return res.json(pairOnboardingItems.map((item) => formatMarketplaceItem(item, pairKey)));
+                return res.json(
+                    pairOnboardingItems
+                        .filter((item) => item.isActive)
+                        .map((item) => formatMarketplaceItem(item, pairKey, userId))
+                );
             }
         }
 
         const userScopedOnboardingItems = await prisma.marketplaceItem.findMany({
             where: {
-                isActive: true,
                 source: 'ONBOARDING',
                 pairKey: null,
                 createdByUserId: userId,
@@ -125,21 +130,102 @@ router.get('/items', authMiddleware, async (req: AuthRequest, res: Response) => 
         });
 
         if (userScopedOnboardingItems.length > 0) {
-            return res.json(userScopedOnboardingItems.map((item) => formatMarketplaceItem(item, pairKey)));
+            return res.json(
+                userScopedOnboardingItems
+                    .filter((item) => item.isActive)
+                    .map((item) => formatMarketplaceItem(item, pairKey, userId))
+            );
+        }
+
+        if (pairKey) {
+            const pairDefaultCount = await prisma.marketplaceItem.count({
+                where: { source: 'DEFAULT', pairKey },
+            });
+
+            if (pairDefaultCount === 0) {
+                const globalDefaults = await prisma.marketplaceItem.findMany({
+                    where: { source: 'DEFAULT', pairKey: null, isActive: true },
+                    orderBy: { sortOrder: 'asc' },
+                });
+
+                if (globalDefaults.length > 0) {
+                    await prisma.marketplaceItem.createMany({
+                        data: globalDefaults.map((item) => ({
+                            title: item.title,
+                            description: item.description,
+                            cost: item.cost,
+                            category: item.category,
+                            emoji: item.emoji,
+                            colorFrom: item.colorFrom,
+                            colorTo: item.colorTo,
+                            pairKey,
+                            isCustom: false,
+                            source: 'DEFAULT',
+                            sortOrder: item.sortOrder,
+                            isActive: true,
+                        })),
+                    });
+                }
+            }
+
+            const pairItems = await prisma.marketplaceItem.findMany({
+                where: { pairKey, isActive: true },
+                orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+            });
+
+            return res.json(pairItems.map((item) => formatMarketplaceItem(item, pairKey, userId)));
+        }
+
+        const userDefaultCount = await prisma.marketplaceItem.count({
+            where: {
+                source: 'DEFAULT',
+                pairKey: null,
+                createdByUserId: userId,
+            },
+        });
+
+        if (userDefaultCount === 0) {
+            const globalDefaults = await prisma.marketplaceItem.findMany({
+                where: {
+                    source: 'DEFAULT',
+                    pairKey: null,
+                    createdByUserId: null,
+                    isActive: true,
+                },
+                orderBy: { sortOrder: 'asc' },
+            });
+
+            if (globalDefaults.length > 0) {
+                await prisma.marketplaceItem.createMany({
+                    data: globalDefaults.map((item) => ({
+                        title: item.title,
+                        description: item.description,
+                        cost: item.cost,
+                        category: item.category,
+                        emoji: item.emoji,
+                        colorFrom: item.colorFrom,
+                        colorTo: item.colorTo,
+                        pairKey: null,
+                        createdByUserId: userId,
+                        isCustom: false,
+                        source: 'DEFAULT',
+                        sortOrder: item.sortOrder,
+                        isActive: true,
+                    })),
+                });
+            }
         }
 
         const items = await prisma.marketplaceItem.findMany({
             where: {
+                pairKey: null,
+                createdByUserId: userId,
                 isActive: true,
-                OR: [
-                    { source: 'DEFAULT', pairKey: null },
-                    ...(pairKey ? [{ pairKey }] : []),
-                ],
             },
             orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
         });
 
-        return res.json(items.map((item) => formatMarketplaceItem(item, pairKey)));
+        return res.json(items.map((item) => formatMarketplaceItem(item, pairKey, userId)));
     } catch (error) {
         console.error('Error fetching marketplace items:', error);
         res.status(500).json({ error: 'Failed to fetch items' });
@@ -173,7 +259,7 @@ router.post('/items', authMiddleware, async (req: AuthRequest, res: Response) =>
             },
         });
 
-        res.status(201).json(formatMarketplaceItem(created, pairKey));
+        res.status(201).json(formatMarketplaceItem(created, pairKey, userId));
     } catch (error) {
         if (error instanceof z.ZodError) {
             return res.status(400).json({ error: error.issues[0]?.message || 'Invalid payload' });
@@ -195,7 +281,7 @@ router.patch('/items/:id', authMiddleware, async (req: AuthRequest, res: Respons
         const payload = updateItemSchema.parse(req.body);
         const item = await prisma.marketplaceItem.findUnique({ where: { id: itemId } });
 
-        if (!item || !item.isCustom || item.pairKey !== pairKey) {
+        if (!item || item.pairKey !== pairKey) {
             return res.status(404).json({ error: 'Item not found' });
         }
 
@@ -204,7 +290,7 @@ router.patch('/items/:id', authMiddleware, async (req: AuthRequest, res: Respons
             data: payload,
         });
 
-        res.json(formatMarketplaceItem(updated, pairKey));
+        res.json(formatMarketplaceItem(updated, pairKey, userId));
     } catch (error) {
         if (error instanceof z.ZodError) {
             return res.status(400).json({ error: error.issues[0]?.message || 'Invalid payload' });
@@ -218,13 +304,12 @@ router.delete('/items/:id', authMiddleware, async (req: AuthRequest, res: Respon
     try {
         const userId = req.user!.id;
         const pairKey = await getUserPairKey(userId);
-        if (!pairKey) {
-            return res.status(400).json({ error: 'You must have a partner to manage shared rewards' });
-        }
 
         const itemId = requireStringParam(req.params.id, 'id');
         const item = await prisma.marketplaceItem.findUnique({ where: { id: itemId } });
-        if (!item || !item.isCustom || item.pairKey !== pairKey) {
+        const belongsToPair = Boolean(pairKey && item?.pairKey === pairKey);
+        const belongsToUser = item?.pairKey === null && item?.createdByUserId === userId;
+        if (!item || (!belongsToPair && !belongsToUser)) {
             return res.status(404).json({ error: 'Item not found' });
         }
 

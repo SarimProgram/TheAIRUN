@@ -35,6 +35,7 @@ const REWARD_MAP: Record<string, RewardSeed> = {
   date: { title: 'Special Date', category: 'Romantic', emoji: '\u{1F4C5}', colorFrom: '#FDA4AF', colorTo: '#FB7185' },
   heart: { title: 'Quality Time', category: 'Romantic', emoji: '\u2764\uFE0F', colorFrom: '#FECACA', colorTo: '#EF4444' },
   trophy: { title: 'Bigger Prize', category: 'Fun', emoji: '\u{1F3C6}', colorFrom: '#BFDBFE', colorTo: '#3B82F6' },
+  custom: { title: 'Custom Reward', category: 'Fun', emoji: '\u2728', colorFrom: '#E0E7FF', colorTo: '#6366F1' },
 };
 
 function getPairKey(userAId: string, userBId: string): string {

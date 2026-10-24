@@ -19,14 +19,48 @@ import {
   loadCachedNotificationPreferences,
   normalizeNotificationPreferences,
 } from '@/utils/notificationPreferences';
+import {
+  formatChatNotificationBody,
+  isInterventionMarkup,
+} from '@/components/chat/partnerNoteShared';
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    const data = notification.request.content.data as Record<string, unknown> | undefined;
+    const rawBody = notification.request.content.body ?? '';
+    const title = notification.request.content.title ?? 'Notification';
+    const isChatMessage =
+      data?.type === 'chat_message' || data?.openChat === '1';
+
+    if (isChatMessage && isInterventionMarkup(rawBody)) {
+      const formattedBody = formatChatNotificationBody(rawBody);
+      if (formattedBody !== rawBody) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title,
+            body: formattedBody,
+            data: data ?? {},
+            sound: true,
+          },
+          trigger: null,
+        });
+
+        return {
+          shouldPlaySound: false,
+          shouldSetBadge: false,
+          shouldShowBanner: false,
+          shouldShowList: false,
+        };
+      }
+    }
+
+    return {
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    };
+  },
 });
 
 export default function PushNotificationRegistrar() {
@@ -259,6 +293,7 @@ export default function PushNotificationRegistrar() {
       if (data?.type === 'billing_reminder') {
         router.push('/(tabs)/Login');
       }
+
     });
 
     return () => {

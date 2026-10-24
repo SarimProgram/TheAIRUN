@@ -1,12 +1,12 @@
 // app/lib/cues/easy.ts
 
 export const EASY_RUN_CUES = [
-    "Focus on your breath. In through the nose, out through the mouth.",
-    "This is an aerobic base builder. Keep it nice and steady.",
-    "If you can't talk comfortably, you're going too fast!",
-    "Relax your shoulders. Let your arms swing naturally.",
-    "You're doing great. Keep that heart rate in the fat-burn zone.",
-    "Light on your feet. Imagine you're running on eggshells.",
-    "Consistency is key. You're building the foundation today.",
-    "Great job staying in the zone. Keep this pace.",
+    "Breathe in a way that feels natural. You should still be able to talk.",
+    "Keep this run easy. You do not need to go fast today.",
+    "Try saying a full sentence. If that feels hard, slow down or walk.",
+    "Drop your shoulders and keep your hands relaxed.",
+    "Take short, comfortable steps. Do not force a longer stride.",
+    "If you feel pain, stop. If you are only tired, slow down or walk.",
+    "Today's goal is simple: move at an easy, comfortable effort.",
+    "Choose a pace you feel you could maintain for a while.",
 ];

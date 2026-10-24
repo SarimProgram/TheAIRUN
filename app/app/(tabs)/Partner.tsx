@@ -1,5 +1,5 @@
 // app/app/(tabs)/Partner.tsx
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
     View,
     Text,
@@ -10,26 +10,24 @@ import {
     ScrollView,
     ActivityIndicator,
     Alert,
-    Share,
     Animated,
     Dimensions,
+    InteractionManager,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { 
-    Users, 
     Unlink, 
     Mail, 
     MessageCircleMore, 
-    Share2, 
     ArrowRight, 
     ArrowLeft,
     CheckCircle2,
     Bell,
     AlertTriangle,
     Droplets,
-    Heart,
     Trash2,
-    ChevronRight
+    ChevronRight,
+    Store,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/auth/authContext';
 import { useRouter } from 'expo-router';
@@ -37,11 +35,19 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_BASE_URL } from '../../config/api';
 import { useChat } from '@/contexts/ChatContext';
-import { ConnectedPartners } from '@/components/partner/ConnectedPartners';
+import { PartnerConnectedHub } from '@/components/partner/PartnerConnectedHub';
+import { PartnerConnectArtwork } from '@/components/partner/PartnerConnectArtwork';
+import { PartnerInviteShareOptions } from '@/components/partner/PartnerInviteShareOptions';
+import { buildPartnerInviteShareMessage } from '@/utils/partnerInviteShare';
+import { APP_NAME } from '@/constants/branding';
+import { usePartnerMemories } from '@/hooks/usePartnerMemories';
+import { usePoints } from '@/hooks/usePoints';
 import { getMappedDays, type DaySchedule } from '@/utils/planProjection';
-import type { PartnerDaySummary, ScheduledPartnerRun } from '@/utils/partnerTimeline';
+import type { PartnerDaySummary, ScheduledPartnerRun, TimelineWeightHistoryEntry, PartnerMarketplaceHistoryEntry } from '@/utils/partnerTimeline';
+import { journeyStartWeightToKg } from '@/utils/partnerTimeline';
 
 const { width } = Dimensions.get('window');
+const PARTNER_CONNECT_ART_WIDTH = Math.min(width * 0.9, 420);
 
 type Invite = {
     id: string;
@@ -58,13 +64,29 @@ type Partner = {
     id: string;
     displayName: string;
     email: string;
+    gender?: string | null;
     currentWeight?: number | null;
     weightUnit?: string | null;
     weightLost?: number | null;
+    startWeight?: number | null;
     primaryGoal?: string | null;
     points?: number | null;
     pointsBalance?: number | null;
 };
+
+function mergeWeightHistory(
+    ...sources: TimelineWeightHistoryEntry[][]
+): TimelineWeightHistoryEntry[] {
+    const byId = new Map<string, TimelineWeightHistoryEntry>();
+    for (const source of sources) {
+        for (const entry of source) {
+            byId.set(entry.id, entry);
+        }
+    }
+    return [...byId.values()].sort(
+        (a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime(),
+    );
+}
 
 type PartnerPointsHistoryEntry = {
     dayKey: string;
@@ -88,6 +110,8 @@ type CurrentUser = {
     id: string;
     displayName: string;
     email: string;
+    gender?: string | null;
+    units?: string | null;
 };
 
 type PartnerSummary = {
@@ -222,17 +246,26 @@ function formatPartnerGoal(primaryGoal?: string | null) {
 }
 
 export default function PartnerScreen() {
-    const { authFetch, isAuthenticated } = useAuth();
+    const { authFetch, isAuthenticated, accessToken } = useAuth();
+    const { balance: userPoints, refetch: refetchUserPoints } = usePoints({ accessToken });
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { connected: isPartnerConnected, sendMessage: sendChatMessage, messages: chatMessages, currentUserId } = useChat();
+    const { connected: isPartnerConnected, sendMessage: sendChatMessage } = useChat();
 
     const [email, setEmail] = useState('');
     const [loading, setLoading] = useState(false);
 
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
     const [partner, setPartner] = useState<Partner | null>(null);
+
     const [hasPartner, setHasPartner] = useState(false);
+
+    const {
+        memories: partnerMemories,
+        uploading: memoryUploading,
+        syncMemories,
+        uploadMemory,
+    } = usePartnerMemories(authFetch, accessToken, hasPartner);
 
     const [pendingReceived, setPendingReceived] = useState<Invite[]>([]);
     const [sentInvites, setSentInvites] = useState<Invite[]>([]);
@@ -252,6 +285,9 @@ export default function PartnerScreen() {
     const [isPointsHistoryOpen, setIsPointsHistoryOpen] = useState(false);
     const [partnerPointsHistory, setPartnerPointsHistory] = useState<PartnerPointsHistoryEntry[]>([]);
     const [myPointsHistory, setMyPointsHistory] = useState<PartnerPointsHistoryEntry[]>([]);
+    const [myWeightHistory, setMyWeightHistory] = useState<TimelineWeightHistoryEntry[]>([]);
+    const [partnerWeightHistory, setPartnerWeightHistory] = useState<TimelineWeightHistoryEntry[]>([]);
+    const [partnerMarketplaceHistory, setPartnerMarketplaceHistory] = useState<PartnerMarketplaceHistoryEntry[]>([]);
     const [partnerPointsHistoryLoading, setPartnerPointsHistoryLoading] = useState(false);
     const [partnerPointsHistoryError, setPartnerPointsHistoryError] = useState<string | null>(null);
     const [showAllPartnerPointsHistory, setShowAllPartnerPointsHistory] = useState(false);
@@ -393,6 +429,8 @@ export default function PartnerScreen() {
                     id: profileData.user.id,
                     displayName: profileData.user.displayName,
                     email: profileData.user.email,
+                    gender: profileData.user.gender,
+                    units: profileData.user.units,
                 });
             }
 
@@ -400,6 +438,10 @@ export default function PartnerScreen() {
             const partnerData = await partnerRes.json();
             setHasPartner(partnerData.hasPartner);
             setPartner(partnerData.partner);
+
+            if (Array.isArray(partnerData.partnerWeightHistory)) {
+                setPartnerWeightHistory(partnerData.partnerWeightHistory);
+            }
 
             const pendingRes = await authFetch(`${API_BASE_URL}/partner/invites/pending`);
             const pendingData = await pendingRes.json();
@@ -411,136 +453,7 @@ export default function PartnerScreen() {
             setSentInvites(sent);
 
             if (partnerData.hasPartner && partnerData.partner) {
-                setDashboardLoading(true);
-                try {
-                    const [
-                        mySummaryRes,
-                        partnerSummaryRes,
-                        partnerWeekRes,
-                        wagerOverviewRes,
-                        activeWagerRes,
-                        pointsHistoryRes,
-                        scheduledRunsRes,
-                        partnerPlanRes,
-                    ] = await Promise.all([
-                        authFetch(`${API_BASE_URL}/summary/today`),
-                        authFetch(`${API_BASE_URL}/summary/partner`),
-                        authFetch(`${API_BASE_URL}/summary/partner/week`),
-                        authFetch(`${API_BASE_URL}/wager/overview`),
-                        authFetch(`${API_BASE_URL}/wager/active`),
-                        authFetch(`${API_BASE_URL}/partner/points-history`),
-                        authFetch(`${API_BASE_URL}/runtogether/active`),
-                        authFetch(`${API_BASE_URL}/plan/partner/weekly`),
-                    ]);
-
-                    const [
-                        mySummaryData,
-                        partnerSummaryData,
-                        partnerWeekData,
-                        wagerOverviewData,
-                        activeWagerData,
-                        pointsHistoryData,
-                        scheduledRunsData,
-                        partnerPlanData,
-                    ] = await Promise.all([
-                        mySummaryRes.json(),
-                        partnerSummaryRes.json(),
-                        partnerWeekRes.json(),
-                        wagerOverviewRes.json(),
-                        activeWagerRes.json(),
-                        pointsHistoryRes.json().catch(() => ({ entries: [] })),
-                        scheduledRunsRes.json().catch(() => ({ sent: [], received: [] })),
-                        partnerPlanRes.json().catch(() => null),
-                    ]);
-
-                    const resolvedCurrentWager = wagerOverviewData?.currentWager ?? activeWagerData?.wager ?? null;
-
-                    setMyTodaySummary(mySummaryData ?? null);
-                    setPartnerTodaySummary(partnerSummaryData?.hasPartner ? partnerSummaryData.partner : null);
-                    setPartnerWeekProgress(partnerWeekData?.hasPartner ? partnerWeekData.partner : null);
-                    setPartnerWeekDays(Array.isArray(partnerWeekData?.days) ? partnerWeekData.days : []);
-                    setPartnerWeekStart(partnerWeekData?.weekStart);
-                    setPartnerWeekEnd(partnerWeekData?.weekEnd);
-                    setPartnerPointsHistory(Array.isArray(pointsHistoryData?.entries) ? pointsHistoryData.entries : []);
-
-                    const weekDays = Array.isArray(partnerWeekData?.days) ? partnerWeekData.days : [];
-                    const timelineDayKeys = [
-                        ...new Set([
-                            ...weekDays.map((day: PartnerDaySummary) => day.dayKey),
-                            ...(Array.isArray(pointsHistoryData?.entries)
-                                ? pointsHistoryData.entries.map((entry: PartnerPointsHistoryEntry) => entry.dayKey)
-                                : []),
-                        ]),
-                    ];
-                    const myPointsResults = await Promise.all(
-                        timelineDayKeys.map((dayKey) =>
-                            authFetch(`${API_BASE_URL}/points/daily/${dayKey}`)
-                                .then((res) => res.json())
-                                .catch(() => ({ entries: [] })),
-                        ),
-                    );
-                    const resolvedMyPointsHistory: PartnerPointsHistoryEntry[] = [];
-                    timelineDayKeys.forEach((dayKey, index) => {
-                        const data = myPointsResults[index];
-                        for (const entry of data?.entries ?? []) {
-                            if (!entry?.earnedPoints) continue;
-                            resolvedMyPointsHistory.push({
-                                dayKey,
-                                awardedAt: entry.awardedAt,
-                                category: entry.category,
-                                categoryLabel:
-                                    POINTS_CATEGORY_LABELS[entry.category] ?? entry.category,
-                                earnedPoints: entry.earnedPoints,
-                                maxPoints: entry.maxPoints ?? 0,
-                                progress: entry.progress ?? 0,
-                            });
-                        }
-                    });
-                    setMyPointsHistory(resolvedMyPointsHistory);
-
-                    const weeklyPlanTable = Array.isArray(partnerPlanData?.['Weekly Plan Table'])
-                        ? partnerPlanData['Weekly Plan Table']
-                        : [];
-                    const currentPlanWeek = partnerPlanData?.plan?.currentWeek ?? weeklyPlanTable[0]?.Week ?? 1;
-                    const currentWeekPlan =
-                        weeklyPlanTable.find((week: { Week?: number }) => week.Week === currentPlanWeek) ??
-                        weeklyPlanTable[weeklyPlanTable.length - 1];
-                    const availableDays = partnerPlanData?.plan?.availableDays;
-                    setPartnerPlannedDays(
-                        currentWeekPlan ? getMappedDays(currentWeekPlan, availableDays) : []
-                    );
-
-                    const activeRuns = [
-                        ...(Array.isArray(scheduledRunsData?.sent) ? scheduledRunsData.sent : []),
-                        ...(Array.isArray(scheduledRunsData?.received) ? scheduledRunsData.received : []),
-                    ].map((run: ScheduledPartnerRun) => ({
-                        id: run.id,
-                        scheduledTime: run.scheduledTime,
-                        distanceKm: run.distanceKm,
-                        status: run.status,
-                        isSender: run.isSender,
-                        partnerName: run.partnerName,
-                    }));
-                    setScheduledPartnerRuns(activeRuns);
-
-                    setWagerOverview(
-                        wagerOverviewData
-                            ? {
-                                ...wagerOverviewData,
-                                currentWager: resolvedCurrentWager,
-                            }
-                            : {
-                                currentWager: resolvedCurrentWager,
-                                lastWager: null,
-                                currentLeader: null,
-                                lastOutcome: null,
-                            }
-                    );
-                } catch (dashboardErr) {
-                    console.log('[Partner] Dashboard fetch error:', dashboardErr);
-                } finally {
-                    setDashboardLoading(false);
-                }
+                setDashboardLoading(false);
             } else {
                 setMyTodaySummary(null);
                 setPartnerTodaySummary(null);
@@ -553,6 +466,9 @@ export default function PartnerScreen() {
                 setWagerOverview(null);
                 setPartnerPointsHistory([]);
                 setMyPointsHistory([]);
+                setPartnerWeightHistory([]);
+                setMyWeightHistory([]);
+                setPartnerMarketplaceHistory([]);
                 setDashboardLoading(false);
             }
 
@@ -563,7 +479,7 @@ export default function PartnerScreen() {
         } catch (err: any) {
             console.log('[Partner] Fetch error:', err);
         }
-    }, [authFetch, currentStep, isAuthenticated]);
+    }, [authFetch, currentStep, isAuthenticated, syncMemories]);
 
     useEffect(() => {
         fetchPartnerData();
@@ -571,8 +487,18 @@ export default function PartnerScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            fetchPartnerData();
-        }, [fetchPartnerData])
+            let active = true;
+            const task = InteractionManager.runAfterInteractions(() => {
+                if (!active) return;
+                fetchPartnerData();
+                void refetchUserPoints();
+            });
+
+            return () => {
+                active = false;
+                task.cancel?.();
+            };
+        }, [fetchPartnerData, refetchUserPoints])
     );
 
     const sendInvite = async () => {
@@ -601,15 +527,14 @@ export default function PartnerScreen() {
     const pendingSentInvite = sentInvites.find((invite) => invite.status === 'PENDING') || null;
     const inviteToDisplay = latestPendingInvite || pendingSentInvite;
     const inviteCode = inviteToDisplay?.code || '';
-    const inviterName = currentUser?.displayName || 'My coach partner';
+    const inviterName = currentUser?.displayName || `My ${APP_NAME} partner`;
     const shareMessage = inviteCode
-        ? `${inviterName} invited you to join them on The AI Coach.\n\nInvite code: ${inviteCode}\n\n1. Open the app\n2. Tap "I have a code"\n3. Enter the code and accept the invite sent to ${inviteToDisplay?.toEmail || 'your email'}`
+        ? buildPartnerInviteShareMessage({
+            inviterName,
+            inviteCode,
+            toEmail: inviteToDisplay?.toEmail,
+        })
         : '';
-
-    const shareInvite = async () => {
-        if (!shareMessage) return;
-        await Share.share({ message: shareMessage });
-    };
 
     const acceptInvite = async (inviteId: string) => {
         setLoading(true);
@@ -791,55 +716,12 @@ export default function PartnerScreen() {
         partnerSteps < Math.max(1500, Math.round((partnerTodaySummary?.stepsTarget ?? 0) * 0.15)) &&
         (partnerTodaySummary?.exerciseMinutes ?? 0) === 0 &&
         (partnerTodaySummary?.waterMl ?? 0) < 500;
-    const daysTogether = React.useMemo(() => {
-        if (!partner) return 1;
 
-        const acceptedSentInvite = sentInvites.find(
-            (invite) =>
-                invite.status === 'ACCEPTED' &&
-                (invite.toUser?.id === partner.id ||
-                    invite.toEmail.toLowerCase() === partner.email.toLowerCase()),
-        );
-
-        const connectedAt =
-            acceptedSentInvite?.updatedAt ??
-            acceptedSentInvite?.createdAt ??
-            chatMessages[0]?.createdAt;
-
-        if (!connectedAt) return 1;
-
-        const start = new Date(connectedAt);
-        start.setHours(0, 0, 0, 0);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const diffMs = today.getTime() - start.getTime();
-        return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
-    }, [partner, sentInvites, chatMessages]);
-    const timelineChatMessages = React.useMemo(
-        () =>
-            chatMessages.map((message) => ({
-                id: message.id,
-                fromUserId: message.fromUserId,
-                fromName: message.fromName,
-                content: message.content,
-                createdAt: message.createdAt,
-            })),
-        [chatMessages],
-    );
-    const myTodaySummaryForTimeline = React.useMemo(
-        () =>
-            myTodaySummary
-                ? {
-                      steps: myTodaySummary.steps,
-                      stepsTarget:
-                          myTodaySummary.stepsTarget ??
-                          partnerWeekDays.find((day) => day.isToday)?.stepsTarget,
-                      distanceKm: myTodaySummary.distanceKm,
-                      runKmTarget: myTodaySummary.runKmTarget,
-                      exerciseMinutes: myTodaySummary.exerciseMinutes,
-                  }
-                : null,
-        [myTodaySummary, partnerWeekDays],
+    const myUsesImperial = currentUser?.units === 'imperial';
+    const partnerUsesImperial = partner?.weightUnit === 'lbs';
+    const partnerBaselineWeightKg = useMemo(
+        () => journeyStartWeightToKg(partner?.startWeight, partnerUsesImperial),
+        [partner?.startWeight, partnerUsesImperial],
     );
     const hasStepLeadChange = Math.abs(stepLead) >= 500;
     const partnerNotifications: PartnerNotification[] = partner
@@ -1245,7 +1127,7 @@ export default function PartnerScreen() {
         <View style={styles.container}>
             <StatusBar style="dark" />
             
-            {!(currentStep === 0 && hasPartner && partner) && (
+            {currentStep !== 0 && (
                 <View
                     style={[
                         styles.topNav,
@@ -1275,28 +1157,13 @@ export default function PartnerScreen() {
                 {currentStep === 0 && (
                     <View style={styles.content}>
                         {hasPartner && partner ? (
-                            <ConnectedPartners
+                            <PartnerConnectedHub
                                 userName={currentUser?.displayName ?? 'You'}
                                 partnerName={partner.displayName}
-                                daysTogether={daysTogether}
-                                weekStart={partnerWeekStart}
-                                days={partnerWeekDays}
-                                plannedDays={partnerPlannedDays}
-                                pointsHistory={partnerPointsHistory}
-                                myPointsHistory={myPointsHistory}
-                                scheduledRuns={scheduledPartnerRuns}
-                                myTodaySummary={myTodaySummaryForTimeline}
-                                wagerOverview={wagerOverview}
-                                showCaloriesWarning={showPartnerCaloriesWarning}
-                                partnerCaloriesOverTarget={partnerCaloriesOverTarget}
-                                partnerNeedsWaterNudge={partnerNeedsWaterNudge}
-                                waterNudgeSent={!!waterNudgeSentAt}
-                                loading={dashboardLoading}
-                                onBack={handleBackPress}
-                                onAddMemory={postTimelineNote}
-                                onAddReminder={sendWaterNudge}
-                                onCaloriesNudge={sendCaloriesNudge}
-                                onWaterNudge={sendWaterNudge}
+                                userGender={currentUser?.gender}
+                                partnerGender={partner.gender}
+                                userPoints={userPoints ?? 0}
+                                partnerPoints={Number(partner.pointsBalance ?? partner.points ?? 0)}
                             />
                         ) : (
                             <ScrollView 
@@ -1308,14 +1175,7 @@ export default function PartnerScreen() {
                                 showsVerticalScrollIndicator={false}
                             >
                                 <View style={styles.welcomeBox}>
-                                    <View style={styles.mockupHeader}>
-                                        <View style={styles.mockAvatarHero}>
-                                            <Users size={40} color="#FFFFFF" />
-                                        </View>
-                                        <View style={styles.mockAvatarSecondary}>
-                                            <Heart size={28} color="#FFFFFF" fill="rgba(255,255,255,0.18)" />
-                                        </View>
-                                    </View>
+                                    <PartnerConnectArtwork width={PARTNER_CONNECT_ART_WIDTH} />
                                     <View style={styles.welcomeTextShell}>
                                         <Text style={styles.titleModern}>Connect to Partner</Text>
                                         <Text style={styles.subtitleModern}>Team up with a partner to see each other&apos;s progress, compare stats, and stay on track together.</Text>
@@ -1342,6 +1202,22 @@ export default function PartnerScreen() {
                                             <ArrowRight size={24} color="#FFF" />
                                         </TouchableOpacity>
                                     )}
+
+                                    <TouchableOpacity
+                                        style={styles.marketplaceBtnModern}
+                                        onPress={() => router.push('/(tabs)/marketplace')}
+                                    >
+                                        <View style={styles.marketplaceBtnIcon}>
+                                            <Store size={21} color="#E24C5B" strokeWidth={2.3} />
+                                        </View>
+                                        <View style={styles.marketplaceBtnCopy}>
+                                            <Text style={styles.marketplaceBtnTitle}>Marketplace</Text>
+                                            <Text style={styles.marketplaceBtnSubtitle}>
+                                                Create rewards redeemable with workout points
+                                            </Text>
+                                        </View>
+                                        <ChevronRight size={19} color="#94A3B8" />
+                                    </TouchableOpacity>
                                 </View>
 
                                 {!hasPartner && (
@@ -1417,11 +1293,8 @@ export default function PartnerScreen() {
                         </Animated.View>
 
                         <View style={styles.buttonRow}>
-                            <TouchableOpacity style={styles.shareOption} onPress={shareInvite}>
-                                <Share2 size={24} color="#111827" />
-                                <Text style={styles.shareOptionText}>Share Code</Text>
-                            </TouchableOpacity>
-                            
+                            <PartnerInviteShareOptions message={shareMessage} />
+
                             <TouchableOpacity style={[styles.shareOption, { marginTop: 12, backgroundColor: '#FEF2F2' }]} onPress={cancelInvite}>
                                 <Trash2 size={24} color="#EF4444" />
                                 <Text style={[styles.shareOptionText, { color: '#EF4444' }]}>Delete Invitation</Text>
@@ -2359,57 +2232,25 @@ const styles = StyleSheet.create({
         width: width * 0.9,
         alignItems: 'flex-start',
         paddingVertical: 20,
-    },
-    mockupHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 40,
-        marginLeft: 10,
-    },
-    mockAvatarHero: {
-        width: 100,
-        height: 100,
-        borderRadius: 40,
-        backgroundColor: '#FF6B6B',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 2,
-        shadowColor: '#FF6B6B',
-        shadowOffset: { width: 0, height: 16 },
-        shadowOpacity: 0.4,
-        shadowRadius: 24,
-        elevation: 10,
-    },
-    mockAvatarSecondary: {
-        width: 80,
-        height: 80,
-        borderRadius: 32,
-        backgroundColor: '#111827',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginLeft: -30,
-        zIndex: 1,
-        borderWidth: 4,
-        borderColor: '#FFFFFF',
+        gap: 28,
     },
     welcomeTextShell: {
-        marginBottom: 48,
         width: '100%',
     },
     titleModern: {
-        fontSize: 56,
+        fontSize: 30,
         fontWeight: '900',
-        color: '#111827',
-        letterSpacing: -2.5,
-        marginBottom: 16,
-        lineHeight: 60,
+        color: '#1F2937',
+        letterSpacing: -1,
+        lineHeight: 34,
+        marginBottom: 8,
     },
     subtitleModern: {
-        fontSize: 18,
-        color: '#64748B',
-        lineHeight: 28,
-        fontWeight: '600',
-        paddingRight: 20,
+        fontSize: 15,
+        fontWeight: '500',
+        color: '#6B7280',
+        lineHeight: 22,
+        maxWidth: 320,
     },
     primaryBtnModern: {
         backgroundColor: '#111827',
@@ -2428,9 +2269,48 @@ const styles = StyleSheet.create({
     },
     primaryBtnTextModern: {
         color: '#FFF',
-        fontSize: 20,
-        fontWeight: '900',
-        letterSpacing: 0.5,
+        fontSize: 17,
+        fontWeight: '800',
+        letterSpacing: -0.3,
+    },
+    marketplaceBtnModern: {
+        width: '100%',
+        minHeight: 72,
+        marginTop: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderRadius: 20,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: '#F1F5F9',
+        backgroundColor: '#FFFFFF',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    marketplaceBtnIcon: {
+        width: 44,
+        height: 44,
+        borderRadius: 14,
+        borderCurve: 'continuous',
+        backgroundColor: '#FFF1F2',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    marketplaceBtnCopy: {
+        flex: 1,
+        minWidth: 0,
+    },
+    marketplaceBtnTitle: {
+        fontSize: 15,
+        fontWeight: '800',
+        color: '#1F2937',
+    },
+    marketplaceBtnSubtitle: {
+        marginTop: 3,
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#6B7280',
     },
     btnDisabled: {
         backgroundColor: '#E2E8F0',
@@ -2461,10 +2341,10 @@ const styles = StyleSheet.create({
         shadowRadius: 8,
     },
     bannerTextModern: {
-        fontSize: 18,
-        fontWeight: '900',
+        fontSize: 15,
+        fontWeight: '800',
         color: '#065F46',
-        letterSpacing: -0.5,
+        letterSpacing: -0.2,
     },
     bannerSubModern: {
         fontSize: 14,
@@ -2481,10 +2361,10 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     bannerActionText: {
-        fontSize: 16,
-        fontWeight: '900',
+        fontSize: 17,
+        fontWeight: '800',
         color: '#FFFFFF',
-        letterSpacing: 0.5,
+        letterSpacing: -0.3,
     },
     primaryBtnText: {
         color: '#FFF',
@@ -2520,11 +2400,11 @@ const styles = StyleSheet.create({
     miniavatarText: {
         color: '#FFF',
         fontSize: 14,
-        fontWeight: '900',
+        fontWeight: '800',
     },
     footerName: {
-        fontSize: 14,
-        fontWeight: '800',
+        fontSize: 13,
+        fontWeight: '700',
         color: '#1F2937',
     },
     inputShell: {

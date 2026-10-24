@@ -96,4 +96,3 @@ export function hasRemoteNotificationsEnabled(preferences: NotificationPreferenc
     preferences.partnerInviteAccepted
   );
 }
-

@@ -1,45 +1,60 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, useWindowDimensions } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { X, Zap, TrendingUp, Clock3 } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { ChevronLeft, TrendingUp, Clock3 } from 'lucide-react-native';
 import { StatusBar } from 'expo-status-bar';
-import { BlurView } from 'expo-blur';
-import Animated, { FadeInUp, FadeIn, ZoomIn } from 'react-native-reanimated';
-import * as Location from 'expo-location';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE, type LatLng, type Region } from 'react-native-maps';
+import Animated, { FadeInUp, ZoomIn } from 'react-native-reanimated';
+import Svg, { Circle } from 'react-native-svg';
+import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../src/auth/authContext';
 import { useStepSync } from '../hooks/UseStepSync';
 import { useDailySummary } from '../hooks/useDailySummary';
-
-const { width } = Dimensions.get('window');
+import { API_BASE_URL } from '../config/api';
 
 const COLORS = {
   primary: '#FF6B6B',
-  dark: '#0F172A',
-  muted: '#94A3B8',
-  white: '#FFFFFF',
+  background: '#F6F7F9',
+  surface: '#FFFFFF',
+  surfaceMuted: '#F1F4F7',
+  text: '#172033',
+  muted: '#64748B',
+  border: '#E3E8EF',
 };
 
-const FALLBACK_REGION: Region = {
-  latitude: -33.865143,
-  longitude: 151.2099,
-  latitudeDelta: 0.05,
-  longitudeDelta: 0.05,
+type StepHistoryPoint = {
+  dayKey: string;
+  steps: number;
 };
 
-const NIGHT_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#0b1220' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#7c8aa5' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#0b1220' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#172033' }] },
-  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#111827' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#172033' }] },
-  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#66748f' }] },
-  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#08111f' }] },
-];
+function toDayKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildRecentDays(): string[] {
+  const today = new Date();
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - index));
+    return toDayKey(date);
+  });
+}
+
+function formatWeekday(dayKey: string): string {
+  return new Date(`${dayKey}T12:00:00`).toLocaleDateString('en-AU', { weekday: 'short' });
+}
+
+function formatSelectedDate(dayKey: string, todayKey: string): string {
+  if (dayKey === todayKey) return 'Today';
+  return new Date(`${dayKey}T12:00:00`).toLocaleDateString('en-AU', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'short',
+  });
+}
 
 function parseNumericParam(value: string | string[] | undefined, fallback: number): number {
   const raw = typeof value === 'string' ? value : value?.[0];
@@ -78,15 +93,18 @@ function formatDurationLabel(ms: number): string {
 
 export default function RemainingStepsScreen() {
   const router = useRouter();
-  const mapRef = useRef<MapView | null>(null);
-  const { accessToken } = useAuth();
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { accessToken, authFetch } = useAuth();
   const { steps: liveSteps } = useStepSync({ accessToken });
   const { summary } = useDailySummary({ accessToken });
   const { current = '0', target = '10000' } = useLocalSearchParams();
   const openedAtRef = useRef(Date.now());
   const [elapsedMs, setElapsedMs] = useState(0);
-  const [currentLocation, setCurrentLocation] = useState<LatLng | null>(null);
-  const [trailCoords, setTrailCoords] = useState<LatLng[]>([]);
+  const [stepHistory, setStepHistory] = useState<StepHistoryPoint[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const recentDays = useMemo(buildRecentDays, []);
+  const [selectedDayKey, setSelectedDayKey] = useState(recentDays[recentDays.length - 1]);
 
   const fallbackCurrent = parseNumericParam(current, 0);
   const fallbackTarget = parseNumericParam(target, 10000);
@@ -95,6 +113,32 @@ export default function RemainingStepsScreen() {
   const remaining = Math.max(0, tgt - cur);
   const progress = tgt > 0 ? Math.min(1, cur / tgt) : 0;
   const sessionSteps = Math.max(0, cur - fallbackCurrent);
+  const ringSize = Math.min(width - 64, height * 0.31, 272);
+  const ringStrokeWidth = 12;
+  const ringCenter = ringSize / 2;
+  const ringRadius = (ringSize - ringStrokeWidth) / 2;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringDashOffset = ringCircumference * (1 - progress);
+  const bigNumberSize = Math.min(ringSize * 0.29, 80);
+
+  const chartData = useMemo(() => {
+    const historyByDay = new Map(stepHistory.map((point) => [point.dayKey, point.steps]));
+    const todayKey = recentDays[recentDays.length - 1];
+
+    return recentDays.map((dayKey) => ({
+      dayKey,
+      steps: dayKey === todayKey
+        ? Math.max(historyByDay.get(dayKey) ?? 0, cur)
+        : historyByDay.get(dayKey) ?? 0,
+    }));
+  }, [cur, recentDays, stepHistory]);
+
+  const chartMax = Math.max(tgt, ...chartData.map((point) => point.steps), 1);
+  const weeklySteps = chartData.reduce((sum, point) => sum + point.steps, 0);
+  const todayKey = recentDays[recentDays.length - 1];
+  const selectedPoint = chartData.find((point) => point.dayKey === selectedDayKey)
+    ?? chartData[chartData.length - 1];
+  const selectedDateLabel = formatSelectedDate(selectedPoint.dayKey, todayKey);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -105,87 +149,34 @@ export default function RemainingStepsScreen() {
   }, []);
 
   useEffect(() => {
-    let active = true;
-    let subscription: Location.LocationSubscription | null = null;
+    let cancelled = false;
 
-    const syncLocation = (coords: Location.LocationObjectCoords) => {
-      if (!active) {
+    const loadStepHistory = async () => {
+      if (!accessToken) {
+        setHistoryLoading(false);
         return;
       }
 
-      const next: LatLng = {
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-      };
-
-      setCurrentLocation(next);
-      setTrailCoords((prev) => {
-        if (prev.length === 0) {
-          return [next];
-        }
-
-        const last = prev[prev.length - 1];
-        const latDiff = Math.abs(last.latitude - next.latitude);
-        const lonDiff = Math.abs(last.longitude - next.longitude);
-
-        if (latDiff < 0.000015 && lonDiff < 0.000015) {
-          return prev;
-        }
-
-        return [...prev, next].slice(-80);
-      });
-    };
-
-    const startLocationWatch = async () => {
       try {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (!active || permission.status !== 'granted') {
-          return;
+        const from = recentDays[0];
+        const to = recentDays[recentDays.length - 1];
+        const response = await authFetch(`${API_BASE_URL}/activity/steps/history?from=${from}&to=${to}`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+        if (!cancelled && Array.isArray(data?.history)) {
+          setStepHistory(data.history);
         }
-
-        const initial = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        syncLocation(initial.coords);
-
-        subscription = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            distanceInterval: 8,
-            timeInterval: 5000,
-          },
-          (location) => {
-            syncLocation(location.coords);
-          }
-        );
-      } catch {
-        // Keep the screen usable even if location fails.
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
       }
     };
 
-    startLocationWatch();
-
+    loadStepHistory();
     return () => {
-      active = false;
-      subscription?.remove();
+      cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    if (!mapRef.current || !currentLocation) {
-      return;
-    }
-
-    mapRef.current.animateToRegion(
-      {
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        latitudeDelta: 0.008,
-        longitudeDelta: 0.008,
-      },
-      450
-    );
-  }, [currentLocation?.latitude, currentLocation?.longitude]);
+  }, [accessToken, authFetch, recentDays]);
 
   const paceMsPer1000 = useMemo(() => {
     if (sessionSteps <= 0 || elapsedMs <= 0) {
@@ -207,150 +198,137 @@ export default function RemainingStepsScreen() {
     return (paceMsPer1000 * remaining) / 1000;
   }, [paceMsPer1000, remaining]);
   
-  const message = useMemo(() => {
-    if (remaining === 0) return "GOAL REACHED!";
-    if (progress > 0.8) return "ALMOST THERE!";
-    if (progress > 0.5) return "HALFWAY POINT!";
-    return "KEEP MOVING!";
-  }, [remaining, progress]);
-
-  const initialRegion = useMemo<Region>(() => {
-    if (currentLocation) {
-      return {
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      };
-    }
-
-    if (trailCoords.length > 0) {
-      return {
-        latitude: trailCoords[0].latitude,
-        longitude: trailCoords[0].longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      };
-    }
-
-    return FALLBACK_REGION;
-  }, [currentLocation, trailCoords]);
-
-  const displayTrailCoords = useMemo(() => {
-    if (!currentLocation) {
-      return trailCoords;
-    }
-
-    if (trailCoords.length === 0) {
-      return [currentLocation];
-    }
-
-    const last = trailCoords[trailCoords.length - 1];
-    const latDiff = Math.abs(last.latitude - currentLocation.latitude);
-    const lonDiff = Math.abs(last.longitude - currentLocation.longitude);
-
-    if (latDiff < 0.000005 && lonDiff < 0.000005) {
-      return trailCoords;
-    }
-
-    return [...trailCoords, currentLocation];
-  }, [currentLocation, trailCoords]);
-
-  const isUsingGoogle = Platform.OS === 'android';
-
   return (
     <View style={styles.container}>
-      <StatusBar style="light" />
-      <MapView
-        ref={mapRef}
-        style={[StyleSheet.absoluteFillObject, { opacity: 0.80 }]}
-        provider={isUsingGoogle ? PROVIDER_GOOGLE : undefined}
-        customMapStyle={isUsingGoogle ? NIGHT_MAP_STYLE : undefined}
-        initialRegion={initialRegion}
-        mapType="standard"
-        showsBuildings={false}
-        showsCompass={false}
-        showsMyLocationButton={false}
-        showsIndoorLevelPicker={false}
-        showsIndoors={false}
-        pitchEnabled={false}
-        rotateEnabled={false}
-        toolbarEnabled={false}
-        loadingEnabled
+      <StatusBar style="dark" />
+      <TouchableOpacity
+        style={[styles.closeBtn, { top: insets.top + 8 }]}
+        onPress={() => router.back()}
+        activeOpacity={0.7}
       >
-        {displayTrailCoords.length > 1 && (
-          <Polyline
-            coordinates={displayTrailCoords}
-            strokeWidth={4}
-            strokeColor="#FF6B6B55"
-            geodesic
-          />
-        )}
-        {currentLocation && (
-          <Marker coordinate={currentLocation} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.mapMarkerOuter}>
-              <View style={styles.mapMarkerInner} />
-            </View>
-          </Marker>
-        )}
-      </MapView>
+        <View style={styles.blurBtn}>
+          <ChevronLeft size={22} color={COLORS.text} />
+        </View>
+      </TouchableOpacity>
 
-      <LinearGradient
-        colors={['rgba(2, 6, 23, 0.65)', 'rgba(2, 6, 23, 0.85)', 'rgba(2, 6, 23, 0.98)']}
-        locations={[0, 0.45, 1]}
-        style={StyleSheet.absoluteFillObject}
-        pointerEvents="none"
-      />
-
-      <View style={styles.contentContainer}>
-        <TouchableOpacity 
-          style={styles.closeBtn} 
-          onPress={() => router.back()}
-          activeOpacity={0.7}
-        >
-          <BlurView intensity={20} style={styles.blurBtn} tint="dark">
-            <X size={20} color={COLORS.white} />
-          </BlurView>
-        </TouchableOpacity>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.contentContainer,
+          { paddingTop: insets.top + 68, paddingBottom: Math.max(insets.bottom + 24, 40) },
+        ]}
+        contentInsetAdjustmentBehavior="never"
+        showsVerticalScrollIndicator={false}
+      >
 
         <View style={styles.mainContent}>
-          <Animated.View entering={FadeIn.delay(200)} style={styles.headerGroup}>
-            <View style={styles.pillBadge}>
-              <View style={styles.pulseDot} />
-              <Text style={styles.pillText}>LIVE TRACKING</Text>
-            </View>
-            <Text style={styles.messageText}>{message}</Text>
-          </Animated.View>
-          
           <View style={styles.centerGroup}>
-            <Animated.Text entering={ZoomIn.delay(300)} style={styles.bigNumber}>
-              {remaining.toLocaleString()}
-            </Animated.Text>
-            <Animated.Text entering={FadeInUp.delay(400)} style={styles.subLabel}>
-              STEPS REMAINING
-            </Animated.Text>
+            <View style={[styles.completionRing, { width: ringSize, height: ringSize }]}>
+              <Svg width={ringSize} height={ringSize} style={styles.ringSvg}>
+                <Circle
+                  cx={ringCenter}
+                  cy={ringCenter}
+                  r={ringRadius}
+                  fill='none'
+                  stroke={COLORS.border}
+                  strokeWidth={ringStrokeWidth}
+                />
+                <Circle
+                  cx={ringCenter}
+                  cy={ringCenter}
+                  r={ringRadius}
+                  fill='none'
+                  stroke={COLORS.primary}
+                  strokeWidth={ringStrokeWidth}
+                  strokeLinecap='round'
+                  strokeDasharray={`${ringCircumference} ${ringCircumference}`}
+                  strokeDashoffset={ringDashOffset}
+                  transform={`rotate(-90 ${ringCenter} ${ringCenter})`}
+                  opacity={progress > 0 ? 1 : 0}
+                />
+              </Svg>
+              <View style={styles.ringContent}>
+                <Animated.Text
+                  entering={ZoomIn.delay(300)}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  style={[styles.bigNumber, { fontSize: bigNumberSize, lineHeight: bigNumberSize }]}
+                >
+                  {remaining.toLocaleString()}
+                </Animated.Text>
+                <Animated.Text entering={FadeInUp.delay(400)} style={styles.subLabel}>
+                  Steps remaining
+                </Animated.Text>
+                <Text style={styles.liveCounter}>Live counter</Text>
+              </View>
+            </View>
           </View>
 
-          <Animated.View entering={FadeInUp.delay(500)} style={styles.progressSection}>
-            <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
-            </View>
-            <View style={styles.progressMeta}>
+          <Animated.View entering={FadeInUp.delay(500)} style={styles.chartCard}>
+            <View style={styles.chartHeader}>
               <View>
-                <Text style={styles.metaLabel}>PROGRESS</Text>
-                <Text style={styles.metaValue}>{Math.round(progress * 100)}%</Text>
+                <Text style={styles.chartEyebrow}>7-day steps</Text>
+                <View style={styles.chartValueRow}>
+                  <Text style={styles.chartTotal}>{selectedPoint.steps.toLocaleString()}</Text>
+                  <Text style={styles.chartUnit}>steps</Text>
+                </View>
               </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.metaLabel}>GOAL</Text>
-                <Text style={styles.metaValue}>{tgt.toLocaleString()}</Text>
-              </View>
+              <Text style={styles.chartStatus}>
+                {historyLoading ? 'Loading history…' : selectedDateLabel}
+              </Text>
+            </View>
+
+            <View style={styles.chartPlot}>
+              {chartData.map((point, index) => {
+                const isToday = index === chartData.length - 1;
+                const isSelected = point.dayKey === selectedDayKey;
+                const barPercent = Math.max(point.steps > 0 ? 4 : 2, (point.steps / chartMax) * 100);
+
+                return (
+                  <TouchableOpacity
+                    key={point.dayKey}
+                    style={styles.chartColumn}
+                    activeOpacity={0.82}
+                    hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                    accessibilityRole='button'
+                    accessibilityLabel={`${formatSelectedDate(point.dayKey, todayKey)}, ${point.steps.toLocaleString()} steps`}
+                    accessibilityState={{ selected: isSelected }}
+                    onPress={() => {
+                      setSelectedDayKey(point.dayKey);
+                      Haptics.selectionAsync().catch(() => {});
+                    }}
+                  >
+                    <View style={styles.chartBarTrack}>
+                      <View
+                        style={[
+                          styles.chartBar,
+                          isSelected
+                            ? styles.chartBarSelected
+                            : isToday
+                              ? styles.chartBarToday
+                              : styles.chartBarPrevious,
+                          { height: `${barPercent}%` },
+                        ]}
+                      />
+                    </View>
+                    <Text style={[styles.chartDay, isSelected && styles.chartDaySelected]}>
+                      {formatWeekday(point.dayKey)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.chartFooter}>
+              <Text style={styles.chartFooterText}>Week total {weeklySteps.toLocaleString()}</Text>
+              <Text style={styles.chartFooterText}>Daily goal {tgt.toLocaleString()}</Text>
             </View>
           </Animated.View>
 
           <Animated.View entering={FadeInUp.delay(600)} style={styles.dashboard}>
             <View style={styles.dashboardHeader}>
               <Clock3 size={14} color={COLORS.primary} />
-              <Text style={styles.dashboardTitle}>SESSION INSIGHTS</Text>
+              <Text style={styles.dashboardTitle}>Session insights</Text>
               <View style={styles.timerPill}>
                 <Text style={styles.timerText}>{formatElapsedClock(elapsedMs)}</Text>
               </View>
@@ -358,19 +336,17 @@ export default function RemainingStepsScreen() {
 
             <View style={styles.metricsGrid}>
               <View style={styles.metricItem}>
-                <Text style={styles.metricLabelSmall}>PACE</Text>
+                <Text style={styles.metricLabelSmall}>Pace per 1,000 steps</Text>
                 <Text style={styles.metricValueLarge}>
                   {paceMsPer1000 ? formatDurationLabel(paceMsPer1000) : '--'}
                 </Text>
-                <Text style={styles.metricSub}>per 1k steps</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.metricItem}>
-                <Text style={styles.metricLabelSmall}>EST. TIME</Text>
+                <Text style={styles.metricLabelSmall}>Estimated time left</Text>
                 <Text style={styles.metricValueLarge}>
                   {etaMs === null ? '--' : formatDurationLabel(etaMs)}
                 </Text>
-                <Text style={styles.metricSub}>to finish</Text>
               </View>
             </View>
 
@@ -378,17 +354,14 @@ export default function RemainingStepsScreen() {
               <TrendingUp size={12} color={COLORS.muted} style={styles.sessionStatusIcon} />
               <Text style={styles.sessionStatusText}>
                 {sessionSteps > 0
-                  ? `+${sessionSteps.toLocaleString()} steps detected`
-                  : 'Awaiting movement...'}
+                  ? `${sessionSteps.toLocaleString()} steps this session`
+                  : 'Waiting for new steps'}
               </Text>
             </View>
           </Animated.View>
         </View>
 
-        <Animated.View entering={FadeIn.delay(800)} style={styles.footer}>
-          <Text style={styles.footerText}>REAL-TIME DEVICE SYNC ACTIVE</Text>
-        </Animated.View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -396,17 +369,18 @@ export default function RemainingStepsScreen() {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: '#020617' 
+    backgroundColor: COLORS.background,
+  },
+  scrollView: {
+    flex: 1,
   },
   contentContainer: { 
-    flex: 1, 
-    padding: 24,
-    justifyContent: 'center'
+    flexGrow: 1,
+    paddingHorizontal: 24,
   },
   closeBtn: {
     position: 'absolute',
-    top: 60,
-    right: 24,
+    left: 24,
     zIndex: 10,
   },
   blurBtn: {
@@ -416,104 +390,148 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    backgroundColor: COLORS.surface,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: COLORS.border,
   },
   mainContent: {
     width: '100%',
   },
-  headerGroup: {
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  pillBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,107,107,0.12)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,107,107,0.16)',
-  },
-  pulseDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.primary,
-    marginRight: 8,
-  },
-  pillText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: COLORS.primary,
-    letterSpacing: 1,
-  },
-  messageText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.muted,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
   centerGroup: {
     alignItems: 'center',
-    marginBottom: 60,
+    marginBottom: 24,
+  },
+  completionRing: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ringSvg: {
+    position: 'absolute',
+  },
+  ringContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
   },
   bigNumber: {
-    fontSize: width * 0.32,
     fontWeight: '900',
-    color: COLORS.white,
+    color: COLORS.text,
     letterSpacing: -8,
-    lineHeight: width * 0.32,
+    fontVariant: ['tabular-nums'],
   },
   subLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  liveCounter: {
+    marginTop: 4,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '600',
     color: COLORS.muted,
-    letterSpacing: 4,
-    marginTop: 10,
   },
-  progressSection: {
-    width: '100%',
-    marginBottom: 48,
+  chartCard: {
+    minHeight: 236,
+    marginBottom: 24,
+    padding: 20,
+    borderRadius: 24,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
-  progressBarBg: {
-    height: 6,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: COLORS.primary,
-    borderRadius: 3,
-  },
-  progressMeta: {
+  chartHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 2,
+    alignItems: 'flex-start',
+    marginBottom: 16,
   },
-  metaLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.muted,
-    letterSpacing: 1,
-    marginBottom: 4,
+  chartEyebrow: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 2,
   },
-  metaValue: {
-    fontSize: 16,
+  chartTotal: {
+    fontSize: 24,
     fontWeight: '900',
-    color: COLORS.white,
+    color: COLORS.text,
+    fontVariant: ['tabular-nums'],
+  },
+  chartValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+  },
+  chartUnit: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.muted,
+  },
+  chartStatus: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  chartPlot: {
+    height: 112,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  chartColumn: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  chartBarTrack: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+    borderRadius: 6,
+    backgroundColor: COLORS.surfaceMuted,
+  },
+  chartBar: {
+    width: '100%',
+    borderRadius: 6,
+  },
+  chartBarPrevious: {
+    backgroundColor: 'rgba(255,107,107,0.38)',
+  },
+  chartBarToday: {
+    backgroundColor: 'rgba(255,107,107,0.62)',
+  },
+  chartBarSelected: {
+    backgroundColor: COLORS.primary,
+  },
+  chartDay: {
+    marginTop: 8,
+    fontSize: 9,
+    fontWeight: '700',
+    color: COLORS.muted,
+  },
+  chartDaySelected: {
+    color: COLORS.primary,
+    fontWeight: '900',
+  },
+  chartFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  chartFooterText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.muted,
   },
   dashboard: {
-    backgroundColor: 'rgba(2,6,23,0.88)',
+    backgroundColor: COLORS.surface,
     borderRadius: 32,
     padding: 24,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: COLORS.border,
   },
   dashboardHeader: {
     flexDirection: 'row',
@@ -521,15 +539,14 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   dashboardTitle: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: COLORS.white,
-    letterSpacing: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.text,
     marginLeft: 10,
   },
   timerPill: {
     marginLeft: 'auto',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: COLORS.surfaceMuted,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
@@ -551,31 +568,25 @@ const styles = StyleSheet.create({
   divider: {
     width: 1,
     height: 40,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: COLORS.border,
     marginHorizontal: 20,
   },
   metricLabelSmall: {
-    fontSize: 10,
-    fontWeight: '800',
+    fontSize: 12,
+    fontWeight: '600',
     color: COLORS.muted,
-    letterSpacing: 1,
     marginBottom: 8,
   },
   metricValueLarge: {
     fontSize: 22,
     fontWeight: '900',
-    color: COLORS.white,
+    color: COLORS.text,
     marginBottom: 4,
-  },
-  metricSub: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: 'rgba(148,163,184,0.5)',
   },
   sessionStatus: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: COLORS.surfaceMuted,
     padding: 12,
     borderRadius: 16,
   },
@@ -583,37 +594,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   sessionStatusText: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '600',
     color: COLORS.muted,
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 50,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  footerText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: 'rgba(148,163,184,0.45)',
-    letterSpacing: 2,
-  },
-  mapMarkerOuter: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.68)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.7)',
-  },
-  mapMarkerInner: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.primary,
   },
 });

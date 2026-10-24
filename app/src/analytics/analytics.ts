@@ -59,6 +59,19 @@ export async function trackScreen(screenName: string, screenClass?: string) {
     }
 }
 
+export async function trackOnboardingStep(
+    stepKey: string,
+    screenName: string,
+    stepOrder: number,
+) {
+    await trackScreen(screenName, 'Onboarding');
+    await trackEvent('onboarding_step_viewed', {
+        step_key: stepKey,
+        step_name: screenName,
+        step_order: stepOrder,
+    });
+}
+
 export async function setAnalyticsUserId(userId: string | null) {
     if (!analyticsEnabled()) return;
 

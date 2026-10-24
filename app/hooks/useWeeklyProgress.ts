@@ -22,6 +22,7 @@ export interface WeeklyProgress {
 export interface PartnerWeeklyProgress {
     id: string;
     name: string;
+    gender?: string | null;
     weeklyKm: number;
     weeklyKmTarget: number;
     remaining: number;

@@ -1247,6 +1247,12 @@ export default function LoginScreen() {
               label: 'Primary Goal',
               value: goal.replace('_', ' '),
               onPress: () => {}, // Future edit goal
+            })}
+            {renderSettingsRow({
+              icon: <Activity size={16} color={SETTINGS_ICON_COLOR} />,
+              label: 'Pace personalisation',
+              value: 'Manage',
+              onPress: () => router.push('/pace-personalisation'),
               last: true,
             })}
           </View>
@@ -1578,8 +1584,8 @@ export default function LoginScreen() {
                   </Text>
                   <Text style={[styles.disclosureValueText, { color: '#B45309', marginBottom: 10 }]}>
                     {pushPermissionStatus === 'denied'
-                      ? 'Notifications are blocked for Runtogether. Enable them in your device settings.'
-                      : 'Allow notifications so Runtogether can send alerts and reminders. This also adds the Notifications option in your phone settings.'}
+                      ? 'Notifications are blocked for RunTogether. Enable them in your device settings.'
+                      : 'Allow notifications so RunTogether can send alerts and reminders. This also adds the Notifications option in your phone settings.'}
                   </Text>
                   <TouchableOpacity
                     onPress={

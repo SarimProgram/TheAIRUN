@@ -1,9 +1,6 @@
 import { RunGenerator, UIStep, UserContext } from "../types";
+import { buildIntervalWalkPaceTargets } from "../../services/intervalPaceTargets";
 
-const BASELINE_RECOVERY_SEC_PER_KM = 14 * 60;
-const BASELINE_FAST_SEC_PER_KM = 9 * 60;
-const MAX_RECOVERY_SEC_PER_KM = 18 * 60;
-const MAX_FAST_SEC_PER_KM = 12 * 60;
 const BLOCK_BUFFER_SEC = 5;
 const MAX_FAST_BLOCK_SEC = 120;
 const BASELINE_WARMUP_SEC = 4 * 60;
@@ -51,27 +48,9 @@ export const intervalWalkGenerator: RunGenerator = (
 };
 
 function buildIntervalWalkPaces(context: UserContext): IntervalWalkPaces {
-    const ageYears = asFiniteNumber(context.ageYears);
-    const heightCm = asFiniteNumber(context.heightCm);
-    const weightKg = asFiniteNumber(context.weightKg);
-    const bmi = calculateBmi(heightCm, weightKg);
-
-    let adjustmentSec = 0;
-
-    if (typeof bmi === "number") {
-        if (bmi < 18.5) adjustmentSec += 30;
-        else if (bmi >= 30) adjustmentSec += 90;
-        else if (bmi >= 25) adjustmentSec += 45;
-    }
-
-    if (typeof ageYears === "number" && ageYears >= 60) {
-        adjustmentSec += ageYears >= 70 ? 90 : 45;
-    }
-
-    return {
-        recoverySecPerKm: clamp(BASELINE_RECOVERY_SEC_PER_KM + adjustmentSec, BASELINE_RECOVERY_SEC_PER_KM, MAX_RECOVERY_SEC_PER_KM),
-        fastSecPerKm: clamp(BASELINE_FAST_SEC_PER_KM + adjustmentSec, BASELINE_FAST_SEC_PER_KM, MAX_FAST_SEC_PER_KM),
-    };
+    const walkingBaseline = context.walkingBaselinePaceSecPerKm;
+    const { recoverySecPerKm, fastSecPerKm } = buildIntervalWalkPaceTargets(walkingBaseline);
+    return { recoverySecPerKm, fastSecPerKm };
 }
 
 function getWarmCooldownDistances(targetKm: number, paces: IntervalWalkPaces) {
@@ -125,20 +104,6 @@ function deriveDistanceKm(durationSec: number, paceSecPerKm: number) {
 function deriveDurationSec(distanceKm: number, paceSecPerKm: number) {
     if (!distanceKm || distanceKm <= 0 || !paceSecPerKm || paceSecPerKm <= 0) return 0;
     return Math.max(10, Math.round(distanceKm * paceSecPerKm) + BLOCK_BUFFER_SEC);
-}
-
-function calculateBmi(heightCm?: number, weightKg?: number) {
-    if (!heightCm || !weightKg || heightCm <= 0 || weightKg <= 0) return null;
-    const heightM = heightCm / 100;
-    return weightKg / (heightM * heightM);
-}
-
-function asFiniteNumber(value: unknown) {
-    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function clamp(value: number, min: number, max: number) {
-    return Math.min(Math.max(value, min), max);
 }
 
 function roundDistanceKm(distanceKm: number) {

@@ -13,6 +13,8 @@ type ApnsResult = {
   body: string;
 };
 
+const APNS_REQUEST_TIMEOUT_MS = 15_000;
+
 let cachedProviderToken: { token: string; expiresAt: number } | null = null;
 
 function getApnsKey(): string | null {
@@ -85,14 +87,46 @@ async function sendApnsRequest(params: {
   const client = http2.connect(apnsBaseUrl());
 
   return await new Promise<ApnsResult>((resolve, reject) => {
-    const request = client.request({
-      ':method': 'POST',
-      ':path': `/3/device/${params.deviceToken}`,
-      authorization: `bearer ${providerToken}`,
-      'apns-push-type': params.pushType,
-      'apns-topic': params.topic,
-      'apns-priority': params.priority,
+    let settled = false;
+
+    const succeed = (result: ApnsResult) => {
+      if (settled) return;
+      settled = true;
+      client.setTimeout(0);
+      client.close();
+      resolve(result);
+    };
+
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      client.setTimeout(0);
+      client.destroy();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
+    // Connection failures are emitted by the session, not necessarily by the
+    // request stream. Without this listener, a transient APNs/Railway network
+    // failure becomes an uncaught event and terminates the Node process.
+    client.once('error', fail);
+    client.setTimeout(APNS_REQUEST_TIMEOUT_MS, () => {
+      fail(new Error(`APNs ${params.pushType} push timed out after ${APNS_REQUEST_TIMEOUT_MS}ms`));
     });
+
+    let request: http2.ClientHttp2Stream;
+    try {
+      request = client.request({
+        ':method': 'POST',
+        ':path': `/3/device/${params.deviceToken}`,
+        authorization: `bearer ${providerToken}`,
+        'apns-push-type': params.pushType,
+        'apns-topic': params.topic,
+        'apns-priority': params.priority,
+      });
+    } catch (error) {
+      fail(error);
+      return;
+    }
 
     let responseBody = '';
     let status = 0;
@@ -105,18 +139,14 @@ async function sendApnsRequest(params: {
       responseBody += chunk;
     });
     request.on('end', () => {
-      client.close();
       if (status >= 200 && status < 300) {
-        resolve({ status, body: responseBody });
+        succeed({ status, body: responseBody });
         return;
       }
 
-      reject(new Error(`APNs ${params.pushType} push failed: ${status} ${responseBody}`));
+      fail(new Error(`APNs ${params.pushType} push failed: ${status} ${responseBody}`));
     });
-    request.on('error', (error) => {
-      client.close();
-      reject(error);
-    });
+    request.on('error', fail);
 
     request.end(JSON.stringify(params.payload));
   });

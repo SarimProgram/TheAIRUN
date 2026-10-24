@@ -25,12 +25,17 @@ import {
     Scale,
     Share2,
     Target,
+    TrendingDown,
+    TrendingUp,
     Users,
     X,
     Zap
 } from 'lucide-react-native';
 import { API_BASE_URL } from '@/config/api';
+import { APP_NAME } from '@/constants/branding';
 import { useAuth } from '@/src/auth/authContext';
+import { formatPace, type PerceivedEffort } from '@/lib/pace-personalization';
+import type { PaceSyncUpdate } from '@/lib/run-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -63,8 +68,9 @@ type RunResultData = {
 
 type RunResultScreenProps = {
     data: RunResultData;
-    onDone?: () => void;
-    onSkip?: () => void;
+    onDone?: (effort?: PerceivedEffort) => void;
+    onSkip?: (effort?: PerceivedEffort) => void;
+    onEffortSelect?: (effort: PerceivedEffort) => Promise<PaceSyncUpdate | null>;
 };
 
 type ResultMeta = {
@@ -79,7 +85,7 @@ function formatWeight(weightKg: number | null | undefined) {
     return weightKg.toFixed(1);
 }
 
-export const RunResultScreen = ({ data, onDone, onSkip }: RunResultScreenProps) => {
+export const RunResultScreen = ({ data, onDone, onSkip, onEffortSelect }: RunResultScreenProps) => {
     const { authFetch } = useAuth();
     const [cameraPermission, requestCameraPermission] = useCameraPermissions();
     const [libraryPermission, requestLibraryPermission] = MediaLibrary.usePermissions();
@@ -89,6 +95,11 @@ export const RunResultScreen = ({ data, onDone, onSkip }: RunResultScreenProps) 
     const [isCameraActive, setIsCameraActive] = useState(false);
     const [hasStartedPhotoFlow, setHasStartedPhotoFlow] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
+    const [perceivedEffort, setPerceivedEffort] = useState<PerceivedEffort | undefined>();
+    const [effortSaving, setEffortSaving] = useState(false);
+    const [effortSubmitted, setEffortSubmitted] = useState(false);
+    const [effortError, setEffortError] = useState<string | null>(null);
+    const [paceUpdate, setPaceUpdate] = useState<PaceSyncUpdate | null>(null);
     const [meta, setMeta] = useState<ResultMeta>({
         displayName: 'You',
         partnerName: data.partnerName ?? null,
@@ -227,11 +238,61 @@ export const RunResultScreen = ({ data, onDone, onSkip }: RunResultScreenProps) 
     const handleSkip = () => {
         setIsCameraActive(false);
         if (onSkip) {
-            onSkip();
+            onSkip(perceivedEffort);
             return;
         }
-        onDone?.();
+        onDone?.(perceivedEffort);
     };
+
+    const handleEffortSelect = async (effort: PerceivedEffort) => {
+        if (effortSaving) return;
+        setPerceivedEffort(effort);
+        if (!onEffortSelect) return;
+        try {
+            setEffortSaving(true);
+            setEffortError(null);
+            const update = await onEffortSelect(effort);
+            setPaceUpdate(update);
+            setEffortSubmitted(true);
+        } catch {
+            setEffortError('Could not save. Try again.');
+        } finally {
+            setEffortSaving(false);
+        }
+    };
+
+    const paceChange = useMemo(() => {
+        if (!paceUpdate) return null;
+        const previous = paceUpdate.previousBaselinePaceSecPerKm;
+        const next = paceUpdate.baselinePaceSecPerKm;
+        if (!previous || !next || previous === next) return null;
+        const increased = next < previous;
+        return {
+            direction: increased ? 'increased' as const : 'decreased' as const,
+            title: increased ? 'Suggested pace increased' : 'Suggested pace decreased',
+            value: `${formatPace(previous).replace(' /km', '')} to ${formatPace(next)}`,
+            reason: 'Based on this workout and your feedback.',
+        };
+    }, [paceUpdate]);
+
+    const paceUpdateText = useMemo(() => {
+        if (!paceUpdate || paceChange) return null;
+        if (
+            paceUpdate.previousBaselinePaceSecPerKm &&
+            paceUpdate.baselinePaceSecPerKm &&
+            paceUpdate.previousBaselinePaceSecPerKm !== paceUpdate.baselinePaceSecPerKm
+        ) {
+            const previous = formatPace(paceUpdate.previousBaselinePaceSecPerKm).replace(' /km', '');
+            const next = formatPace(paceUpdate.baselinePaceSecPerKm);
+            const label = paceUpdate.status === 'PERSONALISED' ? 'Pace personalised' : 'Pace updated';
+            return `${label} · ${previous} to ${next}`;
+        }
+        if (paceUpdate.status === 'LEARNING') {
+            return `Learning · ${Math.min(3, paceUpdate.sampleCount ?? 0)} of 3 workouts`;
+        }
+        if (paceUpdate.status === 'PERSONALISED') return 'Pace personalised';
+        return null;
+    }, [paceChange, paceUpdate]);
 
     if (showSummaryScreen) {
         return (
@@ -295,6 +356,50 @@ export const RunResultScreen = ({ data, onDone, onSkip }: RunResultScreenProps) 
                             </View>
                         </View>
 
+                        {onEffortSelect ? <View style={styles.effortCard}>
+                            <Text style={styles.effortTitle}>How did that pace feel?</Text>
+                            <View style={styles.effortOptions}>
+                                {([
+                                    ['TOO_EASY', 'Too easy'],
+                                    ['ABOUT_RIGHT', 'About right'],
+                                    ['TOO_HARD', 'Too hard'],
+                                ] as const).map(([value, label]) => {
+                                    const selected = perceivedEffort === value;
+                                    return (
+                                        <TouchableOpacity
+                                            key={value}
+                                            accessibilityRole={'radio'}
+                                            accessibilityState={{ checked: selected, disabled: effortSaving || effortSubmitted }}
+                                            disabled={effortSaving || effortSubmitted}
+                                            onPress={() => void handleEffortSelect(value)}
+                                            style={[styles.effortOption, selected && styles.effortOptionSelected]}
+                                        >
+                                            <Text style={[styles.effortOptionText, selected && styles.effortOptionTextSelected]}>
+                                                {label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
+                            {effortSaving ? <ActivityIndicator color={COLORS.primary} size={'small'} /> : null}
+                            {effortError ? <Text style={styles.effortError}>{effortError}</Text> : null}
+                            {paceChange ? (
+                                <View style={styles.paceChangeBox}>
+                                    <View style={styles.paceChangeIcon}>
+                                        {paceChange.direction === 'increased'
+                                            ? <TrendingUp color={COLORS.primary} size={20} strokeWidth={2.5} />
+                                            : <TrendingDown color={COLORS.primary} size={20} strokeWidth={2.5} />}
+                                    </View>
+                                    <View style={styles.paceChangeContent}>
+                                        <Text style={styles.paceChangeTitle}>{paceChange.title}</Text>
+                                        <Text style={styles.paceChangeValue}>{paceChange.value}</Text>
+                                        <Text style={styles.paceChangeReason}>{paceChange.reason}</Text>
+                                    </View>
+                                </View>
+                            ) : null}
+                            {paceUpdateText ? <Text style={styles.paceUpdateText}>{paceUpdateText}</Text> : null}
+                        </View> : null}
+
                         <View style={styles.bentoFooter}>
                             <TouchableOpacity style={styles.bentoPrimaryBtn} onPress={handleStartPhotoFlow}>
                                 <Text style={styles.bentoPrimaryBtnText}>SAVE MEMORY</Text>
@@ -344,7 +449,7 @@ export const RunResultScreen = ({ data, onDone, onSkip }: RunResultScreenProps) 
                             <Users size={14} color={COLORS.secondary} />
                             <Text style={styles.partnerLineHeader}>{partnerLine}</Text>
                         </View>
-                        <Text style={styles.brandTextHeader}>RunTogether App</Text>
+                        <Text style={styles.brandTextHeader}>{APP_NAME}</Text>
                     </View>
 
 
@@ -444,7 +549,7 @@ export const RunResultScreen = ({ data, onDone, onSkip }: RunResultScreenProps) 
                                     </TouchableOpacity>
                                     <TouchableOpacity 
                                         style={[styles.glassBtnSmall, { backgroundColor: COLORS.primary }]} 
-                                        onPress={onDone} 
+                                        onPress={() => onDone?.(perceivedEffort)}
                                         disabled={isExporting}
                                     >
                                         <Text style={[styles.glassBtnTextSmall, { color: '#05111D' }]}>DONE</Text>
@@ -627,6 +732,104 @@ const styles = StyleSheet.create({
     },
     bentoFooter: {
         gap: 12,
+    },
+    effortCard: {
+        backgroundColor: '#FFFFFF',
+        borderColor: '#E8EDF2',
+        borderCurve: 'continuous',
+        borderRadius: 20,
+        borderWidth: 1,
+        gap: 10,
+        marginBottom: 16,
+        padding: 16,
+    },
+    effortTitle: {
+        color: COLORS.textDark,
+        fontSize: 16,
+        fontWeight: '800',
+    },
+    effortOptions: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    effortOption: {
+        alignItems: 'center',
+        backgroundColor: '#F8FAFC',
+        borderColor: '#E8EDF2',
+        borderCurve: 'continuous',
+        borderRadius: 12,
+        borderWidth: 1,
+        flex: 1,
+        justifyContent: 'center',
+        minHeight: 44,
+        paddingHorizontal: 6,
+    },
+    effortOptionSelected: {
+        backgroundColor: '#E8FBF7',
+        borderColor: COLORS.primary,
+    },
+    effortOptionText: {
+        color: COLORS.textMuted,
+        fontSize: 12,
+        fontWeight: '700',
+        textAlign: 'center',
+    },
+    effortOptionTextSelected: {
+        color: '#087F70',
+    },
+    paceUpdateText: {
+        color: '#087F70',
+        fontSize: 12,
+        fontVariant: ['tabular-nums'],
+        fontWeight: '800',
+        textAlign: 'center',
+    },
+    paceChangeBox: {
+        alignItems: 'center',
+        backgroundColor: '#F4FBF9',
+        borderColor: '#D4F0EA',
+        borderCurve: 'continuous',
+        borderRadius: 14,
+        borderWidth: 1,
+        flexDirection: 'row',
+        gap: 10,
+        padding: 12,
+    },
+    paceChangeIcon: {
+        alignItems: 'center',
+        backgroundColor: '#E3F7F2',
+        borderCurve: 'continuous',
+        borderRadius: 12,
+        height: 40,
+        justifyContent: 'center',
+        width: 40,
+    },
+    paceChangeContent: {
+        flex: 1,
+    },
+    paceChangeTitle: {
+        color: COLORS.textDark,
+        fontSize: 13,
+        fontWeight: '800',
+    },
+    paceChangeValue: {
+        color: '#087F70',
+        fontSize: 12,
+        fontVariant: ['tabular-nums'],
+        fontWeight: '800',
+        marginTop: 2,
+    },
+    paceChangeReason: {
+        color: COLORS.textMuted,
+        fontSize: 11,
+        fontWeight: '600',
+        marginTop: 3,
+    },
+    effortError: {
+        color: '#DC2626',
+        fontSize: 12,
+        fontWeight: '700',
+        textAlign: 'center',
     },
     bentoPrimaryBtn: {
         backgroundColor: '#0F172A',

@@ -5,6 +5,9 @@ import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Platform } from 'react-native';
+import { enableFreeze } from 'react-native-screens';
+
+enableFreeze(true);
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthProvider, useAuth } from '@/src/auth/authContext'; // adjust if your path differs
@@ -21,6 +24,7 @@ import { RaceSocketProvider } from '@/contexts/RaceSocketContext';
 import GlobalRaceInviteOverlay from '@/components/race/GlobalRaceInviteOverlay';
 import { hasStepPermissionConsent } from '@/config/healthPermissions';
 import { trackScreen } from '@/src/analytics/analytics';
+import { resolveAnalyticsScreenName } from '@/src/analytics/screenNames';
 import {
   loadOnboardingCheckpoint,
   subscribeToOnboardingCheckpoint,
@@ -171,7 +175,8 @@ function ScreenAnalytics() {
 
   useEffect(() => {
     if (!pathname) return;
-    trackScreen(pathname, pathname).catch(() => {});
+    const screenName = resolveAnalyticsScreenName(pathname);
+    trackScreen(screenName, 'AppScreen').catch(() => {});
   }, [pathname]);
 
   return null;
@@ -249,8 +254,13 @@ export default function RootLayout() {
                     <Stack.Screen name="runs/easyrun" options={{ headerShown: false }} />
                     <Stack.Screen name="race/history" options={{ headerShown: false }} />
                     <Stack.Screen name="chat-fullscreen" options={{ headerShown: false }} />
-                    <Stack.Screen name="remaining-steps" options={{ presentation: 'modal', headerShown: false }} />
+                    <Stack.Screen name="remaining-steps" options={{ headerShown: false }} />
                     <Stack.Screen name="kcal-detail" options={{ presentation: 'modal', headerShown: false }} />
+                    <Stack.Screen name="partner-timeline" options={{ headerShown: false }} />
+                    <Stack.Screen name="partner-reminder" options={{ headerShown: false }} />
+                    <Stack.Screen name="partner-settings" options={{ headerShown: false }} />
+                    <Stack.Screen name={'pace-personalisation'} options={{ headerShown: true }} />
+                    <Stack.Screen name="partner-wrap" options={{ headerShown: false }} />
                   </Stack>
                   <PushNotificationRegistrar />
                   <NotificationPermissionBootstrap />

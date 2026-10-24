@@ -5,9 +5,9 @@
 // - Pace-based blocks with durationSec computed from pace + distance + 10s
 
 import { UIStep, UserContext, RunGenerator, IntervalMode } from "../types";
-import { WARMUP_COOLDOWN_DEFAULTS, PACE_MULTIPLIERS, BEGINNER_INTERVAL_PROGRESSION } from "../config";
+import { WARMUP_COOLDOWN_DEFAULTS, BEGINNER_INTERVAL_PROGRESSION } from "../config";
+import { buildIntervalRunPaceTargets } from "../../services/intervalPaceTargets";
 
-const DEFAULT_BASELINE_PACE_SEC_PER_KM = 6 * 60;
 const DURATION_MARGIN_SEC = 10;
 const MAX_HARD_BLOCK_SEC = 120;
 const MIN_REPEAT_COUNT = 2;
@@ -24,9 +24,8 @@ export const intervalRunGenerator: RunGenerator = (
     const warmupKm = roundDistance(defaults.warmupKm);
     const cooldownKm = roundDistance(defaults.cooldownKm);
     const workRecoveryKm = Math.max(0.4, targetKm - warmupKm - cooldownKm);
-    const baselinePaceSecPerKm = context.baselinePaceSecPerKm ?? DEFAULT_BASELINE_PACE_SEC_PER_KM;
-    const easyPace = Math.round(baselinePaceSecPerKm * PACE_MULTIPLIERS.Easy);
-    const hardPace = Math.round(baselinePaceSecPerKm * PACE_MULTIPLIERS.Hard);
+    const runningBaseline = context.runningBaselinePaceSecPerKm ?? context.baselinePaceSecPerKm;
+    const { easySecPerKm: easyPace, hardSecPerKm: hardPace } = buildIntervalRunPaceTargets(runningBaseline);
     const repeatCount = getRepeatCount(workRecoveryKm, hardPace);
     const pairDistanceKm = workRecoveryKm / repeatCount;
     const workDistanceKm = roundDistance(pairDistanceKm / 2);

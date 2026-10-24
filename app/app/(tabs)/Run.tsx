@@ -20,22 +20,22 @@ import {
   Play,
   Pause,
   Square,
-  Zap,
+  Heart,
+  Award,
   Clock,
   ChevronRight,
   Trash2,
   Flame,
   MapPin,
   Watch,
-  TrendingUp,
   Droplets,
-  Footprints,
 } from 'lucide-react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import RunMap from "@/components/RunMap";
-import { getMappedDays } from "@/utils/planProjection";
+import { getMappedDays, dayNames } from "@/utils/planProjection";
 import { API_BASE_URL } from "@/config/api";
+import { RunDetailsModal } from '@/components/runs/RunDetailsModal';
 
 // --- PROJECT IMPORTS ---
 import { useRunTracker } from "@/hooks/useRunTracker";
@@ -53,6 +53,39 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const { width, height } = Dimensions.get('window');
 const REDEEMED_WEEK_PREFIX = 'weekly_quest_redeemed_v1';
+const GOAL_PRACTICE_RUN_TYPE = 'Goal Practice Run';
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+type RunStatusEntry = {
+  runStatus: string;
+  runKmTarget: number;
+  distanceKm: number;
+};
+
+type RunStatusMap = Record<string, RunStatusEntry>;
+
+type ScheduleRunItem = {
+  dayIdx: number;
+  name: string;
+  dateNum: number;
+  month: string;
+  dayKey: string;
+  runType: string;
+  targetKm: number;
+  isToday: boolean;
+  scheduleStatus: 'completed' | 'missed' | 'today' | 'upcoming' | null;
+  sessionId: string | null;
+};
+
+const formatDayKey = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const stripEmojis = (value: string): string =>
+  value.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
 
 const THEME = {
   primary: '#FF4757',
@@ -100,8 +133,11 @@ export default function RunScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [liveQuestRedeemed, setLiveQuestRedeemed] = useState(false);
   const [liveQuestLoading, setLiveQuestLoading] = useState(true);
+  const [runStatuses, setRunStatuses] = useState<RunStatusMap>({});
+  const [showRunDetails, setShowRunDetails] = useState(false);
+  const [selectedScheduleRun, setSelectedScheduleRun] = useState<ScheduleRunItem | null>(null);
   
-  const mapHeight = useRef(new Animated.Value(height * 0.45)).current;
+  const mapHeight = useRef(new Animated.Value(height * 0.28)).current;
   const hudAnim = useRef(new Animated.Value(0)).current;
 
   const fetchHistory = useCallback(async () => {
@@ -167,6 +203,28 @@ export default function RunScreen() {
     }
   }, [authFetch, accessToken]);
 
+  const fetchRunStatuses = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      const today = new Date();
+      const dayOfWeek = (today.getDay() + 6) % 7;
+      const mon = new Date(today);
+      mon.setDate(today.getDate() - dayOfWeek);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+
+      const from = formatDayKey(mon);
+      const to = formatDayKey(sun);
+      const response = await authFetch(`${API_BASE_URL}/summary/run-status/week?from=${from}&to=${to}`);
+      if (response.ok) {
+        const data = await response.json();
+        setRunStatuses(data.statuses || {});
+      }
+    } catch (err) {
+      console.error('Error fetching run statuses:', err);
+    }
+  }, [authFetch, accessToken]);
+
   const fetchTrainingPlan = useCallback(async () => {
     if (!accessToken) return;
     try {
@@ -223,13 +281,14 @@ export default function RunScreen() {
     fetchHistory(); 
     fetchPlanSettings();
     fetchTrainingPlan();
+    fetchRunStatuses();
     fetchLiveQuestState();
     if (isAuthenticated) recalculate();
     // Restore tab bar when leaving the Run screen
     return () => {
       setTabBarVisible(true);
     };
-  }, [fetchHistory, fetchPlanSettings, fetchTrainingPlan, fetchLiveQuestState, setTabBarVisible, isAuthenticated, recalculate]));
+  }, [fetchHistory, fetchPlanSettings, fetchTrainingPlan, fetchRunStatuses, fetchLiveQuestState, setTabBarVisible, isAuthenticated, recalculate]));
 
   useEffect(() => {
     if (!isFocused) {
@@ -240,7 +299,7 @@ export default function RunScreen() {
     setTabBarVisible(!isImmersive);
     Animated.parallel([
       Animated.timing(mapHeight, {
-        toValue: isImmersive ? height : height * 0.45,
+        toValue: isImmersive ? height : height * 0.28,
         duration: 500,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: false,
@@ -254,42 +313,6 @@ export default function RunScreen() {
     ]).start();
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
   }, [isFocused, setTabBarVisible, state]);
-
-  const startRun = async () => {
-    if (runInfo.type === 'TODAY') {
-      setTabBarVisible(false);
-      const runMeta = getRunMeta(runInfo.runType);
-      if (runMeta.launchMode === 'interval') {
-        router.push({
-          pathname: getIntervalWorkoutRouteFromTemplateId(runMeta.templateId),
-          params: {
-            sessionId: runInfo.sessionId || '',
-            source: 'plan',
-            distanceKm: String(runInfo.target || 0),
-            weekContext: `Week ${currentWeek}`,
-          }
-        });
-        return;
-      }
-
-      // Default to standard runscreen
-      router.push({
-        pathname: '/runs/runscreen',
-        params: {
-          sessionId: runInfo.sessionId || '',
-          templateId: runMeta.templateId,
-          distanceKm: String(runInfo.target || 5),
-          weekContext: `Week ${currentWeek}`
-        }
-      });
-      return;
-    }
-    setTabBarVisible(false);
-    const started = await originalStartRun();
-    if (!started) {
-      setTabBarVisible(true);
-    }
-  };
 
   const formatDuration = (s: number) => {
     const m = Math.floor(s / 60);
@@ -367,6 +390,135 @@ export default function RunScreen() {
     return { type: 'RECOVERY', label: 'Rest Day', target: 0, title: 'REST DAY', dayIdx: null };
   }, [projectedDays, todayIdx, sessionMapByDay]);
 
+  const weekSchedule = useMemo(() => {
+    const today = new Date();
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - todayIdx);
+
+    return projectedDays
+      .filter((day) => day.type === 'RUN')
+      .map((day) => {
+        const date = new Date(monday);
+        date.setDate(monday.getDate() + day.dayIdx);
+        const dayKey = formatDayKey(date);
+        const status = runStatuses[dayKey];
+        const session = sessionMapByDay[day.dayIdx];
+        const targetKm = session?.targetKm || day.targetKm || 0;
+        const isToday = day.dayIdx === todayIdx;
+        const isPast = day.dayIdx < todayIdx;
+
+        let scheduleStatus: 'completed' | 'missed' | 'today' | 'upcoming' | null = null;
+        if (status?.runStatus === 'COMPLETED') scheduleStatus = 'completed';
+        else if (status?.runStatus === 'MISSED') scheduleStatus = 'missed';
+        else if (isToday) scheduleStatus = 'today';
+        else if (!isPast) scheduleStatus = 'upcoming';
+
+        return {
+          dayIdx: day.dayIdx,
+          name: day.name,
+          dateNum: date.getDate(),
+          month: MONTH_ABBR[date.getMonth()],
+          dayKey,
+          runType: stripEmojis(day.runType || 'Run'),
+          targetKm,
+          isToday,
+          scheduleStatus,
+          sessionId: session?.id || null,
+        };
+      });
+  }, [projectedDays, sessionMapByDay, runStatuses, todayIdx]);
+
+  const weekPlannedKm = useMemo(() => {
+    return weekSchedule.reduce((sum, day) => sum + day.targetKm, 0);
+  }, [weekSchedule]);
+
+  const startScheduleRun = useCallback((item: Pick<ScheduleRunItem, 'runType' | 'targetKm' | 'sessionId'>) => {
+    setShowRunDetails(false);
+    setTabBarVisible(false);
+    const runMeta = getRunMeta(item.runType);
+    if (runMeta.launchMode === 'interval') {
+      router.push({
+        pathname: getIntervalWorkoutRouteFromTemplateId(runMeta.templateId),
+        params: {
+          sessionId: item.sessionId || '',
+          source: 'plan',
+          distanceKm: String(item.targetKm || 0),
+          weekContext: `Week ${currentWeek}`,
+        },
+      });
+      return;
+    }
+
+    router.push({
+      pathname: '/runs/runscreen',
+      params: {
+        sessionId: item.sessionId || '',
+        templateId: runMeta.templateId,
+        runType: item.runType,
+        distanceKm: String(item.targetKm || 5),
+        weekContext: `Week ${currentWeek}`,
+      },
+    });
+  }, [router, currentWeek, setTabBarVisible]);
+
+  const openRunDetails = useCallback((item: ScheduleRunItem) => {
+    if (item.runType === GOAL_PRACTICE_RUN_TYPE) {
+      startScheduleRun(item);
+      return;
+    }
+    setSelectedScheduleRun(item);
+    setShowRunDetails(true);
+  }, [startScheduleRun]);
+
+  const startQuickFreeRun = useCallback(() => {
+    setTabBarVisible(false);
+    router.push({
+      pathname: '/runs/runscreen',
+      params: {
+        templateId: 'freeform',
+        distanceKm: '5.0',
+        weekContext: 'FREE RUN',
+      },
+    });
+  }, [router, setTabBarVisible]);
+
+  const startRun = async () => {
+    if (runInfo.type === 'TODAY') {
+      const todayItem = weekSchedule.find((entry) => entry.isToday);
+      if (todayItem) {
+        openRunDetails(todayItem);
+        return;
+      }
+
+      if (runInfo.runType === GOAL_PRACTICE_RUN_TYPE) {
+        startScheduleRun({
+          runType: runInfo.runType || 'Run',
+          targetKm: runInfo.target,
+          sessionId: runInfo.sessionId,
+        });
+        return;
+      }
+
+      const dayIdx = runInfo.dayIdx ?? todayIdx;
+      const today = new Date();
+      openRunDetails({
+        dayIdx,
+        name: dayNames[dayIdx],
+        dateNum: today.getDate(),
+        month: MONTH_ABBR[today.getMonth()],
+        dayKey: formatDayKey(today),
+        runType: stripEmojis(runInfo.runType || 'Run'),
+        targetKm: runInfo.target,
+        isToday: true,
+        scheduleStatus: 'today',
+        sessionId: runInfo.sessionId,
+      });
+      return;
+    }
+
+    startQuickFreeRun();
+  };
+
   const liveQuest = useMemo(() => {
     const longestPlannedKm = projectedDays.reduce((max: number, day: any) => {
       if (day?.type !== 'RUN') return max;
@@ -392,11 +544,11 @@ export default function RunScreen() {
       id: weekStart.toISOString().slice(0, 10),
       title: `Run ${requiredKm}km this week`,
       description: liveQuestRedeemed
-        ? 'Reward claimed.'
+        ? 'Complete more quests to earn additional points.'
         : completed
-          ? 'Ready to claim.'
-          : `${requiredKm}km run to unlock reward.`,
-      rewardLabel: '+100 PTS',
+          ? 'Complete this quest to earn additional points.'
+          : 'Complete this quest to earn additional points.',
+      pointsReward: 100,
     };
   }, [projectedDays, allRuns, liveQuestRedeemed]);
 
@@ -455,9 +607,22 @@ export default function RunScreen() {
       {!isImmersive && (
         <SafeAreaView style={styles.floatingHeader}>
           <View style={styles.glassHeader}>
-            <View>
-              <Text style={styles.headerLabel}>{runInfo.title} • {runInfo.dayIdx == null ? formatDate(new Date()) : formatDate(getDateForDayIdx(runInfo.dayIdx))}</Text>
-              <Text style={styles.headerValue}>{runInfo.label}</Text>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.headerLabel}>
+                {runInfo.type === 'TODAY' ? "TODAY'S RUN" : runInfo.title}
+                {' • '}
+                {runInfo.dayIdx == null ? formatDate(new Date()) : formatDate(getDateForDayIdx(runInfo.dayIdx))}
+              </Text>
+              <View style={styles.headerTitleRow}>
+                <Text style={styles.headerValue} numberOfLines={1}>
+                  {runInfo.type === 'RECOVERY' ? runInfo.label : runInfo.label.replace(' •', ' ·')}
+                </Text>
+                {runInfo.type === 'TODAY' && (
+                  <View style={styles.headerTodayBadge}>
+                    <Text style={styles.headerTodayBadgeText}>TODAY</Text>
+                  </View>
+                )}
+              </View>
             </View>
             <TouchableOpacity style={styles.allRunsBtn} onPress={() => router.push('/runs/allruns')}>
               <Text style={styles.allRunsBtnText}>ALL RUNS</Text>
@@ -538,6 +703,72 @@ export default function RunScreen() {
             </View>
 
             <View style={styles.dashboardContent}>
+              {/* RUN SCHEDULE */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <View>
+                    <Text style={styles.sectionTitle}>RUN SCHEDULE</Text>
+                    <Text style={styles.weekSubLabel}>
+                      Week {currentWeek}
+                      {weekPlannedKm > 0 ? ` • ${weekPlannedKm.toFixed(1)} km planned` : ''}
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => router.push('/Plans')}>
+                    <Text style={styles.seeAll}>FULL PLAN</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.activityLog}>
+                  {weekSchedule.length === 0 ? (
+                    <Text style={styles.statusMsg}>No runs scheduled this week.</Text>
+                  ) : (
+                    weekSchedule.map((item) => (
+                      <TouchableOpacity
+                        key={item.dayKey}
+                        style={[styles.activityItem, item.isToday && styles.scheduleItemToday]}
+                        activeOpacity={0.85}
+                        onPress={() => openRunDetails(item)}
+                      >
+                        <View style={[styles.dateBadge, item.isToday && styles.dateBadgeToday]}>
+                          <Text style={[styles.dateDay, item.isToday && styles.dateDayToday]}>
+                            {item.dateNum}
+                          </Text>
+                          <Text style={styles.dateMonth}>{item.month.toUpperCase()}</Text>
+                        </View>
+
+                        <View style={styles.activityDetails}>
+                          <View style={styles.scheduleTitleRow}>
+                            <Text style={styles.activityTitle} numberOfLines={1}>
+                              {item.runType}
+                            </Text>
+                            {item.isToday && (
+                              <View style={styles.scheduleTodayBadge}>
+                                <Text style={styles.scheduleTodayBadgeText}>TODAY</Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text
+                            style={[
+                              styles.activitySub,
+                              item.scheduleStatus === 'completed' && styles.scheduleSubDone,
+                              item.scheduleStatus === 'missed' && styles.scheduleSubMissed,
+                            ]}
+                          >
+                            {item.scheduleStatus === 'completed'
+                              ? 'Completed'
+                              : item.scheduleStatus === 'missed'
+                                ? 'Missed'
+                                : `${item.name} · ${item.targetKm > 0 ? `${item.targetKm.toFixed(1)} km` : 'Tap for details'}`}
+                          </Text>
+                        </View>
+
+                        <ChevronRight size={18} color={THEME.textMuted} />
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              </View>
+
               {/* 1. DAILY STATS */}
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
@@ -601,15 +832,18 @@ export default function RunScreen() {
                     >
                       <View style={styles.liveQuestTopRow}>
                         <View style={styles.liveQuestBadge}>
-                          <Zap size={18} color={THEME.white} fill={THEME.white} />
+                          <Award size={18} color={THEME.white} />
                         </View>
                         <View style={styles.questInfo}>
                           <Text style={styles.liveQuestEyebrow}>Weekly Quest</Text>
                           <Text style={styles.questTitle}>{liveQuest.title}</Text>
                         </View>
                         <View style={styles.rewardTag}>
-                          <Text style={styles.rewardText}>{liveQuest.rewardLabel}</Text>
+                          <Heart size={12} color={THEME.primary} fill={THEME.primary} />
+                          <Text style={styles.rewardText}>{liveQuest.pointsReward}</Text>
+                          <Text style={styles.rewardUnit}>pts</Text>
                         </View>
+                        <ChevronRight size={20} color={THEME.textMuted} />
                       </View>
                       <Text style={styles.questDesc}>{liveQuest.description}</Text>
                     </TouchableOpacity>
@@ -651,6 +885,18 @@ export default function RunScreen() {
           </View>
         )}
       </ScrollView>
+
+      <RunDetailsModal
+        visible={showRunDetails && selectedScheduleRun !== null}
+        runType={selectedScheduleRun?.runType ?? null}
+        runKm={selectedScheduleRun?.targetKm ?? 0}
+        onClose={() => setShowRunDetails(false)}
+        onStart={() => {
+          if (selectedScheduleRun) {
+            startScheduleRun(selectedScheduleRun);
+          }
+        }}
+      />
 
       {/* FINISHED SUMMARY */}
       {state === 'finished' && (
@@ -698,7 +944,25 @@ const styles = StyleSheet.create({
   },
   immersiveHeader: { backgroundColor: 'rgba(26, 28, 30, 0.85)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   headerLabel: { fontSize: 11, fontWeight: '800', color: THEME.textMuted, letterSpacing: 1 },
-  headerValue: { fontSize: 20, fontWeight: '900', color: THEME.text, marginTop: 3 },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 3,
+  },
+  headerValue: { fontSize: 20, fontWeight: '900', color: THEME.text, flexShrink: 1 },
+  headerTodayBadge: {
+    backgroundColor: THEME.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  headerTodayBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: THEME.white,
+    letterSpacing: 0.8,
+  },
   allRunsBtn: { 
     paddingHorizontal: 16, 
     paddingVertical: 8, 
@@ -753,10 +1017,53 @@ const styles = StyleSheet.create({
   startBtnContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   startBtnText: { color: THEME.white, fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
 
-  dashboardContent: { paddingHorizontal: 24, paddingTop: 60 },
+  dashboardContent: { paddingHorizontal: 24, paddingTop: 44 },
   section: { marginBottom: 40 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   sectionTitle: { fontSize: 13, fontWeight: '900', color: THEME.textMuted, letterSpacing: 1, textTransform: 'uppercase' },
+  weekSubLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: THEME.textMuted,
+    marginTop: 4,
+  },
+
+  scheduleItemToday: {
+    borderColor: 'rgba(255, 71, 87, 0.25)',
+    backgroundColor: '#FFFBFB',
+  },
+  dateBadgeToday: {
+    backgroundColor: THEME.primaryTint,
+  },
+  dateDayToday: {
+    color: THEME.primary,
+  },
+  scheduleTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  scheduleTodayBadge: {
+    backgroundColor: THEME.primary,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 5,
+  },
+  scheduleTodayBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: THEME.white,
+    letterSpacing: 0.6,
+  },
+  scheduleSubDone: {
+    color: '#16A34A',
+    fontWeight: '700',
+  },
+  scheduleSubMissed: {
+    color: '#EF4444',
+    fontWeight: '700',
+  },
 
   statGrid: { 
     flexDirection: 'row', 
@@ -809,7 +1116,7 @@ const styles = StyleSheet.create({
   liveQuestTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 12,
   },
   liveQuestBadge: {
     width: 42,
@@ -835,13 +1142,17 @@ const styles = StyleSheet.create({
   questTitle: { fontSize: 16, fontWeight: '800', color: THEME.text },
   questDesc: { fontSize: 13, color: THEME.textMuted, lineHeight: 19 },
   rewardTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     backgroundColor: THEME.primaryTint,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
     alignSelf: 'flex-start',
   },
   rewardText: { fontSize: 12, fontWeight: '900', color: THEME.primary },
+  rewardUnit: { fontSize: 10, fontWeight: '800', color: THEME.primary, opacity: 0.85 },
 
   activityLog: { gap: 14 },
   activityItem: { 

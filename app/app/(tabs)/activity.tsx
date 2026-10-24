@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useState, useRef } from 'react';
 import {
   StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView,
   StatusBar, Dimensions, Modal, TextInput, ActivityIndicator,
-  Alert, Animated, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Image, LayoutAnimation, UIManager
+  Alert, Animated, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Image, LayoutAnimation, UIManager, Pressable
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
-  X, Cookie, Clock, Trash2, User, Camera, Check, RotateCcw, Scale,
+  X, Cookie, Clock, Trash2, Camera, Check, RotateCcw, Scale,
   ChevronRight, Droplets, ScanLine, Keyboard as KeyboardIcon,
   Zap, Info, TrendingUp, Plus, Flame, Coffee, Utensils, Moon, ChevronDown, Activity, BarChart2, Scan, Heart
 } from 'lucide-react-native';
@@ -22,6 +23,7 @@ import { API_BASE_URL } from '../../config/api';
 import { useAuth } from '@/src/auth/authContext';
 import { usePoints } from '../../hooks/usePoints';
 import { useWaterSync } from '../../hooks/useWaterSync';
+import { useWeightLog, type WeightHistoryPoint } from '../../hooks/useWeightLog';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { loadRuns } from '@/lib/run-storage';
@@ -65,7 +67,6 @@ const COLORS = {
 };
 
 type MealType = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACK';
-type WeightHistoryPoint = { weightKg: number; loggedAt: string };
 
 const parseMealTypeParam = (value: unknown): MealType | null => {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -101,12 +102,15 @@ const MacroTag = ({ label, value, unit, color, icon }: any) => (
   </View>
 );
 
+const KCAL_CHART_HEIGHT = 64;
+const KCAL_LABEL_ROW_HEIGHT = 20;
+
 const WeeklyBarGraph = ({ data, target, dayKeys }: { data: number[], target: number, dayKeys?: string[] }) => {
-  const maxVal = Math.max(...data, target * 1.2);
-  const chartHeight = 64; 
+  const maxVal = Math.max(...data, target * 1.2, 1);
   const [chartWidth, setChartWidth] = useState(0);
   const weeklyAverage = data.length ? Math.round(data.reduce((sum, value) => sum + value, 0) / data.length) : 0;
   const fallbackDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+
   const todayIdx = React.useMemo(() => {
     if (dayKeys?.length === 7) {
       const today = new Date();
@@ -117,7 +121,7 @@ const WeeklyBarGraph = ({ data, target, dayKeys }: { data: number[], target: num
       const idx = dayKeys.indexOf(todayKey);
       if (idx >= 0) return idx;
     }
-    return (new Date().getDay() + 6) % 7; // fallback MON=0, SUN=6
+    return (new Date().getDay() + 6) % 7;
   }, [dayKeys]);
 
   const dayLabels = React.useMemo(() => {
@@ -133,32 +137,56 @@ const WeeklyBarGraph = ({ data, target, dayKeys }: { data: number[], target: num
     return fallbackDays;
   }, [dayKeys]);
 
-  const linePoints = React.useMemo(() => {
-    if (chartWidth <= 0 || data.length === 0) return { path: '' };
-    const denom = Math.max(1, data.length - 1);
-    const points = data.map((val, i) => {
-      const x = data.length === 1 ? chartWidth / 2 : (i / denom) * chartWidth;
-      const y = chartHeight - (Math.max(0, val) / maxVal) * chartHeight;
-      return { x, y: Math.max(2, Math.min(chartHeight - 2, y)) };
-    });
-    const path = points.map((point, i) => `${i === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
-    return { path };
-  }, [chartHeight, chartWidth, data, maxVal]);
+  const [selectedIdx, setSelectedIdx] = useState(todayIdx);
+
+  useEffect(() => {
+    setSelectedIdx(todayIdx);
+  }, [todayIdx]);
+
+  const selectedVal = selectedIdx >= 0 && selectedIdx < data.length ? data[selectedIdx] : 0;
+  const selectedDelta = selectedVal - target;
+  const hasAnyData = data.some((value) => value > 0);
+  const targetLineBottom = KCAL_LABEL_ROW_HEIGHT + (target / maxVal) * KCAL_CHART_HEIGHT;
+
+  const handleSelectDay = (index: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    LayoutAnimation.configureNext(LayoutAnimation.create(180, 'easeInEaseOut', 'opacity'));
+    setSelectedIdx(index);
+  };
 
   return (
     <View style={styles.premiumGraphContainer}>
       <View style={styles.kcalGraphHeader}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.kcalGraphEyebrow}>Weekly kcal</Text>
-          <Text style={styles.kcalGraphTitle}>Daily intake vs target</Text>
+          <Text style={styles.kcalGraphTitle}>
+            {hasAnyData ? 'Tap a day for details' : 'Log food to start tracking'}
+          </Text>
         </View>
-        <View style={styles.kcalGraphMeta}>
-          <Text style={styles.kcalGraphMetaLabel}>Avg</Text>
-          <Text style={styles.kcalGraphMetaValue}>{weeklyAverage}</Text>
+        <View style={[
+          styles.kcalGraphMeta,
+          selectedVal > target && styles.kcalGraphMetaOver,
+          selectedVal > 0 && selectedVal <= target && styles.kcalGraphMetaUnder,
+        ]}>
+          <Text style={styles.kcalGraphMetaLabel}>
+            {dayLabels[selectedIdx]}{selectedIdx === todayIdx ? ' · Today' : ''}
+          </Text>
+          <Text style={styles.kcalGraphMetaValue}>{selectedVal.toLocaleString()}</Text>
+          {selectedVal > 0 ? (
+            <Text style={[
+              styles.kcalGraphMetaDelta,
+              selectedDelta > 0 ? styles.kcalGraphMetaDeltaOver : styles.kcalGraphMetaDeltaUnder,
+            ]}>
+              {selectedDelta > 0 ? `+${selectedDelta}` : selectedDelta} vs target
+            </Text>
+          ) : (
+            <Text style={styles.kcalGraphMetaDelta}>No data logged</Text>
+          )}
         </View>
       </View>
+
       <View
-        style={[styles.graphBody, { alignItems: 'flex-end', marginTop: 15 }]}
+        style={[styles.kcalGraphBody, { height: KCAL_CHART_HEIGHT + KCAL_LABEL_ROW_HEIGHT + 28 }]}
         onLayout={(event) => {
           const nextWidth = event.nativeEvent.layout.width;
           if (nextWidth && nextWidth !== chartWidth) {
@@ -166,66 +194,99 @@ const WeeklyBarGraph = ({ data, target, dayKeys }: { data: number[], target: num
           }
         }}
       >
-        {/* Target Line */}
-        <View style={[styles.targetLine, { bottom: (target / maxVal) * chartHeight + 18 }]}>
+        <View style={[styles.targetLine, { bottom: targetLineBottom }]}>
           <View style={styles.targetLineLabel}>
-             <Text style={styles.targetLineText}>{target}</Text>
+            <Text style={styles.targetLineText}>{target}</Text>
           </View>
         </View>
 
-        {linePoints.path ? (
-          <Svg pointerEvents="none" style={styles.weeklyLineOverlay} width={chartWidth} height={chartHeight}>
-            <SvgPath
-              d={linePoints.path}
-              stroke={COLORS.dark}
-              strokeWidth={2.2}
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              opacity={0.6}
+        {chartWidth > 0 ? (
+          <Svg
+            pointerEvents="none"
+            style={[styles.kcalChartBaseline, { bottom: KCAL_LABEL_ROW_HEIGHT }]}
+            width={chartWidth}
+            height={KCAL_CHART_HEIGHT}
+          >
+            <SvgLine
+              x1={0}
+              y1={KCAL_CHART_HEIGHT}
+              x2={chartWidth}
+              y2={KCAL_CHART_HEIGHT}
+              stroke="rgba(15, 23, 42, 0.1)"
+              strokeWidth={1}
             />
           </Svg>
         ) : null}
-        
+
         <View style={styles.barsRowPremium}>
           {data.map((val, i) => {
             const isToday = i === todayIdx;
+            const isSelected = i === selectedIdx;
             const isOverTarget = val > target;
-            const barHeight = (val / maxVal) * chartHeight;
+            const barHeight = Math.max((val / maxVal) * KCAL_CHART_HEIGHT, val > 0 ? 4 : 0);
 
             return (
-              <View key={i} style={styles.barColPremium}>
+              <Pressable
+                key={i}
+                style={styles.barColPremium}
+                onPress={() => handleSelectDay(i)}
+                accessibilityRole="button"
+                accessibilityLabel={`${dayLabels[i]}, ${val} calories`}
+              >
                 <View style={styles.barContainerPremium}>
-                  {val > 0 && (
-                    <LinearGradient
-                      colors={
-                        isOverTarget
-                          ? ['#EF4444', '#FCA5A5']
-                          : isToday
-                            ? [COLORS.accent, '#FF9B9B']
-                            : ['#FB7185', '#FDBA74']
-                      }
-                      style={[
-                        styles.barFillPremium,
-                        isOverTarget && styles.barFillWarning,
-                        { height: Math.max(barHeight, 4) },
-                      ]}
-                    />
+                  {isSelected && val > 0 ? (
+                    <View style={styles.kcalBarTooltip}>
+                      <Text style={styles.kcalBarTooltipText}>{val.toLocaleString()}</Text>
+                    </View>
+                  ) : null}
+                  {val > 0 ? (
+                    <View style={[styles.kcalBarTrack, isSelected && styles.kcalBarTrackSelected]}>
+                      <LinearGradient
+                        colors={
+                          isOverTarget
+                            ? ['#EF4444', '#FCA5A5']
+                            : isToday || isSelected
+                              ? [COLORS.accent, '#FF9B9B']
+                              : ['#FB7185', '#FDBA74']
+                        }
+                        style={[
+                          styles.barFillPremium,
+                          isOverTarget && styles.barFillWarning,
+                          isSelected && styles.barFillSelected,
+                          { height: barHeight },
+                        ]}
+                      />
+                    </View>
+                  ) : (
+                    <View style={styles.kcalBarEmptySlot}>
+                      <View style={[
+                        styles.kcalBarEmptyDot,
+                        isSelected && styles.kcalBarEmptyDotSelected,
+                        isToday && styles.kcalBarEmptyDotToday,
+                      ]} />
+                    </View>
                   )}
                 </View>
-                <Text style={[styles.barDayTextPremium, isToday && styles.todayDayText]}>
+                <Text style={[
+                  styles.barDayTextPremium,
+                  isToday && styles.todayDayText,
+                  isSelected && styles.selectedDayText,
+                ]}>
                   {dayLabels[i]}
                 </Text>
-              </View>
+              </Pressable>
             );
           })}
         </View>
       </View>
+
+      <Text style={styles.kcalGraphFooterHint}>Weekly avg {weeklyAverage.toLocaleString()} kcal · target {target.toLocaleString()}</Text>
     </View>
   );
 };
 
 const WeightHistoryGraph = ({ history }: { history: WeightHistoryPoint[] }) => {
+  const [plotWidth, setPlotWidth] = React.useState(0);
   const { sortedPoints, minVal, maxVal, weightChange, firstPoint, lastPoint } = React.useMemo(() => {
     if (!history || history.length === 0) return { sortedPoints: [], minVal: 0, maxVal: 0, weightChange: 0, firstPoint: null, lastPoint: null };
     const sorted = [...history].sort((a, b) => new Date(a.loggedAt).getTime() - new Date(b.loggedAt).getTime());
@@ -267,7 +328,7 @@ const WeightHistoryGraph = ({ history }: { history: WeightHistoryPoint[] }) => {
   }
 
   const chartHeight = 120;
-  const chartWidth = width - 96; // Adjusting for container padding
+  const yAxisWidth = 38;
   
   const range = Math.max(1, maxVal - minVal);
   const pad = range * 0.25;
@@ -277,12 +338,16 @@ const WeightHistoryGraph = ({ history }: { history: WeightHistoryPoint[] }) => {
   const HORIZ_PAD = 12;
   const toX = (idx: number) => {
     const denom = Math.max(1, sortedPoints.length - 1);
-    return HORIZ_PAD + (idx / denom) * (chartWidth - HORIZ_PAD * 2);
+    return HORIZ_PAD + (idx / denom) * (Math.max(plotWidth, 1) - HORIZ_PAD * 2);
   };
   const toY = (val: number) => {
     const ratio = (val - minY) / (maxY - minY);
     return (1 - ratio) * chartHeight;
   };
+
+  const yTicks = Array.from(
+    new Set([maxY, (maxY + minY) / 2, minY].map((value) => Number(value.toFixed(1)))),
+  ).sort((a, b) => b - a);
 
   const linePath = sortedPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${toX(i)} ${toY(p.weightKg)}`).join(' ');
   const areaPath = sortedPoints.length > 1 
@@ -317,52 +382,76 @@ const WeightHistoryGraph = ({ history }: { history: WeightHistoryPoint[] }) => {
         </View>
       </View>
 
-      <View style={{ marginTop: 10 }}>
-        <Svg width={chartWidth} height={chartHeight}>
-          <Defs>
-            <SvgGradient id="weightGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor={COLORS.accent} stopOpacity="0.2" />
-              <Stop offset="1" stopColor={COLORS.accent} stopOpacity="0.02" />
-            </SvgGradient>
-          </Defs>
-
-          {[0, 0.5, 1].map((t, i) => (
-            <SvgLine
-              key={i}
-              x1={0}
-              y1={t * chartHeight}
-              x2={chartWidth}
-              y2={t * chartHeight}
-              stroke="rgba(0,0,0,0.04)"
-              strokeDasharray="4 4"
-            />
+      <View style={styles.weightGraphPlotRow}>
+        <View style={[styles.weightGraphYAxis, { width: yAxisWidth, height: chartHeight }]}>
+          {yTicks.map((tick) => (
+            <Text
+              key={tick}
+              style={[styles.weightGraphYLabel, { top: toY(tick) - 7 }]}
+            >
+              {tick}
+            </Text>
           ))}
+        </View>
 
-          {sortedPoints.length > 1 && (
-            <>
-              <SvgPath d={areaPath} fill="url(#weightGrad)" />
-              <SvgPath d={linePath} stroke={COLORS.accent} strokeWidth={4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          )}
+        <View
+          style={styles.weightGraphPlot}
+          onLayout={(event) => {
+            const nextWidth = event.nativeEvent.layout.width;
+            if (nextWidth && nextWidth !== plotWidth) {
+              setPlotWidth(nextWidth);
+            }
+          }}
+        >
+          {plotWidth > 0 ? (
+            <Svg width={plotWidth} height={chartHeight}>
+              <Defs>
+                <SvgGradient id="weightGrad" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0" stopColor={COLORS.accent} stopOpacity="0.2" />
+                  <Stop offset="1" stopColor={COLORS.accent} stopOpacity="0.02" />
+                </SvgGradient>
+              </Defs>
 
-          {sortedPoints.map((p, i) => {
-            const isLast = i === sortedPoints.length - 1;
-            return (
-              <SvgCircle
-                key={i}
-                cx={toX(i)}
-                cy={toY(p.weightKg)}
-                r={isLast ? 6 : 4}
-                fill={isLast ? COLORS.accent : COLORS.white}
-                stroke={COLORS.accent}
-                strokeWidth={isLast ? 3 : 2}
-              />
-            );
-          })}
-        </Svg>
-        <View style={styles.graphFooterRow}>
-          <Text style={styles.graphFooterText}>{fmtDate(firstPoint?.loggedAt || '')}</Text>
-          <Text style={styles.graphFooterText}>{fmtDate(lastPoint?.loggedAt || '')}</Text>
+              {[0, 0.5, 1].map((t, i) => (
+                <SvgLine
+                  key={i}
+                  x1={0}
+                  y1={t * chartHeight}
+                  x2={plotWidth}
+                  y2={t * chartHeight}
+                  stroke="rgba(0,0,0,0.04)"
+                  strokeDasharray="4 4"
+                />
+              ))}
+
+              {sortedPoints.length > 1 && (
+                <>
+                  <SvgPath d={areaPath} fill="url(#weightGrad)" />
+                  <SvgPath d={linePath} stroke={COLORS.accent} strokeWidth={4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                </>
+              )}
+
+              {sortedPoints.map((p, i) => {
+                const isLast = i === sortedPoints.length - 1;
+                return (
+                  <SvgCircle
+                    key={i}
+                    cx={toX(i)}
+                    cy={toY(p.weightKg)}
+                    r={isLast ? 6 : 4}
+                    fill={isLast ? COLORS.accent : COLORS.white}
+                    stroke={COLORS.accent}
+                    strokeWidth={isLast ? 3 : 2}
+                  />
+                );
+              })}
+            </Svg>
+          ) : null}
+
+          <View style={styles.graphFooterRow}>
+            <Text style={styles.graphFooterText}>{fmtDate(firstPoint?.loggedAt || '')}</Text>
+            <Text style={styles.graphFooterText}>{fmtDate(lastPoint?.loggedAt || '')}</Text>
+          </View>
         </View>
       </View>
     </View>
@@ -429,9 +518,26 @@ const MealGridSection = ({ type, title, icon: Icon, items, color, onAdd, onDelet
 
 export default function TodayActivityPage() {
   const { authFetch, isAuthenticated, accessToken, user } = useAuth();
+  const {
+    currentWeightKg: currentWeight,
+    weightHistory,
+    logWeight,
+  } = useWeightLog({ authFetch, isAuthenticated });
   const router = useRouter();
-  const { balance: points } = usePoints({ accessToken });
+  const { balance: points, refetch: refetchPoints } = usePoints({ accessToken });
   const [activeTab, setActiveTab] = useState<'NUTRITION' | 'WEIGHT' | 'RUNNING'>('NUTRITION');
+  const activityScrollRef = useRef<ScrollView>(null);
+  const waterSectionRef = useRef<View>(null);
+
+  const scrollToWaterTracking = useCallback(() => {
+    requestAnimationFrame(() => {
+      waterSectionRef.current?.measureLayout(
+        activityScrollRef.current as any,
+        (_x, y) => activityScrollRef.current?.scrollTo({ y: Math.max(0, y - 20), animated: true }),
+        () => {}
+      );
+    });
+  }, []);
   
   // Data State
   const [mealSummary, setMealSummary] = useState<any>({ BREAKFAST: [], LUNCH: [], DINNER: [], SNACK: [] });
@@ -439,8 +545,6 @@ export default function TodayActivityPage() {
   const [todayGoals, setTodayGoals] = useState({ calories: 2000, protein: 150, carbs: 250, fat: 70, steps: 10000, water: 8 });
   const [weeklyHistory, setWeeklyHistory] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
   const [weeklyDayKeys, setWeeklyDayKeys] = useState<string[]>([]);
-  const [currentWeight, setCurrentWeight] = useState<number | null>(null);
-  const [weightHistory, setWeightHistory] = useState<WeightHistoryPoint[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Modals
@@ -765,11 +869,16 @@ export default function TodayActivityPage() {
       }
       router.setParams({ action: undefined, mealType: undefined, t: undefined });
     }
+    if (action === 'water') {
+      setActiveTab('NUTRITION');
+      setTimeout(scrollToWaterTracking, 250);
+      router.setParams({ action: undefined });
+    }
     if (tab === 'RUNNING' || tab === 'WEIGHT' || tab === 'NUTRITION') {
       setActiveTab(tab as any);
       router.setParams({ tab: undefined });
     }
-  }, [params.action, params.mealType, params.tab, openLogFoodWithAutoMealType, openMealLogger, router]);
+  }, [params.action, params.mealType, params.tab, openLogFoodWithAutoMealType, openMealLogger, router, scrollToWaterTracking]);
 
   useEffect(() => {
     NetInfo.fetch().then((state) => {
@@ -792,9 +901,8 @@ export default function TodayActivityPage() {
     await loadRunStats();
     if (!isAuthenticated) return;
     try {
-      const [mealResp, weightResp, historyResp, weekResp] = await Promise.all([
+      const [mealResp, historyResp, weekResp] = await Promise.all([
         authFetch(`${API_BASE_URL}/nutrition/meals/today`),
-        authFetch(`${API_BASE_URL}/weight`),
         authFetch(`${API_BASE_URL}/summary/nutrition-history`),
         authFetch(`${API_BASE_URL}/summary/week`)
       ]);
@@ -868,11 +976,6 @@ export default function TodayActivityPage() {
         }
       }
 
-      if (weightResp.ok) {
-        const json = await weightResp.json();
-        setCurrentWeight(json.currentWeight);
-        setWeightHistory(Array.isArray(json.history) ? json.history : []);
-      }
     } catch (e) {
       console.error('Activity Data Fetch Error:', e);
     }
@@ -884,7 +987,8 @@ export default function TodayActivityPage() {
     useCallback(() => {
       fetchData();
       reloadWater();
-    }, [fetchData, reloadWater])
+      refetchPoints();
+    }, [fetchData, reloadWater, refetchPoints])
   );
 
   const handleDelete = async (mealId: string, itemId: string, itemName?: string, itemCalories?: number) => {
@@ -975,13 +1079,8 @@ export default function TodayActivityPage() {
     const weight = parseFloat(weightInput);
     if (isNaN(weight) || weight <= 0) return;
     try {
-      await authFetch(`${API_BASE_URL}/weight`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ weightKg: weight }),
-      });
+      await logWeight(weight);
       setWeightModalOpen(false);
-      fetchData();
     } catch (e) { Alert.alert('Error', 'Failed to log weight'); }
   };
 
@@ -1115,7 +1214,7 @@ export default function TodayActivityPage() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: COLORS.bg }}>
       <StatusBar barStyle="light-content" />
       
-      <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={activityScrollRef} contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
         
         {/* SOLID HERO SECTION WITH LOG FOOD BUTTON */}
         <View style={styles.heroWrapper}>
@@ -1130,9 +1229,6 @@ export default function TodayActivityPage() {
                     <Heart size={14} color="#FFF" fill="#FFF" />
                     <Text style={styles.pointsTextCombined}>{points.toLocaleString()}</Text>
                  </View>
-                 <TouchableOpacity style={styles.profileBtn}>
-                    <User size={20} color={COLORS.bgPink} />
-                 </TouchableOpacity>
                </View>
             </View>
 
@@ -1309,7 +1405,7 @@ export default function TodayActivityPage() {
             />
 
             {/* WATER SECTION */}
-            <View style={styles.waterGlassCard}>
+            <View ref={waterSectionRef} style={styles.waterGlassCard}>
                <View style={styles.waterHeader}>
                   <View style={styles.waterIconCircle}>
                      <Droplets size={24} color={COLORS.water} />
@@ -1383,17 +1479,6 @@ export default function TodayActivityPage() {
             </TouchableOpacity>
 
             <WeightHistoryGraph history={weightHistory} />
-
-            <View style={styles.runStatsGrid}>
-               <View style={styles.runStatBox}>
-                  <Text style={styles.runStatLabel}>DAILY STEPS</Text>
-                  <Text style={styles.runStatValue}>{todayGoals.steps.toLocaleString()}</Text>
-               </View>
-               <View style={styles.runStatBox}>
-                  <Text style={styles.runStatLabel}>WATER GOAL</Text>
-                  <Text style={styles.runStatValue}>{todayGoals.water}</Text>
-               </View>
-            </View>
           </View>
         )}
       </ScrollView>
@@ -1576,18 +1661,9 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     marginTop: 4,
   },
-  profileBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 14,
-    backgroundColor: COLORS.white,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   headerRightRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
   },
   pointsSection: {
     flexDirection: 'row',
@@ -1774,6 +1850,46 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     letterSpacing: -0.3,
   },
+  kcalGraphMetaOver: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  kcalGraphMetaUnder: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+  },
+  kcalGraphMetaDelta: {
+    marginTop: 2,
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 0.2,
+  },
+  kcalGraphMetaDeltaOver: {
+    color: '#EF4444',
+  },
+  kcalGraphMetaDeltaUnder: {
+    color: COLORS.success,
+  },
+  kcalGraphBody: {
+    justifyContent: 'flex-end',
+    position: 'relative',
+    width: '100%',
+    marginTop: 12,
+  },
+  kcalChartBaseline: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 0,
+  },
+  kcalGraphFooterHint: {
+    marginTop: 8,
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 0.2,
+  },
   graphHeaderPremium: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1833,28 +1949,97 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.textSub,
   },
+  weightGraphPlotRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 10,
+  },
+  weightGraphYAxis: {
+    position: 'relative',
+    paddingRight: 6,
+  },
+  weightGraphYLabel: {
+    position: 'absolute',
+    right: 0,
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.textSub,
+    fontVariant: ['tabular-nums'],
+  },
+  weightGraphPlot: {
+    flex: 1,
+    minWidth: 0,
+  },
   barsRowPremium: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
     paddingHorizontal: 0,
     width: '100%',
-  },
-  weeklyLineOverlay: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 18,
     zIndex: 2,
   },
   barColPremium: {
     alignItems: 'center',
-    width: 32,
+    flex: 1,
+    minHeight: 44,
   },
   barContainerPremium: {
-    height: 64,
+    height: KCAL_CHART_HEIGHT,
     justifyContent: 'flex-end',
     alignItems: 'center',
+    width: '100%',
+  },
+  kcalBarTrack: {
+    width: 12,
+    height: KCAL_CHART_HEIGHT,
+    borderRadius: 999,
+    backgroundColor: '#F1F5F9',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  kcalBarTrackSelected: {
+    backgroundColor: '#E2E8F0',
+    transform: [{ scaleX: 1.15 }],
+  },
+  kcalBarEmptySlot: {
+    height: KCAL_CHART_HEIGHT,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    width: '100%',
+  },
+  kcalBarEmptyDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#E2E8F0',
+    marginBottom: 1,
+  },
+  kcalBarEmptyDotSelected: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#CBD5E1',
+  },
+  kcalBarEmptyDotToday: {
+    backgroundColor: 'rgba(255, 107, 107, 0.35)',
+  },
+  kcalBarTooltip: {
+    position: 'absolute',
+    top: -2,
+    zIndex: 3,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+    minWidth: 36,
+    alignItems: 'center',
+  },
+  kcalBarTooltipText: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: COLORS.white,
+    letterSpacing: 0.2,
   },
   targetLine: {
     position: 'absolute',
@@ -1884,8 +2069,15 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   barFillPremium: {
-    width: 10,
+    width: 12,
     borderRadius: 999,
+  },
+  barFillSelected: {
+    width: 12,
+    shadowColor: COLORS.accent,
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
   barFillWarning: {
     shadowColor: '#EF4444',
@@ -1902,6 +2094,10 @@ const styles = StyleSheet.create({
   },
   todayDayText: {
     color: COLORS.accent,
+    fontWeight: '900',
+  },
+  selectedDayText: {
+    color: '#0F172A',
     fontWeight: '900',
   },
   sectionWrapper: {

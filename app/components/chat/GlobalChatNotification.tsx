@@ -6,6 +6,7 @@ import Animated, { FadeInDown, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePathname, useRouter } from 'expo-router';
 import { useChat } from '../../contexts/ChatContext';
+import { formatChatNotificationBody } from '../chat/partnerNoteShared';
 
 const COLORS = {
     coral: '#FF6B6B',
@@ -17,9 +18,12 @@ export function GlobalChatNotification() {
     const router = useRouter();
     const pathname = usePathname();
     const { unreadCount, latestMessage } = useChat();
+    const hasPendingMessage = unreadCount > 0 && latestMessage !== null;
     const [showPopup, setShowPopup] = useState(false);
-    const [currentLatestId, setCurrentLatestId] = useState<string | null>(null);
-    const isRaceScreen = pathname === '/Race' || pathname === '/(tabs)/Race';
+    const currentLatestId = useRef<string | null>(null);
+    const normalizedPathname = pathname.toLowerCase();
+    const isRaceScreen = normalizedPathname === '/race' || normalizedPathname === '/(tabs)/race';
+    const isRunTab = normalizedPathname === '/run' || normalizedPathname === '/(tabs)/run';
     const isOnboardingScreen =
         pathname === '/Onboarding' ||
         pathname === '/(tabs)/Onboarding' ||
@@ -28,6 +32,9 @@ export function GlobalChatNotification() {
     const isWelcomeScreen =
         pathname === '/welcome' ||
         pathname.startsWith('/welcome/');
+    const isPaywallScreen =
+        pathname === '/paywall' ||
+        pathname.startsWith('/paywall/');
     const isPartnerScreen =
         pathname === '/Partner' ||
         pathname === '/(tabs)/Partner' ||
@@ -54,14 +61,18 @@ export function GlobalChatNotification() {
     }, [bubbleTop, maxY, minY]);
 
     useEffect(() => {
-        console.log('[GlobalChatNotification] State update:', { unreadCount, latestId: latestMessage?.id, showPopup });
-        if (latestMessage && latestMessage.id !== currentLatestId) {
-            setCurrentLatestId(latestMessage.id);
+        if (!hasPendingMessage || !latestMessage) {
+            setShowPopup(false);
+            return;
+        }
+
+        if (latestMessage.id !== currentLatestId.current) {
+            currentLatestId.current = latestMessage.id;
             setShowPopup(true);
             const timer = setTimeout(() => setShowPopup(false), 5000);
             return () => clearTimeout(timer);
         }
-    }, [latestMessage, currentLatestId]);
+    }, [hasPendingMessage, latestMessage]);
 
     const handleNavigate = () => {
         setShowPopup(false);
@@ -103,7 +114,7 @@ export function GlobalChatNotification() {
         [bubbleTop, maxY, minY]
     );
 
-    if (isRaceScreen || isOnboardingScreen || isWelcomeScreen || isPartnerScreen || isRunScreen || isIntervalRunScreen) {
+    if (!hasPendingMessage || isRaceScreen || isRunTab || isOnboardingScreen || isWelcomeScreen || isPaywallScreen || isPartnerScreen || isRunScreen || isIntervalRunScreen) {
         return null;
     }
 
@@ -126,7 +137,9 @@ export function GlobalChatNotification() {
                         </View>
                         <View style={styles.notifContent}>
                             <Text style={styles.notifName}>{latestMessage.fromName}</Text>
-                            <Text style={styles.notifText} numberOfLines={1}>{latestMessage.content}</Text>
+                            <Text style={styles.notifText} numberOfLines={1}>
+                              {formatChatNotificationBody(latestMessage.content)}
+                            </Text>
                         </View>
                         <TouchableOpacity onPress={() => setShowPopup(false)} style={styles.closeBtn}>
                             <X size={14} color="rgba(255,255,255,0.4)" />

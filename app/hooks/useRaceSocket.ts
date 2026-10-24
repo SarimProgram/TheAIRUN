@@ -26,6 +26,7 @@ export interface PartnerPosition {
 }
 
 interface RaceInvite {
+    inviteId?: string;
     fromUserId: string;
     fromName: string;
     distance: number;
@@ -45,6 +46,7 @@ export interface UseRaceSocketResult {
     sendInvite: (distance: number) => void;
     acceptInvite: () => void;
     declineInvite: () => void;
+    requestPendingInvite: () => void;
     hydrateInvite: (invite: RaceInvite) => void;
     setDistance: (meters: number) => void;
     sendPosition: (data: { latitude: number; longitude: number; distanceCovered: number; speed: number }) => void;
@@ -84,6 +86,7 @@ export function useRaceSocket(): UseRaceSocketResult {
         socket.on('connect', () => {
             console.log('[RaceSocket] Connected');
             setIsConnected(true);
+            socket.emit('race:getPendingInvite');
         });
 
         socket.on('disconnect', () => {
@@ -171,6 +174,7 @@ export function useRaceSocket(): UseRaceSocketResult {
         if (socketRef.current && inviteFrom) {
             // Pass distance along so backend knows the race parameters
             socketRef.current.emit('race:accept', {
+                inviteId: inviteFrom.inviteId,
                 initiatorId: inviteFrom.fromUserId,
                 distance: inviteFrom.distance
             });
@@ -179,7 +183,10 @@ export function useRaceSocket(): UseRaceSocketResult {
 
     const declineInvite = useCallback(() => {
         if (socketRef.current && inviteFrom) {
-            socketRef.current.emit('race:decline', { initiatorId: inviteFrom.fromUserId });
+            socketRef.current.emit('race:decline', {
+                inviteId: inviteFrom.inviteId,
+                initiatorId: inviteFrom.fromUserId,
+            });
             setRaceState('idle');
             setInviteFrom(null);
         }
@@ -198,6 +205,10 @@ export function useRaceSocket(): UseRaceSocketResult {
             }
             return 'invited';
         });
+    }, []);
+
+    const requestPendingInvite = useCallback(() => {
+        socketRef.current?.emit('race:getPendingInvite');
     }, []);
 
     const setDistance = useCallback((meters: number) => {
@@ -257,6 +268,7 @@ export function useRaceSocket(): UseRaceSocketResult {
         sendInvite,
         acceptInvite,
         declineInvite,
+        requestPendingInvite,
         hydrateInvite,
         setDistance,
         sendPosition,

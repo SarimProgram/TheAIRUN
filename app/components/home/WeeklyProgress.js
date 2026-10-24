@@ -11,18 +11,18 @@ import {
   TouchableOpacity, 
   TextInput, 
   TouchableWithoutFeedback,
+  ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ScrollView
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Image } from 'expo-image';
-import { Trophy, Swords, Timer, Zap, Trash2, CheckCircle2, XCircle, Plus, ChevronRight, Target } from 'lucide-react-native';
+import { Trophy, Timer, Trash2, XCircle, PenLine, Crown } from 'lucide-react-native';
 import { useWeeklyProgress } from '../../hooks/useWeeklyProgress';
 import { useWager } from '../../hooks/useWager';
 import { useAuth } from '../../src/auth/authContext';
 import { API_BASE_URL } from '../../config/api';
 import { getMappedDays } from '../../utils/planProjection';
+import { getWeeklyAvatarSource, getOppositeWeeklyAvatarSource } from '../../utils/genderMascot';
 
 const { width, height } = Dimensions.get('window');
 
@@ -123,25 +123,83 @@ const isWagerExpired = (wager) => {
   return end.getTime() <= Date.now();
 };
 
+const isWalkingGoalPlan = (plan) =>
+  plan?.activityPreference === 'MOSTLY_WALKING' || plan?.trainingStyle === 'walkOnly';
+
 const WeeklyRaceSection = () => {
-  const { accessToken } = useAuth();
+  const { accessToken, user, authFetch, isAuthenticated } = useAuth();
   const { progress, partnerProgress, hasPartner, loading, refetch } = useWeeklyProgress({ accessToken });
   const { wager, overview, loading: wagerLoading, createWager, acceptWager, declineWager, removeWager, refetch: refetchWager } = useWager();
 
+  const [userGender, setUserGender] = useState(
+    typeof user?.gender === 'string' ? user.gender : null
+  );
+  const [isWalkingGoal, setIsWalkingGoal] = useState(false);
+
+  const partnerGender = partnerProgress?.gender ?? null;
+  const myAvatar = getWeeklyAvatarSource(userGender);
+  const partnerAvatar = partnerGender
+    ? getWeeklyAvatarSource(partnerGender)
+    : getOppositeWeeklyAvatarSource(userGender);
+
   const activeWager = wager && !isWagerExpired(wager) ? wager : null;
   const [timeLeft, setTimeLeft] = useState(() => formatTimeRemaining(getWeekEndTime()));
-  const [modalVisible, setModalVisible] = useState(false);
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState(null);
   const [customWager, setCustomWager] = useState('');
+  const [showCustomInput, setShowCustomInput] = useState(false);
   const [sending, setSending] = useState(false);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleData, setScheduleData] = useState({ mine: [], partner: [] });
   const [scheduleError, setScheduleError] = useState(null);
+  const [wagerPickerVisible, setWagerPickerVisible] = useState(false);
 
   // Animations
-  const modalAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (typeof user?.gender === 'string' && user.gender.trim().length > 0) {
+      setUserGender(user.gender);
+    }
+  }, [user?.gender]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let isActive = true;
+
+    const fetchProfileAndPlan = async () => {
+      try {
+        const [profileResponse, planResponse] = await Promise.all([
+          authFetch(`${API_BASE_URL}/profile`),
+          authFetch(`${API_BASE_URL}/plan`),
+        ]);
+
+        if (profileResponse.ok) {
+          const data = await profileResponse.json();
+          const nextGender = data?.user?.gender;
+          if (isActive && typeof nextGender === 'string' && nextGender.trim().length > 0) {
+            setUserGender(nextGender);
+          }
+        }
+
+        if (planResponse.ok) {
+          const data = await planResponse.json();
+          if (isActive) {
+            setIsWalkingGoal(isWalkingGoalPlan(data?.plan));
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch profile or plan:', error);
+      }
+    };
+
+    fetchProfileAndPlan();
+
+    return () => {
+      isActive = false;
+    };
+  }, [authFetch, isAuthenticated]);
 
   useEffect(() => {
     const getCountdownTarget = () => {
@@ -182,16 +240,6 @@ const WeeklyRaceSection = () => {
       return () => pulse.stop();
     }
   }, [activeWager?.status, pulseAnim]);
-
-  // Modal open/close animation
-  useEffect(() => {
-    Animated.timing(modalAnim, {
-      toValue: modalVisible ? 1 : 0,
-      duration: 300,
-      easing: Easing.out(Easing.back(1)),
-      useNativeDriver: true,
-    }).start();
-  }, [modalVisible]);
 
   // User data from hook
   const myKm = progress?.totalDistanceKm ?? 0;
@@ -349,9 +397,9 @@ const WeeklyRaceSection = () => {
     setSending(true);
     try {
       await createWager(title);
-      setModalVisible(false);
       setSelectedPreset(null);
       setCustomWager('');
+      setShowCustomInput(false);
     } catch (err) {
       console.error('Failed to create wager:', err);
     } finally {
@@ -395,12 +443,171 @@ const WeeklyRaceSection = () => {
     }
   };
 
-  // --- Footer Wager Section ---
+  const selectedWagerTitle = selectedPreset || customWager.trim();
+  const canSignWager = Boolean(selectedWagerTitle);
+
+  const openWagerPicker = () => setWagerPickerVisible(true);
+
+  const closeWagerPicker = () => {
+    setWagerPickerVisible(false);
+    setShowCustomInput(false);
+  };
+
+  const handleSelectPreset = (title) => {
+    setSelectedPreset(title);
+    setCustomWager('');
+    setShowCustomInput(false);
+    setWagerPickerVisible(false);
+  };
+
+  const handleConfirmCustomWager = () => {
+    if (!customWager.trim()) return;
+    setSelectedPreset(null);
+    setShowCustomInput(false);
+    setWagerPickerVisible(false);
+  };
+
+  const renderWagerPickerModal = () => (
+    <Modal
+      visible={wagerPickerVisible}
+      transparent
+      animationType="slide"
+      onRequestClose={closeWagerPicker}
+    >
+      <TouchableWithoutFeedback onPress={closeWagerPicker}>
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalKeyboardContainer}
+          >
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <View style={styles.modalHandle} />
+                  <Text style={styles.modalTitle}>Choose Penalty</Text>
+                  <Text style={styles.modalSubtitle}>Pick what happens if you lose this week</Text>
+                </View>
+
+                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                  <Text style={styles.sectionLabel}>Presets</Text>
+                  <View style={styles.presetGrid}>
+                    {PRESET_WAGERS.map((preset) => (
+                      <TouchableOpacity
+                        key={preset.title}
+                        style={[
+                          styles.presetChip,
+                          selectedPreset === preset.title && styles.presetChipSelected,
+                        ]}
+                        onPress={() => handleSelectPreset(preset.title)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.presetEmoji}>{preset.emoji}</Text>
+                        <Text style={[
+                          styles.presetText,
+                          selectedPreset === preset.title && styles.presetTextSelected,
+                        ]}>
+                          {preset.title}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <View style={styles.dividerRow}>
+                    <View style={styles.dividerLine} />
+                    <Text style={styles.dividerText}>OR</Text>
+                    <View style={styles.dividerLine} />
+                  </View>
+
+                  <Text style={styles.sectionLabel}>Custom</Text>
+                  <View style={styles.customInputContainer}>
+                    <TextInput
+                      style={styles.customInput}
+                      placeholder="Type your penalty..."
+                      placeholderTextColor={COLORS.textMuted}
+                      value={customWager}
+                      onChangeText={(text) => {
+                        setCustomWager(text);
+                        setSelectedPreset(null);
+                        setShowCustomInput(true);
+                      }}
+                      maxLength={100}
+                      returnKeyType="done"
+                      onSubmitEditing={handleConfirmCustomWager}
+                    />
+                  </View>
+                </ScrollView>
+
+                <TouchableOpacity
+                  style={[styles.sendWagerBtn, !customWager.trim() && styles.sendWagerBtnDisabled]}
+                  onPress={handleConfirmCustomWager}
+                  disabled={!customWager.trim()}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.sendWagerBtnText}>Use Custom Penalty</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </KeyboardAvoidingView>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+
+  const renderSignatureRow = ({ youSigned, partnerSigned, partnerLabel }) => (
+    <View style={styles.signatureRow}>
+      <View style={styles.signatureBlock}>
+        <Text style={styles.signatureLabel}>YOU</Text>
+        <View style={[styles.signatureLine, youSigned && styles.signatureLineSigned]}>
+          {youSigned ? (
+            <>
+              <PenLine size={12} color={COLORS.primary} strokeWidth={2.5} />
+              <Text style={styles.signatureSignedText}>Signed</Text>
+            </>
+          ) : (
+            <Text style={styles.signatureDashText}>— — — — —</Text>
+          )}
+        </View>
+      </View>
+      <View style={styles.signatureBlock}>
+        <Text style={styles.signatureLabel}>{partnerLabel}</Text>
+        <View style={[styles.signatureLine, partnerSigned && styles.signatureLineSigned]}>
+          {partnerSigned ? (
+            <>
+              <PenLine size={12} color={COLORS.opponent} strokeWidth={2.5} />
+              <Text style={[styles.signatureSignedText, { color: COLORS.opponent }]}>Signed</Text>
+            </>
+          ) : (
+            <Text style={styles.signatureDashText}>— — — — —</Text>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderWagerContract = ({ title, subtitle, youSigned, partnerSigned, children }) => (
+    <View style={styles.wagerContractCard}>
+      <View style={styles.wagerContractHeader}>
+        <Text style={styles.wagerContractEyebrow}>WEEKLY WAGER</Text>
+        {subtitle ? <Text style={styles.wagerContractMeta}>{subtitle}</Text> : null}
+      </View>
+      <Text style={styles.wagerContractLead} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82}>
+        IF I LOSE, I WILL
+      </Text>
+      <View style={styles.wagerBlankRow}>
+        <View style={styles.wagerBlankLine} />
+        <Text style={styles.wagerBlankValue}>{title || '— — — — —'}</Text>
+        <View style={styles.wagerBlankLine} />
+      </View>
+      {renderSignatureRow({ youSigned, partnerSigned, partnerLabel: partnerName })}
+      {children}
+    </View>
+  );
+
+  // --- Wager Section ---
   const renderWagerFooter = () => {
     const renderLastWeekNote = () =>
       lastWeekSummary ? <Text style={styles.wagerStatusNote}>{lastWeekSummary}</Text> : null;
 
-    // Loading state
     if (wagerLoading && !activeWager) {
       return (
         <View style={styles.wagerFooter}>
@@ -409,117 +616,191 @@ const WeeklyRaceSection = () => {
       );
     }
 
-    // ACTIVE wager — show the solid battle card
     if (activeWager?.status === 'ACTIVE') {
       return (
-        <View style={styles.activeWagerCard}>
-          <View style={styles.wagerCardHeader}>
-            <View style={styles.activeWagerBadge}>
-              <Trophy size={10} color="#0F172A" strokeWidth={3} />
-              <Text style={styles.activeWagerBadgeText}>ACTIVE WAGER</Text>
-            </View>
-            <TouchableOpacity onPress={handleRemoveWager} style={styles.wagerRemoveBtn}>
-              <Trash2 size={12} color="#64748B" />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.activeWagerContentRow}>
-            <View style={styles.activeWagerIconCircle}>
-                <Swords size={18} color="#1E293B" />
-            </View>
-            <View style={styles.activeWagerTextCol}>
-                <Text style={styles.wagerSmallLabel}>LOSER PAYS</Text>
-                <Text style={styles.wagerMainValue}>{activeWager.title.toUpperCase()}</Text>
-                {wagerDeadlineLabel ? <Text style={styles.wagerMetaText}>{wagerDeadlineLabel}</Text> : null}
-            </View>
-          </View>
+        <View>
+          {renderWagerContract({
+            title: activeWager.title.toUpperCase(),
+            subtitle: wagerDeadlineLabel,
+            youSigned: true,
+            partnerSigned: true,
+            children: (
+              <View style={styles.wagerContractFooter}>
+                <View style={styles.activeWagerBadge}>
+                  <Trophy size={10} color="#0F172A" strokeWidth={3} />
+                  <Text style={styles.activeWagerBadgeText}>ACTIVE</Text>
+                </View>
+                <TouchableOpacity onPress={handleRemoveWager} style={styles.wagerRemoveBtn}>
+                  <Trash2 size={12} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+            ),
+          })}
           {renderLastWeekNote()}
         </View>
       );
     }
 
-    // PENDING wager — I sent it, waiting for partner
     if (activeWager?.status === 'PENDING' && activeWager.isSender) {
       return (
-        <Animated.View style={[styles.pendingWagerCard, { transform: [{ scale: pulseAnim }] }]}>
-          <View style={styles.wagerCardHeader}>
-            <View style={styles.pendingWagerBadge}>
-              <Timer size={10} color="#D97706" strokeWidth={3} />
-              <Text style={styles.pendingWagerBadgeText}>SENT</Text>
-            </View>
-            <TouchableOpacity onPress={handleRemoveWager} style={styles.wagerRemoveBtn}>
-              <Trash2 size={12} color="#64748B" />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.pendingWagerTitle}>Waiting for partner...</Text>
-          <Text style={styles.pendingWagerDetail}>Penalty: {activeWager.title}</Text>
-          {wagerDeadlineLabel ? <Text style={styles.wagerMetaText}>{wagerDeadlineLabel}</Text> : null}
+        <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+          {renderWagerContract({
+            title: activeWager.title.toUpperCase(),
+            subtitle: wagerDeadlineLabel || 'Waiting for partner to sign',
+            youSigned: true,
+            partnerSigned: false,
+            children: (
+              <View style={styles.wagerContractFooter}>
+                <View style={styles.pendingWagerBadge}>
+                  <Timer size={10} color="#D97706" strokeWidth={3} />
+                  <Text style={styles.pendingWagerBadgeText}>AWAITING SIGNATURE</Text>
+                </View>
+                <TouchableOpacity onPress={handleRemoveWager} style={styles.wagerRemoveBtn}>
+                  <Trash2 size={12} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+            ),
+          })}
           {renderLastWeekNote()}
         </Animated.View>
       );
     }
 
-    // PENDING wager — Partner sent it, I need to accept/decline
     if (activeWager?.status === 'PENDING' && !activeWager.isSender) {
       return (
-        <View style={styles.incomingWagerCard}>
-          <View style={styles.incomingWagerBadgeRow}>
-             <Zap size={10} color="#F43F5E" strokeWidth={3} />
-             <Text style={styles.incomingWagerBadgeLabel}>CHALLENGE RECEIVED</Text>
-          </View>
-          
-          <Text style={styles.incomingWagerBodyText}>
-            {activeWager.partnerName} wants to bet:{' '}
-            <Text style={styles.incomingWagerHighlight}>&ldquo;{activeWager.title}&rdquo;</Text>
-          </Text>
-          {wagerDeadlineLabel ? <Text style={styles.wagerMetaText}>{wagerDeadlineLabel}</Text> : null}
-          
-          <View style={styles.incomingWagerButtonRow}>
-            <TouchableOpacity
-              style={styles.incomingWagerDecline}
-              onPress={handleDeclineWager}
-              disabled={sending}
-            >
-              <Text style={styles.incomingWagerDeclineText}>Decline</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.incomingWagerAccept}
-              onPress={handleAcceptWager}
-              disabled={sending}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <Text style={styles.incomingWagerAcceptText}>Accept</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+        <View>
+          {renderWagerContract({
+            title: activeWager.title.toUpperCase(),
+            subtitle: `${activeWager.partnerName} signed — sign to accept`,
+            youSigned: false,
+            partnerSigned: true,
+            children: (
+              <View style={styles.incomingWagerButtonRow}>
+                <TouchableOpacity
+                  style={styles.incomingWagerDecline}
+                  onPress={handleDeclineWager}
+                  disabled={sending}
+                >
+                  <Text style={styles.incomingWagerDeclineText}>Decline</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.incomingWagerAccept}
+                  onPress={handleAcceptWager}
+                  disabled={sending}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <>
+                      <PenLine size={14} color="#FFF" strokeWidth={2.5} />
+                      <Text style={styles.incomingWagerAcceptText}>Sign & Accept</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ),
+          })}
           {renderLastWeekNote()}
         </View>
       );
     }
 
-    // NO WAGER — show simple CTA card
     return (
-      <TouchableOpacity
-        style={styles.simpleSetWagerCard}
-        onPress={() => setModalVisible(true)}
-        activeOpacity={0.8}
-      >
-         <View style={styles.simpleWagerIconInner}>
-            <Swords size={16} color="#64748B" />
-         </View>
-         <View style={styles.simpleWagerTextInner}>
-            <Text style={styles.simpleWagerTitle}>ADD WEEKLY WAGER</Text>
-            <Text style={styles.simpleWagerSub}>{lastWeekSummary || 'Pick a penalty for the loser'}</Text>
-         </View>
-         <View style={styles.simpleWagerPlusPill}>
-            <Plus size={14} color="#FFF" strokeWidth={3} />
-         </View>
-      </TouchableOpacity>
+      <View>
+        {renderWagerContract({
+          title: selectedWagerTitle ? selectedWagerTitle.toUpperCase() : null,
+          subtitle: lastWeekSummary || 'Pick a penalty for the loser',
+          youSigned: false,
+          partnerSigned: false,
+          children: (
+            <View style={styles.wagerDraftActions}>
+              <TouchableOpacity
+                style={styles.wagerEditBtn}
+                onPress={openWagerPicker}
+                activeOpacity={0.85}
+              >
+                <PenLine size={14} color={COLORS.primary} strokeWidth={2.5} />
+                <Text style={styles.wagerEditBtnText}>
+                  {selectedWagerTitle ? 'Edit penalty' : 'Choose penalty'}
+                </Text>
+              </TouchableOpacity>
+
+              {canSignWager ? (
+                <TouchableOpacity
+                  style={styles.signWagerBtn}
+                  onPress={handleSendWager}
+                  disabled={sending}
+                  activeOpacity={0.85}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <>
+                      <PenLine size={16} color="#FFF" strokeWidth={2.5} />
+                      <Text style={styles.signWagerBtnText}>Sign & Send to {partnerName}</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ),
+        })}
+      </View>
     );
   };
+
+  const renderPlayerBlock = ({
+    avatar,
+    mirrored,
+    player,
+    anim,
+    isLeading,
+    accentColor,
+    tintColor,
+    reversed,
+  }) => (
+    <View style={[styles.playerBlock, { backgroundColor: tintColor }]}>
+      <View style={[styles.playerBlockRow, reversed && styles.playerBlockRowReversed]}>
+        <View style={[styles.playerAvatarWrap, { backgroundColor: tintColor }]}>
+          <View style={[styles.playerAvatarGlow, { backgroundColor: `${accentColor}20` }]} />
+          <View style={mirrored ? styles.avatarMirror : null}>
+            <Image
+              source={avatar}
+              style={styles.playerAvatar}
+              contentFit="contain"
+              contentPosition="bottom"
+              backgroundColor="transparent"
+            />
+          </View>
+        </View>
+
+        <View style={[styles.playerStats, reversed && styles.playerStatsReversed]}>
+          <View style={[styles.playerNameRow, reversed && styles.playerNameRowReversed]}>
+            <Text style={styles.playerName}>{player.name}</Text>
+            {isLeading ? <Crown size={14} color={accentColor} strokeWidth={2.5} /> : null}
+          </View>
+          <View style={[styles.playerKmRow, reversed && styles.playerKmRowReversed]}>
+            <Text style={[styles.playerKm, { color: accentColor }]}>{player.current.toFixed(1)}</Text>
+            <Text style={styles.playerKmUnit}>km</Text>
+          </View>
+          <View style={styles.playerBarTrack}>
+            <Animated.View
+              style={[
+                styles.playerBarFill,
+                {
+                  width: anim.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] }),
+                  backgroundColor: accentColor,
+                },
+              ]}
+            />
+          </View>
+          <Text style={[styles.playerMeta, reversed && styles.playerMetaReversed]}>
+            {player.current.toFixed(1)} / {player.target} km · {player.remaining.toFixed(1)} left
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
 
   if (loading && !progress) {
     return (
@@ -534,200 +815,57 @@ const WeeklyRaceSection = () => {
 
         {/* --- TOP HEADER --- */}
       <View style={styles.header}>
-        <View style={styles.titleGroup}>
-          <Image
-            source={require('../../assets/Ru.png')}
-            style={styles.headerIcon}
-            contentFit="contain"
-          />
-          <Text style={styles.headerTitle}>RUNNING GOAL</Text>
-        </View>
+        <Text style={styles.headerTitle}>
+          {isWalkingGoal ? 'WALKING GOAL' : 'RUNNING GOAL'}
+        </Text>
         <View style={styles.timerPill}>
+          <Timer size={12} color={COLORS.textMuted} strokeWidth={2.5} />
           <Text style={styles.timerText}>{timeLeft}</Text>
         </View>
       </View>
 
-      {/* --- DUEL CARD --- */}
-      <TouchableOpacity
-        style={styles.splitCard}
-        activeOpacity={0.92}
-        onPress={openScheduleModal}
-      >
+      {/* --- DUEL + WAGER CARD --- */}
+      <View style={styles.zigzagCard}>
+        <TouchableOpacity
+          style={styles.duelSection}
+          activeOpacity={0.94}
+          onPress={openScheduleModal}
+        >
+          {renderPlayerBlock({
+            avatar: myAvatar,
+            mirrored: false,
+            player: player1,
+            anim: animP1,
+            isLeading: isP1Leading,
+            accentColor: COLORS.primary,
+            tintColor: COLORS.primaryLight,
+            reversed: false,
+          })}
 
-        <LinearGradient
-          colors={['#FFFFFF', '#FFF7F5']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.splitCardBg}
-        />
-
-        <View style={styles.splitCardTopRow}>
-          <View style={styles.splitCardBadge}>
-            <Target size={12} color="#0F172A" strokeWidth={2.8} />
-            <Text style={styles.splitCardBadgeText}>This Week</Text>
+          <View style={styles.vsHero}>
+            <View style={styles.vsHeroInner}>
+              <Text style={styles.vsHeroText}>VS</Text>
+            </View>
           </View>
+
+          {renderPlayerBlock({
+            avatar: partnerAvatar,
+            mirrored: true,
+            player: player2,
+            anim: animP2,
+            isLeading: !isP1Leading && player2.current > 0,
+            accentColor: COLORS.opponent,
+            tintColor: COLORS.opponentLight,
+            reversed: true,
+          })}
+        </TouchableOpacity>
+
+        <View style={styles.wagerSection}>
+          {renderWagerFooter()}
         </View>
+      </View>
 
-        {/* PLAYER 1 */}
-        <View style={[styles.side, { backgroundColor: player1.bg }]}>
-          <Text style={styles.nameLabel}>{player1.name}</Text>
-          <View style={styles.scoreRow}>
-            <Text style={[styles.hugeNumber, { color: player1.color }]}>{player1.current.toFixed(1)}</Text>
-            <Text style={styles.unit}>km</Text>
-          </View>
-
-          <View style={styles.progressTrack}>
-            <Animated.View style={[styles.progressFill, { width: animP1.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] }), backgroundColor: player1.color }]} />
-          </View>
-
-          {/* Goal text under progress bar */}
-          <View style={styles.goalTextContainer}>
-            <Text style={styles.goalTextMain}>{player1.current.toFixed(1)} / {player1.target} km</Text>
-            <Text style={styles.goalTextRemaining}>{player1.remaining.toFixed(1)} km remaining</Text>
-          </View>
-
-          {isP1Leading && <View style={styles.crownPill}><Text style={styles.crownText}>WINNING</Text></View>}
-        </View>
-
-        {/* VS DIVIDER */}
-        <View style={styles.vsContainer}>
-          <View style={styles.vsCircle}>
-            <Text style={styles.vsText}>VS</Text>
-          </View>
-        </View>
-
-        {/* PLAYER 2 */}
-        <View style={[styles.side, { backgroundColor: player2.bg }]}>
-          <Text style={styles.nameLabel}>{player2.name}</Text>
-          <View style={styles.scoreRow}>
-            <Text style={[styles.hugeNumber, { color: player2.color }]}>{player2.current.toFixed(1)}</Text>
-            <Text style={styles.unit}>km</Text>
-          </View>
-
-          <View style={styles.progressTrack}>
-            <Animated.View style={[styles.progressFill, { width: animP2.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] }), backgroundColor: player2.color }]} />
-          </View>
-
-          {/* Goal text under progress bar */}
-          <View style={styles.goalTextContainer}>
-            <Text style={styles.goalTextMain}>{player2.current.toFixed(1)} / {player2.target} km</Text>
-            <Text style={styles.goalTextRemaining}>{player2.remaining.toFixed(1)} km remaining</Text>
-          </View>
-
-          {!isP1Leading && player2.current > 0 && <View style={styles.crownPill}><Text style={styles.crownText}>WINNING</Text></View>}
-        </View>
-      </TouchableOpacity>
-
-      {/* --- FOOTER - WAGER SECTION --- */}
-      {renderWagerFooter()}
-
-      {/* --- WAGER MODAL --- */}
-      <Modal
-        visible={modalVisible}
-        transparent
-        animationType="none"
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <TouchableWithoutFeedback onPress={() => setModalVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <KeyboardAvoidingView 
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={styles.modalKeyboardContainer}
-            >
-              <TouchableWithoutFeedback onPress={() => {}}>
-                <Animated.View style={[
-                  styles.modalContent,
-                  {
-                    transform: [
-                      { translateY: modalAnim.interpolate({ inputRange: [0, 1], outputRange: [height, 0] }) },
-                    ],
-                    opacity: modalAnim,
-                  }
-                ]}>
-                  {/* Modal Header */}
-                  <View style={styles.modalHeader}>
-                    <View style={styles.modalHandle} />
-                    <Text style={styles.modalTitle}>🎯 Set Weekly Wager</Text>
-                    <Text style={styles.modalSubtitle}>Challenge your partner for this week</Text>
-                  </View>
-
-                  <ScrollView 
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={{ paddingBottom: 20 }}
-                  >
-                    {/* Preset Chips */}
-                    <Text style={styles.sectionLabel}>CHOOSE A WAGER</Text>
-                    <View style={styles.presetGrid}>
-                      {PRESET_WAGERS.map((preset) => (
-                        <TouchableOpacity
-                          key={preset.title}
-                          style={[
-                            styles.presetChip,
-                            selectedPreset === preset.title && styles.presetChipSelected,
-                          ]}
-                          onPress={() => {
-                            setSelectedPreset(selectedPreset === preset.title ? null : preset.title);
-                            setCustomWager('');
-                          }}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.presetEmoji}>{preset.emoji}</Text>
-                          <Text style={[
-                            styles.presetText,
-                            selectedPreset === preset.title && styles.presetTextSelected,
-                          ]}>{preset.title}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-
-                    {/* Divider */}
-                    <View style={styles.dividerRow}>
-                      <View style={styles.dividerLine} />
-                      <Text style={styles.dividerText}>OR</Text>
-                      <View style={styles.dividerLine} />
-                    </View>
-
-                    {/* Custom Input */}
-                    <View style={styles.customInputContainer}>
-                      <TextInput
-                        style={styles.customInput}
-                        placeholder="Type a custom wager..."
-                        placeholderTextColor={COLORS.textMuted}
-                        value={customWager}
-                        onChangeText={(text) => {
-                          setCustomWager(text);
-                          setSelectedPreset(null);
-                        }}
-                        maxLength={100}
-                        returnKeyType="done"
-                      />
-                    </View>
-
-                    {/* Send Button */}
-                    <TouchableOpacity
-                      style={[
-                        styles.sendWagerBtn,
-                        !(selectedPreset || customWager.trim()) && styles.sendWagerBtnDisabled,
-                      ]}
-                      onPress={handleSendWager}
-                      disabled={!(selectedPreset || customWager.trim()) || sending}
-                      activeOpacity={0.8}
-                    >
-                      {sending ? (
-                        <ActivityIndicator size="small" color="#FFF" />
-                      ) : (
-                        <Text style={styles.sendWagerBtnText}>
-                          Send Wager to {partnerName}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  </ScrollView>
-                </Animated.View>
-              </TouchableWithoutFeedback>
-            </KeyboardAvoidingView>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
+      {renderWagerPickerModal()}
 
       <Modal
         visible={scheduleModalVisible}
@@ -839,129 +977,370 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20
   },
-  titleGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
-  headerIcon: {
-    width: 28,
-    height: 28,
-  },
   headerTitle: { fontSize: 16, fontWeight: '900', color: COLORS.text, letterSpacing: -0.5 },
-  timerPill: { backgroundColor: '#F1F5F9', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 100 },
-  timerText: { fontSize: 12, fontWeight: '800', color: COLORS.textMuted, fontVariant: ['tabular-nums'] },
-
-  splitCard: {
-    flexDirection: 'row',
-    height: 220,
-    borderRadius: 32,
-    overflow: 'hidden',
-    backgroundColor: COLORS.white,
-    position: 'relative',
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#F3E8E3',
-    shadowColor: '#EA580C',
-    shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.08,
-    shadowRadius: 26,
-    elevation: 6,
-  },
-  splitCardBg: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  splitCardTopRow: {
-    position: 'absolute',
-    top: 14,
-    left: 14,
-    right: 14,
-    zIndex: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  splitCardBadge: {
+  timerPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
+    backgroundColor: '#F1F5F9',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 100,
   },
-  splitCardBadgeText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: '#0F172A',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
+  timerText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    fontVariant: ['tabular-nums'],
   },
-  side: { flex: 1, padding: 20, justifyContent: 'center', alignItems: 'center' },
 
-  vsContainer: {
+  zigzagCard: {
+    borderRadius: 24,
+    overflow: 'hidden',
+    marginBottom: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEF2F6',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.06,
+    shadowRadius: 20,
+    elevation: 4,
+    position: 'relative',
+  },
+  duelSection: {
+    position: 'relative',
+  },
+  wagerSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#EEF2F6',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  vsHero: {
     position: 'absolute',
     left: '50%',
     top: '50%',
-    marginLeft: -20,
-    marginTop: -30,
-    zIndex: 10,
+    marginLeft: -34,
+    marginTop: -34,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#FFFFFF',
+    padding: 4,
+    zIndex: 20,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    elevation: 8,
   },
-  vsCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  vsHeroInner: {
+    flex: 1,
+    borderRadius: 30,
     backgroundColor: COLORS.vsBadge,
-    borderWidth: 4,
-    borderColor: COLORS.white,
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  vsText: { color: 'white', fontWeight: '900', fontSize: 12, fontStyle: 'italic' },
-
-  nameLabel: { fontSize: 12, fontWeight: '900', color: COLORS.textMuted, letterSpacing: 1, marginBottom: 4 },
-  scoreRow: { flexDirection: 'row', alignItems: 'baseline', gap: 2, marginBottom: 10 },
-  hugeNumber: { fontSize: 32, fontWeight: '900' },
-  unit: { fontSize: 14, fontWeight: '700', color: COLORS.textMuted },
-
-  progressTrack: { width: '100%', height: 8, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 4, overflow: 'hidden' },
-  progressFill: { height: '100%', borderRadius: 4 },
-
-  goalTextContainer: {
-    marginTop: 8,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  goalTextMain: {
+  vsHeroText: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    fontStyle: 'italic',
+    letterSpacing: -0.5,
+  },
+  playerBlock: {
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+  },
+  playerBlockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  playerBlockRowReversed: {
+    flexDirection: 'row-reverse',
+  },
+  playerAvatarWrap: {
+    width: 128,
+    height: 172,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    position: 'relative',
+    backgroundColor: 'transparent',
+  },
+  playerAvatarGlow: {
+    position: 'absolute',
+    bottom: 8,
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+  },
+  avatarMirror: {
+    transform: [{ scaleX: -1 }],
+    backgroundColor: 'transparent',
+  },
+  playerAvatar: {
+    width: 124,
+    height: 168,
+    backgroundColor: 'transparent',
+  },
+  playerStats: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingRight: 4,
+  },
+  playerStatsReversed: {
+    alignItems: 'flex-end',
+    paddingRight: 0,
+    paddingLeft: 4,
+  },
+  playerNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  playerNameRowReversed: {
+    flexDirection: 'row-reverse',
+  },
+  playerName: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: COLORS.textMuted,
+    letterSpacing: 1.2,
+  },
+  playerKmRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 4,
+    marginBottom: 10,
+  },
+  playerKmRowReversed: {
+    flexDirection: 'row-reverse',
+  },
+  playerKm: {
+    fontSize: 48,
+    fontWeight: '900',
+    letterSpacing: -2,
+    lineHeight: 50,
+    fontVariant: ['tabular-nums'],
+  },
+  playerKmUnit: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    marginBottom: 8,
+  },
+  playerBarTrack: {
+    width: '100%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 23, 42, 0.08)',
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  playerBarFill: {
+    height: '100%',
+    borderRadius: 999,
+  },
+  playerMeta: {
     fontSize: 11,
     fontWeight: '700',
-    color: COLORS.text,
-  },
-  goalTextRemaining: {
-    fontSize: 9,
-    fontWeight: '600',
     color: COLORS.textMuted,
-    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  playerMetaReversed: {
+    textAlign: 'right',
   },
 
-  crownPill: {
-    position: 'absolute',
-    bottom: 12,
-    backgroundColor: COLORS.white,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 100,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    elevation: 2
-  },
   crownText: { fontSize: 9, fontWeight: '900', color: COLORS.text },
 
-  wagerFooter: { padding: 10, alignItems: 'center' },
+  wagerFooter: { alignItems: 'center' },
 
-  // --- REFINED WAGER STYLES (NO GRADIENTS, SMALLER, RED THEME) ---
+  wagerContractCard: {
+    paddingHorizontal: 2,
+    paddingVertical: 0,
+  },
+  wagerContractHeader: {
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  wagerContractEyebrow: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: COLORS.textMuted,
+    letterSpacing: 1.2,
+  },
+  wagerContractMeta: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: COLORS.textMuted,
+    marginTop: 3,
+    textAlign: 'center',
+  },
+  wagerContractLead: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0F172A',
+    textAlign: 'center',
+    letterSpacing: -0.4,
+    lineHeight: 24,
+    marginBottom: 2,
+  },
+  wagerBlankRow: {
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 10,
+    gap: 5,
+  },
+  wagerBlankLine: {
+    width: '68%',
+    height: 1.5,
+    backgroundColor: '#CBD5E1',
+    borderRadius: 1,
+  },
+  wagerBlankValue: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: COLORS.primary,
+    textAlign: 'center',
+    letterSpacing: 0.2,
+    paddingHorizontal: 6,
+  },
+  signatureRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  signatureBlock: {
+    flex: 1,
+  },
+  signatureLabel: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: COLORS.textMuted,
+    letterSpacing: 0.8,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  signatureLine: {
+    minHeight: 28,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 6,
+  },
+  signatureLineSigned: {
+    backgroundColor: '#FFF1F2',
+    borderColor: '#FECDD3',
+  },
+  signatureDashText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#CBD5E1',
+    letterSpacing: 2,
+  },
+  signatureSignedText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: COLORS.primary,
+  },
+  wagerContractFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  presetGridInline: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  presetChipInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    gap: 5,
+  },
+  presetChipInlineSelected: {
+    backgroundColor: COLORS.primaryLight,
+    borderColor: COLORS.primary,
+  },
+  presetTextInline: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  presetTextInlineSelected: {
+    color: COLORS.primary,
+    fontWeight: '900',
+  },
+  customInputInline: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1E293B',
+    marginBottom: 8,
+  },
+  wagerDraftActions: {
+    gap: 8,
+    marginTop: 2,
+  },
+  wagerEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#FECDD3',
+    backgroundColor: '#FFF1F2',
+  },
+  wagerEditBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primary,
+    letterSpacing: 0.2,
+  },
+  signWagerBtn: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  signWagerBtnDisabled: {
+    backgroundColor: '#CBD5E1',
+  },
+  signWagerBtnText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#FFF',
+    letterSpacing: 0.2,
+  },
+
+  // --- REFINED WAGER STYLES ---
   activeWagerCard: {
     backgroundColor: '#F8FAFC',
     borderRadius: 20,
@@ -992,7 +1371,7 @@ const styles = StyleSheet.create({
   wagerSmallLabel: { fontSize: 8, fontWeight: '900', color: COLORS.primary, opacity: 0.8, letterSpacing: 1 },
   wagerMainValue: { fontSize: 15, fontWeight: '900', color: '#1E293B' },
   wagerMetaText: { fontSize: 10, fontWeight: '700', color: COLORS.textMuted, marginTop: 2 },
-  wagerStatusNote: { fontSize: 10, fontWeight: '700', color: COLORS.textMuted, marginTop: 10 },
+  wagerStatusNote: { fontSize: 10, fontWeight: '700', color: COLORS.textMuted, marginTop: 8 },
 
   pendingWagerCard: {
     backgroundColor: '#FFFBEB',
@@ -1025,10 +1404,10 @@ const styles = StyleSheet.create({
   incomingWagerBadgeLabel: { fontSize: 9, fontWeight: '900', color: COLORS.primary, letterSpacing: 0.5 },
   incomingWagerBodyText: { fontSize: 13, fontWeight: '700', color: '#1E293B' },
   incomingWagerHighlight: { color: COLORS.primary, fontWeight: '900' },
-  incomingWagerButtonRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  incomingWagerButtonRow: { flexDirection: 'row', gap: 8, marginTop: 6 },
   incomingWagerDecline: { flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.05)', alignItems: 'center' },
   incomingWagerDeclineText: { fontSize: 12, fontWeight: '800', color: '#64748B' },
-  incomingWagerAccept: { flex: 1.5, paddingVertical: 8, borderRadius: 10, backgroundColor: COLORS.primary, alignItems: 'center' },
+  incomingWagerAccept: { flex: 1.5, paddingVertical: 10, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
   incomingWagerAcceptText: { fontSize: 12, fontWeight: '800', color: '#FFF' },
 
   simpleSetWagerCard: {
@@ -1099,7 +1478,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primaryLight,
     borderColor: COLORS.primary,
   },
-  presetEmoji: { fontSize: 18 },
+  presetEmoji: { fontSize: 16 },
   presetText: { fontSize: 13, fontWeight: '700', color: '#1E293B' },
   presetTextSelected: { color: COLORS.primary, fontWeight: '900' },
 

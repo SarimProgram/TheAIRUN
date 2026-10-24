@@ -87,4 +87,3 @@ export function isRemoteNotificationEnabled(
 ): boolean {
   return normalizeNotificationPreferences(raw)[key];
 }
-

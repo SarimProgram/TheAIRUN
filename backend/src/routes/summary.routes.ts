@@ -4,11 +4,40 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import {
+    resolveCurrentWeek,
+    resolvePlanTargetsForDayKey,
+    syncDailySummaryTargetsFromPlan,
+} from '../lib/dailySummaryTargets';
 import { buildPartnerLivePayloadForUser, pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
 import { requireStringParam } from '../utils/params';
+import { z } from 'zod';
+import { applyWorkoutPaceSample } from '../services/pacePersonalisation';
+import {
+    computeActiveCalories,
+    estimateRestingCalories,
+    estimateWorkoutCalories,
+    loadUserBurnProfile,
+    refreshDailyActiveCalories,
+} from '../lib/activeCalories';
 
 const router = Router();
 import { prisma } from '../db/prisma';
+
+const createWorkoutSchema = z.object({
+    clientId: z.string().min(1).max(100).optional(),
+    type: z.enum(['RUN', 'WALK', 'INTERVAL', 'GYM', 'CYCLING', 'SWIMMING', 'OTHER']),
+    source: z.enum(['MANUAL', 'APP_TRACKED', 'APPLE_HEALTH', 'GOOGLE_FIT']).default('MANUAL'),
+    title: z.string().max(150).optional().nullable(),
+    caloriesBurned: z.coerce.number().int().nonnegative().default(0),
+    distanceKm: z.coerce.number().nonnegative().max(1000).default(0),
+    durationMinutes: z.coerce.number().int().nonnegative().max(1440).default(0),
+    avgPaceSecPerKm: z.coerce.number().int().positive().max(3600).optional().nullable(),
+    startedAt: z.coerce.date(),
+    endedAt: z.coerce.date().optional().nullable(),
+    routeJson: z.unknown().optional(),
+    perceivedEffort: z.enum(['TOO_EASY', 'ABOUT_RIGHT', 'TOO_HARD']).optional().nullable(),
+}).strict();
 
 // Helper: Get today's dayKey in YYYY-MM-DD format
 // If timezone is provided, calculates "today" in that timezone
@@ -70,36 +99,6 @@ function getWeekStartMondayFromDayKey(dayKey: string): Date {
     return d;
 }
 
-async function resolveCurrentWeek(
-    userId: string,
-    userPlan: any,
-    today: Date
-): Promise<{ currentWeek: number; weekPlan: any | null }> {
-    if (!userPlan) return { currentWeek: 1, weekPlan: null };
-
-    const maxWeek = userPlan.weeklyPlans?.length || 1;
-    const planStart = userPlan.weekStartedAt ? new Date(userPlan.weekStartedAt) : today;
-    const planStartMonday = getWeekStartMonday(planStart);
-    const currentWeekStart = getWeekStartMonday(today);
-
-    const weeksSinceStart = Math.max(
-        0,
-        Math.floor((currentWeekStart.getTime() - planStartMonday.getTime()) / (7 * 24 * 60 * 60 * 1000))
-    );
-
-    const effectiveWeek = Math.min(1 + weeksSinceStart, maxWeek);
-
-    if (userPlan.currentWeek !== effectiveWeek) {
-        await prisma.userPlan.update({
-            where: { userId },
-            data: { currentWeek: effectiveWeek },
-        });
-    }
-
-    const weekPlan = userPlan.weeklyPlans?.find((w: any) => w.week === effectiveWeek) || null;
-    return { currentWeek: effectiveWeek, weekPlan };
-}
-
 // ============================================
 // SPECIFIC ROUTES FIRST (before /:dayKey)
 // ============================================
@@ -155,6 +154,8 @@ router.get('/today', authMiddleware, async (req: AuthRequest, res: Response) => 
 
             console.log(`[GET /summary/today] Creating new summary: dayKey=${dayKey}, currentWeek=${currentWeek}, dayOfWeek=${adjustedDayOfWeek}, dailyTarget=${JSON.stringify(dailyTarget)}`);
 
+            const burnProfile = await loadUserBurnProfile(userId);
+
             // Create new summary with targets snapshot
             // Use || instead of ?? to fallback when value is 0
             summary = await prisma.dailySummary.create({
@@ -166,10 +167,12 @@ router.get('/today', authMiddleware, async (req: AuthRequest, res: Response) => 
                     proteinTarget: dailyTarget?.proteinTarget || 100,
                     stepsTarget: dailyTarget?.stepsTarget || 8000,
                     runKmTarget: dailyTarget?.runKm ?? 0,
-                    restingCalories: Math.round((userPlan?.weightKg ?? 70) * 24),
+                    restingCalories: estimateRestingCalories(burnProfile),
                     runStatus: (dailyTarget?.runKm ?? 0) > 0 ? 'PENDING' : 'NOT_SCHEDULED',
                 }
             });
+        } else {
+            summary = await syncDailySummaryTargetsFromPlan(userId, dayKey) ?? summary;
         }
 
         res.json(summary);
@@ -332,7 +335,8 @@ router.get('/partner/week', authMiddleware, async (req: AuthRequest, res: Respon
                 partner: {
                     select: {
                         id: true,
-                        displayName: true
+                        displayName: true,
+                        gender: true,
                     }
                 }
             }
@@ -405,11 +409,38 @@ router.get('/partner/week', authMiddleware, async (req: AuthRequest, res: Respon
         const weeklyKmTarget = weekPlan?.runKmPerWeek ?? 35;
         const remaining = Math.max(0, weeklyKmTarget - totalDistanceKm);
 
+        const summaryByDay = new Map(summaries.map((summary) => [summary.dayKey, summary]));
+        const days = dayKeys.map((dayKey, dayIndex) => {
+            const summary = summaryByDay.get(dayKey);
+            const isToday = dayKey === todayDayKey;
+            const isFuture = dayKey > todayDayKey;
+            return {
+                dayKey,
+                dayIndex,
+                steps: summary?.steps ?? 0,
+                stepsTarget: summary?.stepsTarget ?? 8000,
+                distanceKm: summary?.distanceKm ?? 0,
+                runKmTarget: summary?.runKmTarget ?? 0,
+                exerciseMinutes: summary?.exerciseMinutes ?? 0,
+                runStatus: summary?.runStatus ?? null,
+                waterMl: summary?.waterMl ?? 0,
+                consumedCalories: summary?.consumedCalories ?? 0,
+                calorieTarget: summary?.calorieTarget ?? 2000,
+                activeCalories: summary?.activeCalories ?? 0,
+                isToday,
+                isFuture,
+            };
+        });
+
         res.json({
             hasPartner: true,
+            weekStart: dayKeys[0],
+            weekEnd: dayKeys[6],
+            days,
             partner: {
                 id: user.partner.id,
                 name: user.partner.displayName,
+                gender: user.partner.gender,
                 weeklyKm: Math.round(totalDistanceKm * 10) / 10,
                 weeklyKmTarget,
                 remaining: Math.round(remaining * 10) / 10,
@@ -425,6 +456,284 @@ router.get('/partner/week', authMiddleware, async (req: AuthRequest, res: Respon
     }
 });
 
+function resolveStepsForDay(
+    summarySteps: number | null | undefined,
+    dailyStepSteps: number | null | undefined,
+): number {
+    return Math.max(summarySteps ?? 0, dailyStepSteps ?? 0);
+}
+
+function buildResolvedStepsByUserDay(
+    userIds: string[],
+    dayKeys: string[],
+    summaries: Array<{ userId: string; dayKey: string; steps: number | null }>,
+    dailySteps: Array<{ userId: string; date: Date; steps: number }>,
+): Map<string, number> {
+    const resolved = new Map<string, number>();
+    const makeKey = (userId: string, dayKey: string) => `${userId}:${dayKey}`;
+
+    for (const dayKey of dayKeys) {
+        for (const id of userIds) {
+            resolved.set(makeKey(id, dayKey), 0);
+        }
+    }
+
+    for (const summary of summaries) {
+        const key = makeKey(summary.userId, summary.dayKey);
+        resolved.set(key, resolveStepsForDay(summary.steps, resolved.get(key)));
+    }
+
+    for (const step of dailySteps) {
+        const dayKey = formatDayKeyUTC(step.date);
+        if (!dayKeys.includes(dayKey)) continue;
+        const key = makeKey(step.userId, dayKey);
+        resolved.set(key, resolveStepsForDay(resolved.get(key), step.steps));
+    }
+
+    return resolved;
+}
+
+async function getWeightKgAtOrBefore(userId: string, at: Date): Promise<number | null> {
+    const entry = await prisma.weightHistory.findFirst({
+        where: { userId, loggedAt: { lte: at } },
+        orderBy: { loggedAt: 'desc' },
+        select: { weightKg: true },
+    });
+    return entry?.weightKg ?? null;
+}
+
+type WrapParticipantStats = {
+    id: string;
+    displayName: string;
+    totalSteps: number;
+    totalDistanceKm: number;
+    totalPoints: number;
+    weightLostKg: number | null;
+    workoutsCompleted: number;
+    activeCalories: number;
+    exerciseMinutes: number;
+};
+
+function resolveWrapWinner(
+    you: WrapParticipantStats,
+    partner: WrapParticipantStats,
+): 'YOU' | 'PARTNER' | 'TIE' {
+    if (you.totalPoints !== partner.totalPoints) {
+        return you.totalPoints > partner.totalPoints ? 'YOU' : 'PARTNER';
+    }
+    if (you.totalDistanceKm !== partner.totalDistanceKm) {
+        return you.totalDistanceKm > partner.totalDistanceKm ? 'YOU' : 'PARTNER';
+    }
+    if (you.totalSteps !== partner.totalSteps) {
+        return you.totalSteps > partner.totalSteps ? 'YOU' : 'PARTNER';
+    }
+    return 'TIE';
+}
+
+const MAX_WRAP_WEEK_OFFSET = 11;
+
+function parseWrapWeekOffset(raw: unknown): number {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.min(MAX_WRAP_WEEK_OFFSET, Math.max(0, Math.floor(parsed)));
+}
+
+/**
+ * GET /summary/partner/wrap
+ * Completed week's recap for you and your partner.
+ * Query: weekOffset (0 = last completed week, 1 = prior week, ...)
+ */
+router.get('/partner/wrap', authMiddleware, async (req: AuthRequest, res: Response) => {
+    try {
+        const userId = req.user!.id;
+        const weekOffset = parseWrapWeekOffset(req.query.weekOffset);
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                id: true,
+                displayName: true,
+                partnerId: true,
+                partner: {
+                    select: {
+                        id: true,
+                        displayName: true,
+                    },
+                },
+            },
+        });
+
+        if (!user?.partnerId || !user.partner) {
+            return res.json({ hasPartner: false });
+        }
+
+        const partnerId = user.partnerId;
+        const userTimezone = await getUserTimezone(userId);
+        const todayKey = getDayKey(new Date(), userTimezone);
+        const thisWeekMonday = getWeekStartMondayFromDayKey(todayKey);
+        const lastWeekMonday = new Date(thisWeekMonday);
+        lastWeekMonday.setUTCDate(thisWeekMonday.getUTCDate() - 7);
+        const targetWeekMonday = new Date(lastWeekMonday);
+        targetWeekMonday.setUTCDate(lastWeekMonday.getUTCDate() - weekOffset * 7);
+
+        const dayKeys: string[] = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(targetWeekMonday);
+            d.setUTCDate(targetWeekMonday.getUTCDate() + i);
+            dayKeys.push(formatDayKeyUTC(d));
+        }
+        const weekStart = dayKeys[0];
+        const weekEnd = dayKeys[6];
+        const weekEndDate = new Date(targetWeekMonday);
+        weekEndDate.setUTCDate(targetWeekMonday.getUTCDate() + 6);
+        weekEndDate.setUTCHours(23, 59, 59, 999);
+
+        const stepDates = dayKeys.map(parseDayKey);
+
+        const [summaries, pointsEntries, dailySteps, youStartWeight, youEndWeight, partnerStartWeight, partnerEndWeight] =
+            await Promise.all([
+                prisma.dailySummary.findMany({
+                    where: {
+                        userId: { in: [userId, partnerId] },
+                        dayKey: { in: dayKeys },
+                    },
+                }),
+                prisma.dailyPointsLedger.findMany({
+                    where: {
+                        userId: { in: [userId, partnerId] },
+                        dayKey: { in: dayKeys },
+                    },
+                }),
+                prisma.dailyStep.findMany({
+                    where: {
+                        userId: { in: [userId, partnerId] },
+                        date: { in: stepDates },
+                    },
+                    select: {
+                        userId: true,
+                        date: true,
+                        steps: true,
+                    },
+                }),
+                getWeightKgAtOrBefore(userId, targetWeekMonday),
+                getWeightKgAtOrBefore(userId, weekEndDate),
+                getWeightKgAtOrBefore(partnerId, targetWeekMonday),
+                getWeightKgAtOrBefore(partnerId, weekEndDate),
+            ]);
+
+        const resolvedStepsByUserDay = buildResolvedStepsByUserDay(
+            [userId, partnerId],
+            dayKeys,
+            summaries,
+            dailySteps,
+        );
+
+        const buildStats = (
+            id: string,
+            displayName: string,
+            startWeight: number | null,
+            endWeight: number | null,
+        ): WrapParticipantStats => {
+            const userSummaries = summaries.filter((s) => s.userId === id);
+            const userPoints = pointsEntries.filter((e) => e.userId === id);
+            const weightLostKg =
+                startWeight != null && endWeight != null
+                    ? Math.round((startWeight - endWeight) * 10) / 10
+                    : null;
+
+            return {
+                id,
+                displayName,
+                totalSteps: dayKeys.reduce(
+                    (sum, dayKey) => sum + (resolvedStepsByUserDay.get(`${id}:${dayKey}`) ?? 0),
+                    0,
+                ),
+                totalDistanceKm:
+                    Math.round(userSummaries.reduce((sum, s) => sum + (s.distanceKm ?? 0), 0) * 10) / 10,
+                totalPoints: userPoints.reduce((sum, e) => sum + (e.earnedPoints ?? 0), 0),
+                weightLostKg,
+                workoutsCompleted: userSummaries.filter((s) => s.runStatus === 'COMPLETED').length,
+                activeCalories: userSummaries.reduce((sum, s) => sum + (s.activeCalories ?? 0), 0),
+                exerciseMinutes: userSummaries.reduce((sum, s) => sum + (s.exerciseMinutes ?? 0), 0),
+            };
+        };
+
+        const you = buildStats(user.id, user.displayName, youStartWeight, youEndWeight);
+        const partner = buildStats(
+            user.partner.id,
+            user.partner.displayName,
+            partnerStartWeight,
+            partnerEndWeight,
+        );
+        const winner = resolveWrapWinner(you, partner);
+
+        const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const summaryByUserDay = new Map(
+            summaries.map((s) => [`${s.userId}:${s.dayKey}`, s]),
+        );
+        const days = dayKeys.map((dayKey, index) => {
+            const youSummary = summaryByUserDay.get(`${userId}:${dayKey}`);
+            const partnerSummary = summaryByUserDay.get(`${partnerId}:${dayKey}`);
+            const youSteps = resolvedStepsByUserDay.get(`${userId}:${dayKey}`) ?? 0;
+            const partnerSteps = resolvedStepsByUserDay.get(`${partnerId}:${dayKey}`) ?? 0;
+            const youDistanceKm = youSummary?.distanceKm ?? 0;
+            const partnerDistanceKm = partnerSummary?.distanceKm ?? 0;
+            const youActiveMinutes = youSummary?.exerciseMinutes ?? 0;
+            const partnerActiveMinutes = partnerSummary?.exerciseMinutes ?? 0;
+            return {
+                dayKey,
+                dayLabel: dayLabels[index] ?? dayKey,
+                youSteps,
+                partnerSteps,
+                combinedSteps: youSteps + partnerSteps,
+                combinedDistanceKm:
+                    Math.round((youDistanceKm + partnerDistanceKm) * 10) / 10,
+                combinedActiveMinutes: youActiveMinutes + partnerActiveMinutes,
+            };
+        });
+
+        const combinedWorkouts = you.workoutsCompleted + partner.workoutsCompleted;
+        const combinedActiveCalories = you.activeCalories + partner.activeCalories;
+        const combinedExerciseMinutes = you.exerciseMinutes + partner.exerciseMinutes;
+        const daysActiveTogether = days.filter(
+            (day) => day.combinedSteps >= 1000 || day.combinedActiveMinutes >= 10,
+        ).length;
+        const activeMinutesGoal = Math.max(300, Math.ceil(combinedExerciseMinutes / 50) * 50);
+
+        res.json({
+            hasPartner: true,
+            weekStart,
+            weekEnd,
+            weekOffset,
+            canGoOlder: weekOffset < MAX_WRAP_WEEK_OFFSET,
+            canGoNewer: weekOffset > 0,
+            winner,
+            you,
+            partner,
+            days,
+            combined: {
+                totalSteps: you.totalSteps + partner.totalSteps,
+                totalDistanceKm:
+                    Math.round((you.totalDistanceKm + partner.totalDistanceKm) * 10) / 10,
+                totalPoints: you.totalPoints + partner.totalPoints,
+                weightLostKg:
+                    (you.weightLostKg ?? 0) + (partner.weightLostKg ?? 0) > 0
+                        ? Math.round(
+                              ((you.weightLostKg ?? 0) + (partner.weightLostKg ?? 0)) * 10,
+                          ) / 10
+                        : null,
+                workoutsCompleted: combinedWorkouts,
+                activeCalories: combinedActiveCalories,
+                exerciseMinutes: combinedExerciseMinutes,
+                daysActiveTogether,
+                activeMinutesGoal,
+            },
+        });
+    } catch (error) {
+        console.error('Error fetching partner weekly wrap:', error);
+        res.status(500).json({ error: 'Failed to fetch partner weekly wrap' });
+    }
+});
 
 router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
@@ -497,7 +806,6 @@ router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Respon
             where: { userId, dayKey }
         });
 
-        const workoutCalories = workouts.reduce((sum: number, w: any) => sum + w.caloriesBurned, 0);
         const exerciseMinutes = workouts.reduce((sum: number, w: any) => sum + w.durationMinutes, 0);
         const distanceKm = workouts.reduce((sum: number, w: any) => sum + w.distanceKm, 0);
 
@@ -508,40 +816,26 @@ router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Respon
         const steps = dailyStep?.steps ?? 0;
         console.log(`[recalculate] dayKey=${dayKey}, todayUtc=${todayUtc.toISOString()}, steps=${steps}`);
 
-        // Calculate step-based calories (approx 0.04 kcal per step)
-        const stepCalories = Math.round(steps * 0.04);
-
-        // Total active calories = workout calories + step calories
-        const activeCalories = workoutCalories + stepCalories;
-
-        // Get user plan for targets (needed if creating new record)
-        const userPlan = await prisma.userPlan.findUnique({
-            where: { userId },
-            include: {
-                weeklyPlans: {
-                    orderBy: { week: 'asc' },
-                    include: { dailyTargets: true }
-                }
-            }
+        const burnProfile = await loadUserBurnProfile(userId);
+        const burnBreakdown = computeActiveCalories({
+            totalSteps: steps,
+            workouts: workouts.map((workout) => ({
+                type: workout.type,
+                caloriesBurned: workout.caloriesBurned,
+                distanceKm: workout.distanceKm,
+                durationMinutes: workout.durationMinutes,
+            })),
+            profile: burnProfile,
         });
+        const activeCalories = burnBreakdown.activeCalories;
 
-        // Calculate day-of-week from dayKey
-        const localDate = new Date(y, m - 1, d);
-        const todayDayOfWeek = localDate.getDay();
-        const adjustedDayOfWeek = todayDayOfWeek === 0 ? 6 : todayDayOfWeek - 1;
-
-        // Find correct week's targets
-        const { currentWeek, weekPlan } = await resolveCurrentWeek(userId, userPlan, today);
-        const dailyTarget = weekPlan?.dailyTargets.find(
-            (dt: any) => dt.dayOfWeek === adjustedDayOfWeek
-        );
-
-        // Calculate targets with fallbacks
-        const calorieTarget = dailyTarget?.calorieTarget || userPlan?.dailyCalorieTarget || 2000;
-        const proteinTarget = dailyTarget?.proteinTarget || 100;
-        const stepsTarget = dailyTarget?.stepsTarget || 8000;
-        const runKmTarget = dailyTarget?.runKm ?? 0;
-        const restingCalories = Math.round((userPlan?.weightKg ?? 70) * 24);
+        const planTargets = await resolvePlanTargetsForDayKey(userId, dayKey);
+        const calorieTarget = planTargets?.calorieTarget ?? 2000;
+        const proteinTarget = planTargets?.proteinTarget ?? 100;
+        const stepsTarget = planTargets?.stepsTarget ?? 8000;
+        const runKmTarget = planTargets?.runKmTarget ?? 0;
+        const restingCalories = planTargets?.restingCalories ?? estimateRestingCalories(burnProfile);
+        const runStatus = planTargets?.runStatus ?? (runKmTarget > 0 ? 'PENDING' : 'NOT_SCHEDULED');
 
         // Update summary
         const summary = await prisma.dailySummary.upsert({
@@ -555,6 +849,11 @@ router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Respon
                 activeCalories,
                 exerciseMinutes,
                 distanceKm,
+                calorieTarget,
+                proteinTarget,
+                stepsTarget,
+                runKmTarget,
+                runStatus,
                 updatedAt: new Date()
             },
             create: {
@@ -566,6 +865,7 @@ router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Respon
                 stepsTarget,
                 runKmTarget,
                 restingCalories,
+                runStatus,
                 consumedCalories,
                 proteinG,
                 carbsG,
@@ -582,9 +882,9 @@ router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Respon
         const updatedSummary = await prisma.dailySummary.update({
             where: { id: summary.id },
             data: {
-                totalBurnedCalories: summary.restingCalories + activeCalories,
-                caloriesRemaining: summary.calorieTarget - consumedCalories,
-                netCalories: consumedCalories - (summary.restingCalories + activeCalories)
+                totalBurnedCalories: restingCalories + activeCalories,
+                caloriesRemaining: calorieTarget - consumedCalories,
+                netCalories: consumedCalories - (restingCalories + activeCalories)
             }
         });
 
@@ -694,7 +994,8 @@ router.get('/partner', authMiddleware, async (req: AuthRequest, res: Response) =
             const proteinTarget = dailyTarget?.proteinTarget || 100;
             const stepsTarget = dailyTarget?.stepsTarget || 8000;
             const runKmTarget = dailyTarget?.runKm ?? 0;
-            const restingCalories = Math.round((partnerPlan?.weightKg ?? 70) * 24);
+            const partnerBurnProfile = await loadUserBurnProfile(partnerId);
+            const restingCalories = estimateRestingCalories(partnerBurnProfile);
 
             partnerSummary = await prisma.dailySummary.create({
                 data: {
@@ -783,59 +1084,67 @@ router.get('/workouts/today', authMiddleware, async (req: AuthRequest, res: Resp
 router.post('/workouts', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user!.id;
-        const {
-            type,
-            title,
-            caloriesBurned,
-            distanceKm,
-            durationMinutes,
-            avgPaceSecPerKm,
-            startedAt,
-            endedAt,
-            routeJson,
-            source = 'MANUAL'
-        } = req.body;
+        const body = createWorkoutSchema.parse(req.body);
+        if (body.clientId) {
+            const existing = await (prisma as any).workoutSession.findFirst({
+                where: { userId, clientId: body.clientId },
+            });
+            if (existing) return res.json({ workout: existing });
+        }
 
-        const startDate = new Date(startedAt);
-        const dayKey = getDayKey(startDate);
-
-        const workout = await prisma.workoutSession.create({
-            data: {
-                userId,
-                dayKey,
-                type,
-                source,
-                title,
-                caloriesBurned: caloriesBurned ?? 0,
-                distanceKm: distanceKm ?? 0,
-                durationMinutes: durationMinutes ?? 0,
-                avgPaceSecPerKm,
-                startedAt: startDate,
-                endedAt: endedAt ? new Date(endedAt) : null,
-                routeJson
-            }
-        });
-
-        // Update daily summary with new workout data
-        await prisma.dailySummary.upsert({
-            where: { userId_dayKey: { userId, dayKey } },
-            update: {
-                activeCalories: { increment: caloriesBurned ?? 0 },
-                exerciseMinutes: { increment: durationMinutes ?? 0 },
-                distanceKm: { increment: distanceKm ?? 0 }
+        const burnProfile = await loadUserBurnProfile(userId);
+        const personalizedCalories = estimateWorkoutCalories(
+            {
+                type: body.type,
+                caloriesBurned: body.caloriesBurned,
+                distanceKm: body.distanceKm,
+                durationMinutes: body.durationMinutes,
             },
-            create: {
-                userId,
-                dayKey,
-                activeCalories: caloriesBurned ?? 0,
-                exerciseMinutes: durationMinutes ?? 0,
-                distanceKm: distanceKm ?? 0
-            }
+            burnProfile.weightKg,
+        );
+
+        const result = await prisma.$transaction(async (tx) => {
+            const dayKey = getDayKey(body.startedAt);
+            const workout = await (tx as any).workoutSession.create({
+                data: {
+                    userId,
+                    dayKey,
+                    clientId: body.clientId,
+                    type: body.type,
+                    source: body.source,
+                    title: body.title,
+                    caloriesBurned: personalizedCalories,
+                    distanceKm: body.distanceKm,
+                    durationMinutes: body.durationMinutes,
+                    avgPaceSecPerKm: body.avgPaceSecPerKm,
+                    perceivedEffort: body.perceivedEffort,
+                    startedAt: body.startedAt,
+                    endedAt: body.endedAt,
+                    routeJson: body.routeJson,
+                },
+            });
+
+            await refreshDailyActiveCalories(userId, dayKey, tx);
+
+            const paceUpdate = await applyWorkoutPaceSample(tx, userId, workout);
+            const savedWorkout = paceUpdate
+                ? await (tx as any).workoutSession.findUnique({ where: { id: workout.id } })
+                : workout;
+            return { workout: savedWorkout, paceUpdate };
         });
 
-        res.status(201).json(workout);
+        res.status(201).json(result);
         void pushPartnerSurfaceUpdateForChangedUser(userId, 'workout_created');
     } catch (error) {
+        if (error instanceof z.ZodError) {
+            return res.status(400).json({ message: 'Validation failed', issues: error.issues });
+        }
+        if ((error as any)?.code === 'P2002' && req.body?.clientId) {
+            const existing = await (prisma as any).workoutSession.findFirst({
+                where: { userId: req.user!.id, clientId: req.body.clientId },
+            });
+            if (existing) return res.json({ workout: existing });
+        }
         console.error('Error creating workout:', error);
         res.status(500).json({ error: 'Failed to create workout' });
     }
@@ -860,15 +1169,7 @@ router.delete('/workouts/:id', authMiddleware, async (req: AuthRequest, res: Res
 
         await prisma.workoutSession.delete({ where: { id } });
 
-        // Update daily summary to remove workout data
-        await prisma.dailySummary.update({
-            where: { userId_dayKey: { userId, dayKey: workout.dayKey } },
-            data: {
-                activeCalories: { decrement: workout.caloriesBurned },
-                exerciseMinutes: { decrement: workout.durationMinutes },
-                distanceKm: { decrement: workout.distanceKm }
-            }
-        });
+        await refreshDailyActiveCalories(userId, workout.dayKey);
 
         res.json({ success: true });
         void pushPartnerSurfaceUpdateForChangedUser(userId, 'workout_deleted');
@@ -1254,8 +1555,9 @@ router.get('/run-status/week', authMiddleware, async (req: AuthRequest, res: Res
         }
 
         // Create missing summaries for past run days
+        const userBurnProfile = await loadUserBurnProfile(userId);
         for (const item of toCreate) {
-            const restingCalories = Math.round((userPlan?.weightKg ?? 70) * 24);
+            const restingCalories = estimateRestingCalories(userBurnProfile);
             const plannedTarget = getPlannedTarget(item.dayKey);
             const created = await prisma.dailySummary.create({
                 data: {

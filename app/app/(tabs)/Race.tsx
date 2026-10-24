@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   TouchableOpacity,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -69,6 +68,7 @@ export default function RaceScreen() {
     sendInvite,
     acceptInvite,
     declineInvite,
+    requestPendingInvite,
     sendPosition,
     finishRace,
     cancelRace,
@@ -91,6 +91,11 @@ export default function RaceScreen() {
   const [isAutoCameraPaused, setIsAutoCameraPaused] = useState(false);
   const [manualZoomLevel, setManualZoomLevel] = useState(0.55);
   const [isSideSplitVisible, setIsSideSplitVisible] = useState(false);
+
+  // Re-check persisted invitations whenever this tab is opened.
+  useEffect(() => {
+    if (isFocused && isConnected) requestPendingInvite();
+  }, [isConnected, isFocused, requestPendingInvite]);
 
   // Hide tab bar only when focused on this screen
   useEffect(() => {
@@ -546,52 +551,63 @@ export default function RaceScreen() {
             {/* Celebration State (Full Overlay) */}
             {raceState === 'finished' && winner && (
               <View style={styles.finishOverlay}>
-                <LinearGradient
-                  colors={['rgba(45, 52, 54, 0.95)', 'rgba(0, 0, 0, 0.98)']}
-                  style={styles.finishBackdrop}
-                >
+                <View style={[styles.finishBackdrop, { paddingBottom: Math.max(insets.bottom, 16) + 24 }]}>
                   <TouchableOpacity
-                    style={[styles.finishCloseBtn, { top: Math.max(insets.top + 12, 24) }]}
+                    style={styles.finishCloseBtn}
                     onPress={handleCloseFinishedRace}
                     activeOpacity={0.85}
                     accessibilityRole="button"
                     accessibilityLabel="Close race result"
                   >
-                    <X size={24} color="#FFF" />
+                    <X size={21} color={THEME.textMain} />
                   </TouchableOpacity>
 
                   <View style={styles.trophyGlow}>
-                    <Trophy size={100} color={THEME.kerb1} />
+                    <Trophy size={30} color="#FFF" strokeWidth={2.5} />
                   </View>
                   
                   <View style={{ alignItems: 'center' }}>
                     <Text style={styles.resultLabel}>RACE COMPLETE</Text>
-                    <Text style={styles.winnerMainName}>{winner.winnerName}</Text>
-                    <Text style={styles.subtitleLabel}>IS THE CHAMPION</Text>
+                    <Text style={styles.winnerMainName} numberOfLines={2} adjustsFontSizeToFit>
+                      {winner.winnerName} wins
+                    </Text>
+                    <Text style={styles.subtitleLabel}>A strong finish from both of you.</Text>
                   </View>
 
                   <View style={styles.resultDetailsRow}>
                     <View style={styles.resultStatBlock}>
-                      <Text style={styles.resultStatLabel}>TOTAL TIME</Text>
-                      <Text style={styles.resultStatValue}>{(winner.duration / 1000).toFixed(1)}s</Text>
+                      <Text style={styles.resultStatValue}>{formatRaceDuration(winner.duration)}</Text>
+                      <Text style={styles.resultStatLabel}>FINISH TIME</Text>
                     </View>
                     <View style={styles.resultDivider} />
                     <View style={styles.resultStatBlock}>
+                      <Text style={styles.resultStatValue}>{(((winner.finalDistance ?? raceDistance) as number) / 1000).toFixed(2)} km</Text>
                       <Text style={styles.resultStatLabel}>DISTANCE</Text>
-                      <Text style={styles.resultStatValue}>{(((winner.finalDistance ?? raceDistance) as number) / 1000).toFixed(2)}km</Text>
                     </View>
                   </View>
 
                   <View style={styles.resultActionRow}>
-                    <TouchableOpacity style={styles.rematchBtn} onPress={handlePlayAgain}>
-                      <Play size={24} color="#FFF" fill="#FFF" />
-                      <Text style={styles.rematchText}>REMATCH</Text>
+                    <TouchableOpacity
+                      style={styles.rematchBtn}
+                      onPress={handlePlayAgain}
+                      activeOpacity={0.86}
+                      accessibilityRole="button"
+                      accessibilityLabel="Start a rematch"
+                    >
+                      <Play size={19} color="#FFF" fill="#FFF" />
+                      <Text style={styles.rematchText}>Race again</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.exitDockBtn} onPress={resetRace}>
-                      <Text style={styles.exitDockText}>EXIT TO HUB</Text>
+                    <TouchableOpacity
+                      style={styles.exitDockBtn}
+                      onPress={handleCloseFinishedRace}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Finish and return to the race hub"
+                    >
+                      <Text style={styles.exitDockText}>Done</Text>
                     </TouchableOpacity>
                   </View>
-                </LinearGradient>
+                </View>
               </View>
             )}
           </View>
@@ -609,6 +625,94 @@ function formatCheckpointLabel(distanceMeters: number) {
   const distanceKm = distanceMeters / 1000;
   return Number.isInteger(distanceKm) ? `${distanceKm}km` : `${distanceKm.toFixed(1)}km`;
 }
+
+function formatRaceDuration(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return minutes > 0 ? `${minutes}:${seconds.toString().padStart(2, '0')}` : `${seconds}s`;
+}
+
+const TRACKSIDE_TREES = Array.from({ length: 18 }, (_, index) => ({
+  id: `trackside-tree-${index}`,
+  side: (index % 2 === 0 ? 'left' : 'right') as 'left' | 'right',
+  top: 3 + index * 5.35,
+  size: 34 + (index % 4) * 4,
+  overlap: 5 + (index % 3) * 3,
+  rotation: -12 + (index % 5) * 6,
+}));
+
+const TracksideTree = ({
+  side,
+  top,
+  size,
+  overlap,
+  rotation,
+  compact,
+}: {
+  side: 'left' | 'right';
+  top: number;
+  size: number;
+  overlap: number;
+  rotation: number;
+  compact: boolean;
+}) => {
+  const renderedSize = size * (compact ? 0.72 : 1);
+  const renderedOverlap = compact ? Math.max(5, overlap * 0.7) : overlap;
+
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.tracksideTree,
+        {
+          top: `${top}%`,
+          width: renderedSize,
+          height: renderedSize,
+          left: side === 'left' ? -(renderedSize - renderedOverlap) : undefined,
+          right: side === 'right' ? -(renderedSize - renderedOverlap) : undefined,
+          transform: [{ rotate: `${rotation}deg` }],
+        },
+      ]}
+    >
+      <View style={styles.treeTrunk} />
+      <View
+        style={[
+          styles.treeShadow,
+          { width: renderedSize, height: renderedSize, borderRadius: renderedSize / 2 },
+        ]}
+      />
+      <View
+        style={[
+          styles.treeCanopy,
+          { width: renderedSize, height: renderedSize, borderRadius: renderedSize / 2 },
+        ]}
+      >
+        <View
+          style={[
+            styles.treeCanopyHighlight,
+            {
+              width: renderedSize * 0.48,
+              height: renderedSize * 0.48,
+              borderRadius: renderedSize * 0.24,
+            },
+          ]}
+        />
+        <View
+          style={[
+            styles.treeCanopyShade,
+            {
+              width: renderedSize * 0.42,
+              height: renderedSize * 0.42,
+              borderRadius: renderedSize * 0.21,
+            },
+          ]}
+        />
+      </View>
+    </View>
+  );
+};
 
 const InfiniteTrack = ({
   myProgress,
@@ -671,9 +775,9 @@ const InfiniteTrack = ({
   return (
     <View style={styles.sceneContainer}>
       <Animated.View style={[styles.roadStrip, { width: roadWidth, height: roadHeight }, cameraStyle]}>
+        <View style={[styles.roadsideGrass, styles.roadsideGrassLeft]} />
+        <View style={[styles.roadsideGrass, styles.roadsideGrassRight]} />
         <View style={styles.roadSurface}>
-          <View style={styles.grassLeft} />
-          <View style={styles.grassRight} />
           <View style={styles.kerbContainer}>
             {Array.from({ length: 40 }).map((_, i) => (
               <View key={i} style={[styles.kerbBlock, { backgroundColor: i % 2 === 0 ? THEME.kerb1 : THEME.kerb2 }]} />
@@ -699,6 +803,17 @@ const InfiniteTrack = ({
             ))}
           </View>
         </View>
+        {TRACKSIDE_TREES.map((tree) => (
+          <TracksideTree
+            key={tree.id}
+            side={tree.side}
+            top={tree.top}
+            size={tree.size}
+            overlap={tree.overlap}
+            rotation={tree.rotation}
+            compact={isSideSplit}
+          />
+        ))}
       </Animated.View>
     </View>
   );
@@ -846,46 +961,124 @@ const styles = StyleSheet.create({
   },
   inviteAcceptText: { fontSize: 13, fontWeight: '900', color: '#FFF', letterSpacing: 0.8 },
 
-  finishOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 2000 },
-  finishBackdrop: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40, gap: 40 },
+  finishOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2000,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(45, 52, 54, 0.48)',
+  },
+  finishBackdrop: {
+    width: '100%',
+    alignItems: 'center',
+    backgroundColor: THEME.surface,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    borderCurve: 'continuous',
+    paddingTop: 52,
+    paddingHorizontal: 24,
+    boxShadow: '0 -12px 32px rgba(45, 52, 54, 0.12)',
+  },
   finishCloseBtn: {
     position: 'absolute',
-    right: 20,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    top: 16,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F2F4F5',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
   },
-  trophyGlow: { width: 180, height: 180, borderRadius: 90, backgroundColor: 'rgba(255, 159, 67, 0.15)', justifyContent: 'center', alignItems: 'center', shadowColor: THEME.kerb1, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 30 },
-  resultLabel: { fontSize: 14, fontWeight: '900', color: THEME.primary, letterSpacing: 5, marginBottom: 10 },
-  winnerMainName: { fontSize: 64, fontWeight: '900', color: '#FFF', textAlign: 'center', letterSpacing: -2 },
-  subtitleLabel: { fontSize: 14, fontWeight: '800', color: 'rgba(255,255,255,0.6)', letterSpacing: 2 },
+  trophyGlow: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    marginBottom: 18,
+    backgroundColor: THEME.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  resultLabel: { fontSize: 12, fontWeight: '800', color: THEME.primary, letterSpacing: 1.6, marginBottom: 8 },
+  winnerMainName: { maxWidth: '86%', fontSize: 36, lineHeight: 42, fontWeight: '900', color: THEME.textMain, textAlign: 'center', letterSpacing: -1.2 },
+  subtitleLabel: { marginTop: 8, fontSize: 15, lineHeight: 21, fontWeight: '500', color: THEME.textLight, textAlign: 'center' },
   
-  resultDetailsRow: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 30, padding: 30, width: '100%', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
-  resultStatBlock: { flex: 1, alignItems: 'center' },
-  resultStatLabel: { fontSize: 10, fontWeight: '900', color: 'rgba(255,255,255,0.5)', marginBottom: 8, letterSpacing: 1 },
-  resultStatValue: { fontSize: 28, fontWeight: '900', color: '#FFF' },
-  resultDivider: { width: 1, height: '100%', backgroundColor: 'rgba(255,255,255,0.1)' },
+  resultDetailsRow: {
+    width: '100%',
+    minHeight: 92,
+    marginTop: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F6F8FA',
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    paddingHorizontal: 8,
+  },
+  resultStatBlock: { flex: 1, alignItems: 'center', gap: 6 },
+  resultStatLabel: { fontSize: 10, fontWeight: '800', color: THEME.textLight, letterSpacing: 1.1 },
+  resultStatValue: { fontSize: 22, fontWeight: '900', color: THEME.textMain, fontVariant: ['tabular-nums'] },
+  resultDivider: { width: 1, height: 40, backgroundColor: '#DCE2E7' },
 
-  resultActionRow: { width: '100%', gap: 20 },
-  rematchBtn: { width: '100%', height: 70, borderRadius: 35, backgroundColor: THEME.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, elevation: 10, shadowColor: THEME.primary, shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 15 },
-  rematchText: { fontSize: 18, fontWeight: '900', color: '#FFF', letterSpacing: 1 },
-  exitDockBtn: { alignSelf: 'center', padding: 15 },
-  exitDockText: { fontSize: 14, fontWeight: '800', color: 'rgba(255,255,255,0.4)', letterSpacing: 1 },
+  resultActionRow: { width: '100%', gap: 4, marginTop: 20 },
+  rematchBtn: { width: '100%', height: 56, borderRadius: 28, borderCurve: 'continuous', backgroundColor: THEME.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  rematchText: { fontSize: 17, fontWeight: '800', color: '#FFF' },
+  exitDockBtn: { alignSelf: 'center', minWidth: 88, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  exitDockText: { fontSize: 16, fontWeight: '700', color: THEME.textLight },
 
   countdownOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,107,129,0.95)', zIndex: 100 },
   countdownText: { fontSize: 180, fontWeight: '900', color: '#FFF' },
 
   sceneContainer: { flex: 1, width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
-  roadStrip: {},
+  roadStrip: { position: 'relative' },
+  roadsideGrass: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 500,
+    backgroundColor: '#DDEFD8',
+  },
+  roadsideGrassLeft: { right: '100%' },
+  roadsideGrassRight: { left: '100%' },
   roadSurface: { flex: 1, flexDirection: 'row', overflow: 'hidden', borderRadius: 20 },
-  grassLeft: { position: 'absolute', left: -500, width: 500, height: '100%', backgroundColor: '#E8F5E9' },
-  grassRight: { position: 'absolute', right: -500, width: 500, height: '100%', backgroundColor: '#E8F5E9' },
+  tracksideTree: {
+    position: 'absolute',
+    zIndex: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  treeTrunk: {
+    position: 'absolute',
+    bottom: -7,
+    width: 8,
+    height: 16,
+    borderRadius: 4,
+    backgroundColor: '#8B5A3C',
+  },
+  treeShadow: {
+    position: 'absolute',
+    left: 4,
+    top: 6,
+    backgroundColor: 'rgba(42, 94, 55, 0.2)',
+    transform: [{ scaleX: 1.08 }, { scaleY: 0.92 }],
+  },
+  treeCanopy: {
+    overflow: 'hidden',
+    backgroundColor: '#3F8F55',
+    borderWidth: 2,
+    borderColor: 'rgba(32, 105, 56, 0.4)',
+  },
+  treeCanopyHighlight: {
+    position: 'absolute',
+    left: '12%',
+    top: '10%',
+    backgroundColor: '#72B96C',
+  },
+  treeCanopyShade: {
+    position: 'absolute',
+    right: '5%',
+    bottom: '8%',
+    backgroundColor: '#2D7048',
+  },
   kerbContainer: { width: 12, height: '100%' },
   kerbBlock: { flex: 1 },
   asphalt: { flex: 1, backgroundColor: THEME.road, overflow: 'hidden' },

@@ -1,6 +1,5 @@
 import cors from 'cors';
 import express from 'express';
-import morgan from 'morgan';
 import { authMiddleware } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import authRouter from './routes/auth.routes';
@@ -8,7 +7,7 @@ import { healthRouter } from './routes/health.routes';
 import profileRouter from './routes/profile.routes';
 import nutritionRoutes from "./routes/nutrition.routes";
 import stepsRouter from './routes/steps.routes';
-import partnerRouter from './routes/partner.routes';
+import partnerRouter, { publicPartnerRouter } from './routes/partner.routes';
 import planRouter from './routes/plan.routes';
 import summaryRouter from './routes/summary.routes';
 import pointsRouter from './routes/points.routes';
@@ -21,15 +20,15 @@ import trainingPlanRouter from './routes/trainingPlan.routes';
 import wagerRouter from './routes/wager.routes';
 import billingRouter from './routes/billing.routes';
 import onboardingRouter from './routes/onboarding.routes';
-import { requirePremiumAccess } from './services/billing';
+import { requirePremiumAccess, requirePremiumForPartnerRoute } from './services/billing';
 
 const app = express();
 const premiumRequired = requirePremiumAccess();
+const partnerPremiumRequired = requirePremiumForPartnerRoute();
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan('dev'));
 
 app.use(healthRouter);
 app.use('/auth', authRouter);
@@ -37,7 +36,8 @@ app.use('/billing', billingRouter);
 app.use("/nutrition", authMiddleware, premiumRequired, nutritionRoutes);
 app.use('/profile', authMiddleware, profileRouter);
 app.use('/activity', authMiddleware, premiumRequired, stepsRouter);
-app.use('/partner', authMiddleware, premiumRequired, partnerRouter);
+app.use('/partner', publicPartnerRouter);
+app.use('/partner', authMiddleware, partnerPremiumRequired, partnerRouter);
 app.use('/plan', authMiddleware, planRouter);
 app.use('/summary', authMiddleware, premiumRequired, summaryRouter);
 app.use('/points', authMiddleware, premiumRequired, pointsRouter);

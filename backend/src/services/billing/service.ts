@@ -87,7 +87,27 @@ function isPartnerIncludedStatus(status: string | null | undefined) {
 }
 
 function isShareableSelfPremiumStatus(status: string | null | undefined) {
-  return status === 'PREMIUM_ACTIVE' || status === 'PREMIUM_GRACE';
+  return status === 'PREMIUM_ACTIVE' || status === 'PREMIUM_GRACE' || status === 'TRIAL_ACTIVE';
+}
+
+export type PartnerPlanSummary = {
+  accessStatus: string;
+  hasActivePlan: boolean;
+  coversPartner: boolean;
+};
+
+export function getPartnerPlanSummary(
+  profile: BillingProfileRecord | null | undefined,
+  now = new Date()
+): PartnerPlanSummary {
+  const self = getSelfBillingStatus(profile ?? null, now);
+  const hasActivePlan = isShareableSelfPremiumStatus(self.accessStatus);
+
+  return {
+    accessStatus: self.accessStatus,
+    hasActivePlan,
+    coversPartner: hasActivePlan,
+  };
 }
 
 function getStoredPaywallReason(
@@ -391,8 +411,8 @@ async function startSharedAccessGrace(
     data: {
       sharedAccessSourceUserId: sourceUserId,
       sharedAccessStartedAt: coveredProfile.sharedAccessStartedAt ?? now,
-      sharedAccessEndsAt: addDays(now, PARTNER_SHARED_GRACE_DAYS),
-      sharedAccessRevokedAt: now,
+      sharedAccessEndsAt: coveredProfile.sharedAccessEndsAt ?? addDays(now, PARTNER_SHARED_GRACE_DAYS),
+      sharedAccessRevokedAt: coveredProfile.sharedAccessRevokedAt ?? now,
     },
   });
 }
@@ -436,6 +456,18 @@ export async function syncPartnerSharedAccessForPair(
     await Promise.all([
       grantSharedAccess(client, profileA, userBId, now),
       markSharedAccessRevoked(client, profileB, now),
+    ]);
+    return;
+  }
+
+  if (!aShareable && !bShareable) {
+    await Promise.all([
+      profileA.sharedAccessSourceUserId === userBId && !profileA.sharedAccessEndsAt
+        ? startSharedAccessGrace(client, profileA, userBId, now)
+        : Promise.resolve(),
+      profileB.sharedAccessSourceUserId === userAId && !profileB.sharedAccessEndsAt
+        ? startSharedAccessGrace(client, profileB, userAId, now)
+        : Promise.resolve(),
     ]);
     return;
   }
@@ -500,6 +532,7 @@ async function getBillingAccessForUserInternal(
   userId: string,
   opts?: { allowLiveRevenueCatSync?: boolean }
 ): Promise<{ profile: BillingProfileRecord; billing: BillingSnapshot }> {
+  await syncPartnerSharedAccessWithLinkedPartner(userId, db);
   let profile = await getOrCreateBillingProfileWithClient(db, userId);
   let persisted = await persistComputedStatus(userId, profile, db);
   profile = persisted.profile;

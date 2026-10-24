@@ -10,6 +10,15 @@
 
 export const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+export type PlanActivityProfile = {
+  activityPreference?: string | null;
+  trainingStyle?: string | null;
+};
+
+export function isWalkingGoalPlan(plan?: PlanActivityProfile | null): boolean {
+  return plan?.activityPreference === 'MOSTLY_WALKING' || plan?.trainingStyle === 'walkOnly';
+}
+
 // Distribution Algorithm constants (Mirrors backend config)
 export const RUN_TYPE_MULTIPLIERS: Record<string, number> = {
     "Long Run": 1.5, "Tempo Run": 1.2, "Progression Run": 1.2, "Steady Run": 1.1,
@@ -207,3 +216,49 @@ export const getMappedDays = (weekData: any, availableDays?: number[]): DaySched
 
     return days;
 };
+
+export function getMondayForPlanDate(date: Date): Date {
+    const monday = new Date(date);
+    const day = (monday.getDay() + 6) % 7;
+    monday.setDate(monday.getDate() - day);
+    monday.setHours(12, 0, 0, 0);
+    return monday;
+}
+
+export function getDateForPlanWeekDay(planStartDate: Date, weekNumber: number, dayIdx: number): Date {
+    const startMonday = getMondayForPlanDate(planStartDate);
+    const targetDate = new Date(startMonday);
+    targetDate.setDate(startMonday.getDate() + (Math.max(1, weekNumber) - 1) * 7 + dayIdx);
+    return targetDate;
+}
+
+export function getPlanWeekDateRange(planStartDate: Date, weekNumber: number) {
+    const start = getDateForPlanWeekDay(planStartDate, weekNumber, 0);
+    start.setHours(0, 0, 0, 0);
+    const end = getDateForPlanWeekDay(planStartDate, weekNumber, 6);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+}
+
+export function getWeekLoggedWeightKg(
+    weightHistory: Array<{ weightKg: number; loggedAt: string }>,
+    planStartDate: Date | null | undefined,
+    weekNumber: number,
+): number | null {
+    if (!planStartDate || !Array.isArray(weightHistory) || weightHistory.length === 0) {
+        return null;
+    }
+
+    const { start, end } = getPlanWeekDateRange(planStartDate, weekNumber);
+    const logsInWeek = weightHistory
+        .filter((point) => {
+            const loggedAt = new Date(point.loggedAt);
+            return Number.isFinite(loggedAt.getTime()) && loggedAt >= start && loggedAt <= end;
+        })
+        .sort((a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime());
+
+    const latest = logsInWeek[0];
+    return typeof latest?.weightKg === 'number' && Number.isFinite(latest.weightKg)
+        ? latest.weightKg
+        : null;
+}

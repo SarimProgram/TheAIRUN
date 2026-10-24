@@ -46,22 +46,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const currentUserIdRef = useRef<string | null>(null);
     const isViewingChatRef = useRef(false);
 
-    const markMessagesAsViewed = useCallback((incoming: ChatMessage[], viewerId: string | null) => {
-        if (!viewerId) return incoming;
+    const requestedViewIdsRef = useRef(new Set<string>());
 
-        const viewedAt = new Date().toISOString();
-        let changed = false;
+    const requestMessageViews = useCallback((incoming: ChatMessage[], viewerId: string | null) => {
+        if (!viewerId || !socketRef.current) return;
 
-        const next = incoming.map((msg) => {
-            if (msg.fromUserId === viewerId || msg.viewedAt) {
-                return msg;
-            }
+        const messageIds = incoming
+            .filter((msg) =>
+                !msg.optimistic &&
+                msg.fromUserId !== viewerId &&
+                !msg.viewedAt &&
+                !requestedViewIdsRef.current.has(msg.id)
+            )
+            .map((msg) => msg.id);
 
-            changed = true;
-            return { ...msg, viewedAt };
-        });
-
-        return changed ? next : incoming;
+        if (messageIds.length === 0) return;
+        messageIds.forEach((id) => requestedViewIdsRef.current.add(id));
+        socketRef.current.emit('chat:viewed', { messageIds });
     }, []);
 
     // Get current user ID properly
@@ -99,11 +100,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const cleanExpiredMessages = useCallback(() => {
         const now = Date.now();
         setMessages(prev => prev.filter(msg => {
-            const expiryStart = msg.fromUserId === currentUserIdRef.current
-                ? new Date(msg.createdAt).getTime()
-                : msg.viewedAt
-                    ? new Date(msg.viewedAt).getTime()
-                    : null;
+            const expiryStart = msg.viewedAt ? new Date(msg.viewedAt).getTime() : null;
 
             if (expiryStart === null) {
                 return true;
@@ -117,6 +114,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (!isAuthenticated) return;
 
         let cancelled = false;
+        const requestedViewIds = requestedViewIdsRef.current;
         const connect = async () => {
             const token = await getAccessToken();
             if (!token || cancelled) return;
@@ -147,10 +145,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     isViewingChatRef.current &&
                     msg.fromUserId !== currentUserIdRef.current;
 
-                const nextMessage = shouldMarkViewed
-                    ? { ...msg, viewedAt: new Date().toISOString() }
-                    : msg;
-
                 setMessages(prev => {
                     const optimisticIndex = prev.findIndex(m =>
                         m.optimistic &&
@@ -160,13 +154,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
                     if (optimisticIndex !== -1) {
                         const next = [...prev];
-                        next[optimisticIndex] = nextMessage;
+                        next[optimisticIndex] = msg;
                         return next;
                     }
 
                     if (prev.some(m => m.id === msg.id)) return prev;
-                    return [...prev, nextMessage];
+                    return [...prev, msg];
                 });
+
+                if (shouldMarkViewed) {
+                    requestMessageViews([msg], currentUserIdRef.current);
+                }
+            });
+
+            socket.on('chat:viewed', (data: { messages?: { id: string; viewedAt: string }[] }) => {
+                const viewedById = new Map(
+                    (data.messages || []).map((message) => [message.id, message.viewedAt])
+                );
+                if (viewedById.size === 0) return;
+
+                setMessages(prev => prev.map((msg) => {
+                    const viewedAt = viewedById.get(msg.id);
+                    return viewedAt ? { ...msg, viewedAt } : msg;
+                }));
             });
 
             socket.on('chat:error', (data: { message?: string }) => {
@@ -184,10 +194,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
             socket.on('chat:history:response', (data: { messages: ChatMessage[] }) => {
                 console.log('[ChatContext] History received:', data.messages.length);
-                setMessages(markMessagesAsViewed(
-                    data.messages,
-                    isViewingChatRef.current ? currentUserIdRef.current : null
-                ));
+                setMessages(data.messages);
+                if (isViewingChatRef.current) {
+                    requestMessageViews(data.messages, currentUserIdRef.current);
+                }
             });
 
             socketRef.current = socket;
@@ -199,11 +209,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         return () => {
             cancelled = true;
             socketRef.current?.disconnect();
+            requestedViewIds.clear();
             if (cleanupTimerRef.current) clearInterval(cleanupTimerRef.current);
             setConnected(false);
             setMessages([]);
         };
-    }, [isAuthenticated, cleanExpiredMessages, markMessagesAsViewed]);
+    }, [isAuthenticated, cleanExpiredMessages, requestMessageViews]);
 
     // Handle incoming message notifications
     useEffect(() => {
@@ -258,8 +269,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     useEffect(() => {
         if (!isViewingChat || !currentUserId) return;
-        setMessages(prev => markMessagesAsViewed(prev, currentUserId));
-    }, [currentUserId, isViewingChat, markMessagesAsViewed]);
+        requestMessageViews(messages, currentUserId);
+    }, [currentUserId, isViewingChat, messages, requestMessageViews]);
 
     return (
         <ChatContext.Provider value={{

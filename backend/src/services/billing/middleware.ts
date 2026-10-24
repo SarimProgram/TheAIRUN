@@ -31,3 +31,25 @@ export function requirePremiumAccess() {
   };
 }
 
+const UNPAID_PARTNER_INVITATION_ROUTES = [
+  { method: 'POST', pattern: /^\/invite\/?$/ },
+  { method: 'GET', pattern: /^\/invites\/(?:pending|sent)\/?$/ },
+  { method: 'POST', pattern: /^\/invites\/[^/]+\/(?:accept|decline)\/?$/ },
+];
+
+export function isUnpaidPartnerInvitationRoute(method: string, path: string) {
+  const normalizedMethod = method.toUpperCase();
+  return UNPAID_PARTNER_INVITATION_ROUTES.some(
+    (route) => route.method === normalizedMethod && route.pattern.test(path)
+  );
+}
+
+export function requirePremiumForPartnerRoute() {
+  const premiumRequired = requirePremiumAccess();
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (isUnpaidPartnerInvitationRoute(req.method, req.path)) {
+      return next();
+    }
+    return premiumRequired(req, res, next);
+  };
+}

@@ -1,161 +1,233 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  Animated,
   TouchableOpacity,
-  ScrollView,
-  TextInput,
   Platform,
   PanResponder,
   KeyboardAvoidingView,
+  Alert,
 } from 'react-native';
-import { MessageSquare, Send, X, MessageCircle, Swords, ChevronDown, ChevronUp, AlertTriangle, UserX } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { PenLine, Swords, ChevronDown, ChevronUp, AlertTriangle, UserX } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import PartnerNoteCompose from './PartnerNoteCompose';
+import NoteDrawingPreview from './NoteDrawingPreview';
+import {
+  COLORS,
+  MESSAGE_LIFETIME_MS,
+  mono,
+  getDisplayContent,
+  isStepMessage,
+  isKcalMessage,
+  isInterventionAnimation,
+  parseDrawMessage,
+} from './partnerNoteShared';
 
-const COLORS = {
-  coral: '#FF6B6B',
-  inkDark: '#2C1810',
-  inkFaded: '#5C4033',
-  noteYellow: '#FFF8DC',
-  noteYellowDark: '#F5E6B8',
-  notePartner: '#F0EDE4',
-  notePartnerDark: '#DDD8CB',
-  tapeColor: 'rgba(255, 220, 150, 0.6)',
+type ChatMessage = {
+  id: string;
+  fromUserId: string;
+  fromName?: string;
+  content: string;
+  createdAt: string;
+  viewedAt?: string;
 };
 
-const WATER = '\u{1F4A7}';
-const FIRE = '\u{1F525}';
-const HEART = '\u2764\uFE0F';
-
-const ChatBubble = ({ msg, isMe, onExpiry }: any) => {
-  const [timeLeft, setTimeLeft] = useState(60);
-  const scaleAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-
-  const isStepMsg = msg.content?.startsWith('[STEPS]');
-  const displayContent = isStepMsg ? msg.content.replace('[STEPS]', '').trim() : msg.content;
-  const timerStartedAt = isMe ? msg.createdAt : msg.viewedAt;
+const TimeLeftBar = ({ createdAt }: { createdAt: string }) => {
+  const [fraction, setFraction] = useState(1);
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-    ]).start();
-
-    if (isStepMsg) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.05, duration: 1000, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
-        ])
-      ).start();
-    }
-  }, [isStepMsg, msg.id, pulseAnim, scaleAnim, slideAnim]);
-
-  useEffect(() => {
-    if (!timerStartedAt) {
-      setTimeLeft(60);
-      return;
-    }
-
-    const timerStart = new Date(timerStartedAt).getTime();
-    const elapsed = Math.floor((Date.now() - timerStart) / 1000);
-    const initialTimeLeft = Math.max(0, 60 - elapsed);
-    setTimeLeft(initialTimeLeft);
-
-    if (initialTimeLeft <= 0) {
-      onExpiry?.();
-      return;
-    }
-
+    const msgTime = new Date(createdAt).getTime();
     const interval = setInterval(() => {
-      setTimeLeft((prev: number) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          Animated.timing(scaleAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
-            onExpiry?.();
-          });
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
+      const elapsed = Date.now() - msgTime;
+      const remaining = Math.max(0, 1 - elapsed / MESSAGE_LIFETIME_MS);
+      setFraction(remaining);
+      if (remaining <= 0) clearInterval(interval);
+    }, 500);
     return () => clearInterval(interval);
-  }, [onExpiry, scaleAnim, timerStartedAt]);
+  }, [createdAt]);
 
-  const progressRatio = timerStartedAt ? timeLeft / 60 : 1;
+  return (
+    <View style={noteStyles.progressTrack}>
+      <View style={[noteStyles.progressFill, { width: `${fraction * 100}%` }]} />
+    </View>
+  );
+};
+
+const PartnerNote = ({ msg, compact, isMe }: { msg: ChatMessage; compact?: boolean; isMe?: boolean }) => {
+  const drawStrokes = parseDrawMessage(msg.content);
+  const displayContent = getDisplayContent(msg.content);
+  const stepMsg = isStepMessage(msg.content);
+  const kcalMsg = isKcalMessage(msg.content);
+  const isDrawing = !!drawStrokes || msg.content.startsWith('[DRAW]');
 
   return (
     <Animated.View
-      style={[
-        styles.bubbleContainer,
-        isMe ? styles.bubbleRight : styles.bubbleLeft,
-        {
-          transform: [
-            { scale: scaleAnim },
-            { translateY: slideAnim },
-            { scale: isStepMsg ? pulseAnim : 1 },
-            { rotate: isMe ? '-0.8deg' : '0.6deg' },
-          ],
-        },
-      ]}
+      entering={FadeInDown.duration(260)}
+      style={[noteStyles.wrap, isMe && noteStyles.wrapMe]}
     >
-      <View style={[styles.tapeStrip, isMe ? styles.tapeStripRight : styles.tapeStripLeft]} />
-
+      <View style={[noteStyles.tape, compact && noteStyles.tapeCompact, isMe && noteStyles.tapeMe]} />
       <View
         style={[
-          styles.bubble,
-          styles.retroNote,
-          isMe ? styles.retroNoteMe : styles.retroNotePartner,
-          styles.shadowDepth,
+          noteStyles.note,
+          isMe ? noteStyles.noteMe : noteStyles.notePartner,
+          compact && noteStyles.noteCompact,
         ]}
       >
-        {!isMe && <Text style={styles.bubbleSender}>Partner</Text>}
-        <Text style={[styles.bubbleText, styles.retroText]}>{displayContent}</Text>
-        {isStepMsg && (
-          <View style={[styles.stepTag, isMe && styles.stepTagMe]}>
+        <Text style={noteStyles.sender}>{isMe ? 'You' : msg.fromName || 'Partner'}</Text>
+        {isDrawing ? (
+          <>
+            <Text style={noteStyles.drawLabel}>Drawing</Text>
+            <NoteDrawingPreview content={msg.content} height={compact ? 56 : 72} compact={compact} />
+          </>
+        ) : (
+          <Text style={[noteStyles.body, compact && noteStyles.bodyCompact]} numberOfLines={compact ? 3 : undefined}>
+            {displayContent}
+          </Text>
+        )}
+        {stepMsg && (
+          <View style={noteStyles.stepTag}>
             <Swords size={10} color={COLORS.inkFaded} strokeWidth={3} />
-            <Text style={styles.stepTagText}>STEP BATTLE</Text>
+            <Text style={noteStyles.stepTagText}>STEP BATTLE</Text>
           </View>
         )}
-      </View>
-
-      <View style={styles.bubbleMeta}>
-        <Text style={styles.retroMetaText}>
-          {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </Text>
-        <Text style={styles.retroMetaText}>{timerStartedAt ? `${timeLeft}s` : '60s'}</Text>
-      </View>
-
-      <View style={styles.progressBarContainer}>
-        <View style={[styles.progressBar, { width: `${progressRatio * 100}%` }]} />
+        {kcalMsg && (
+          <View style={[noteStyles.stepTag, noteStyles.kcalTag]}>
+            <AlertTriangle size={10} color="#B45309" strokeWidth={3} />
+            <Text style={[noteStyles.stepTagText, noteStyles.kcalTagText]}>CALORIE CHECK</Text>
+          </View>
+        )}
+        <View style={noteStyles.metaRow}>
+          <Text style={noteStyles.meta}>
+            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
+          <Text style={noteStyles.meta}>expires in 60s</Text>
+        </View>
+        <TimeLeftBar createdAt={msg.createdAt} />
       </View>
     </Animated.View>
   );
 };
 
-const MessagePreset = ({ emoji, label, onPress, disabled }: any) => (
-  <TouchableOpacity
-    onPress={onPress}
-    disabled={disabled}
-    activeOpacity={0.7}
-    style={[styles.presetPill, disabled && styles.disabled]}
-  >
-    <View style={styles.presetInner}>
-      <Text style={styles.presetEmoji}>{emoji}</Text>
-      <Text style={styles.presetLabel}>{label}</Text>
-    </View>
-  </TouchableOpacity>
-);
+const noteStyles = StyleSheet.create({
+  wrap: { marginBottom: 10, alignSelf: 'flex-start', maxWidth: '92%' },
+  wrapMe: { alignSelf: 'flex-end' },
+  tape: {
+    position: 'absolute',
+    top: -4,
+    left: 18,
+    width: 42,
+    height: 12,
+    backgroundColor: COLORS.tapeColor,
+    borderRadius: 1,
+    zIndex: 2,
+  },
+  tapeMe: { left: undefined, right: 18 },
+  tapeCompact: { width: 36, height: 10, left: 14 },
+  note: {
+    borderRadius: 4,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    paddingTop: 16,
+    shadowColor: '#5C4033',
+    shadowOffset: { width: 1, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  notePartner: {
+    backgroundColor: COLORS.notePartner,
+    borderColor: COLORS.notePartnerDark,
+  },
+  noteMe: {
+    backgroundColor: COLORS.noteYellow,
+    borderColor: COLORS.noteYellowDark,
+  },
+  noteCompact: { paddingVertical: 10, paddingTop: 14 },
+  sender: {
+    fontFamily: mono,
+    fontSize: 9,
+    fontWeight: '800',
+    color: COLORS.inkFaded,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+  },
+  drawLabel: {
+    fontFamily: mono,
+    fontSize: 9,
+    fontWeight: '800',
+    color: COLORS.inkFaded,
+    marginBottom: 4,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  body: {
+    fontFamily: mono,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: COLORS.inkDark,
+  },
+  bodyCompact: { fontSize: 13, lineHeight: 18 },
+  stepTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(92, 64, 51, 0.08)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(92, 64, 51, 0.15)',
+  },
+  stepTagText: {
+    fontFamily: mono,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1,
+    color: COLORS.inkFaded,
+  },
+  kcalTag: {
+    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+    borderColor: 'rgba(220, 38, 38, 0.15)',
+  },
+  kcalTagText: {
+    color: '#B45309',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  meta: {
+    fontFamily: mono,
+    fontSize: 9,
+    color: COLORS.inkFaded,
+    letterSpacing: 0.4,
+  },
+  progressTrack: {
+    height: 2,
+    borderRadius: 1,
+    marginTop: 6,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(92, 64, 51, 0.12)',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 1,
+    backgroundColor: COLORS.inkFaded,
+  },
+});
 
 type Props = {
   partnerName?: string;
-  messages?: any[];
+  messages?: ChatMessage[];
   sendMessage?: (content: string) => void;
   connected?: boolean;
   chatError?: string | null;
@@ -168,6 +240,7 @@ type Props = {
   moderationBusy?: boolean;
   showStatusText?: boolean;
   compactModeration?: boolean;
+  hasPartner?: boolean;
 };
 
 export default function PartnerChatPanel({
@@ -185,11 +258,10 @@ export default function PartnerChatPanel({
   moderationBusy = false,
   showStatusText = true,
   compactModeration = false,
+  hasPartner = true,
 }: Props) {
   const insets = useSafeAreaInsets();
-  const [text, setText] = useState('');
-  const [showCustom, setShowCustom] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const [lastSent, setLastSent] = useState<string | null>(null);
 
   const handleDrag = useMemo(
     () =>
@@ -205,25 +277,57 @@ export default function PartnerChatPanel({
     [expanded, onExpand]
   );
 
-  const handleSend = (content?: string) => {
-    const msg = content || text;
-    if (!msg.trim() || !sendMessage) return;
-    sendMessage(msg.trim());
-    setText('');
-    setShowCustom(false);
-  };
-
-  const sortedMessages = [...messages].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  const latestPartnerMessage = useMemo(
+    () =>
+      [...messages]
+        .filter((m) => m.fromUserId !== currentUserId)
+        .filter((m) => !isInterventionAnimation(m.content))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? null,
+    [messages, currentUserId]
   );
 
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      scrollRef.current?.scrollToEnd({ animated: true });
-    }, 200);
+  const latestOwnMessage = useMemo(
+    () =>
+      [...messages]
+        .filter((m) => m.fromUserId === currentUserId)
+        .filter((m) => !isInterventionAnimation(m.content))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? null,
+    [messages, currentUserId]
+  );
 
-    return () => clearTimeout(timeout);
-  }, [sortedMessages.length, showCustom]);
+  const hasVisibleNotes = !!latestPartnerMessage || !!latestOwnMessage;
+
+  useEffect(() => {
+    if (!lastSent) return;
+    const timer = setTimeout(() => setLastSent(null), 2800);
+    return () => clearTimeout(timer);
+  }, [lastSent]);
+
+  const guardSend = () => {
+    if (!hasPartner) {
+      Alert.alert('Partner is not connected', 'Connect with a partner before sending a message.');
+      return false;
+    }
+    if (!connected) {
+      Alert.alert('Chat unavailable', 'Live partner chat is not available right now.');
+      return false;
+    }
+    return true;
+  };
+
+  const deliverMessage = (content: string, preview?: string) => {
+    if (!sendMessage) return;
+    sendMessage(content);
+    setLastSent(preview ?? content);
+  };
+
+  const handleComposeSend = (content: string) => {
+    if (!guardSend()) return;
+    const preview = content.startsWith('[DRAW]') ? 'Drawing sent' : content;
+    deliverMessage(content, preview);
+  };
+
+  const sendDisabled = !hasPartner || !connected;
 
   return (
     <View style={styles.fullScreenWrapper}>
@@ -247,11 +351,11 @@ export default function PartnerChatPanel({
       <View style={[styles.headerLabel, expanded && styles.headerLabelExpanded]}>
         <View style={styles.headerRow}>
           <View style={[styles.connDot, { backgroundColor: connected ? '#4ADE80' : '#EF4444' }]} />
-          <Text style={styles.headerLabelText}>{partnerName.toUpperCase()}</Text>
+          <Text style={styles.headerLabelText}>NOTE TO {partnerName.toUpperCase()}</Text>
         </View>
         {showStatusText && (
           <Text style={styles.headerSubText}>
-            {chatError || (connected ? 'Active Group Chat' : 'Connecting...')}
+            {chatError || (connected ? 'Write a note • disappears in 60s' : 'Connecting...')}
           </Text>
         )}
         {(onReport || onBlock) && (
@@ -287,83 +391,48 @@ export default function PartnerChatPanel({
         )}
       </View>
 
-      <View style={[styles.scrollWrapper, expanded && styles.scrollWrapperExpanded]}>
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={[styles.scrollContent, expanded && styles.scrollContentExpanded]}
-          showsVerticalScrollIndicator={false}
-          bounces
-          keyboardShouldPersistTaps="handled"
-        >
-          {sortedMessages.map((msg) => (
-            <ChatBubble
-              key={msg.id}
-              msg={msg}
-              isMe={msg.fromUserId === currentUserId}
-              onExpiry={() => {}}
-            />
-          ))}
-          {sortedMessages.length === 0 && (
-            <View style={styles.emptyState}>
-              <View style={styles.emptyIconCircle}>
-                <MessageCircle size={24} color="rgba(255,255,255,0.8)" />
-              </View>
-              <Text style={styles.emptyText}>Start a conversation</Text>
-            </View>
-          )}
-        </ScrollView>
-      </View>
-
       <KeyboardAvoidingView
+        style={styles.body}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={expanded ? insets.top + 12 : 0}
       >
-        <View style={[styles.footerContainer, expanded && styles.footerContainerExpanded]}>
-          {showCustom ? (
-            <View style={styles.customInputContainer}>
-              <TextInput
-                style={styles.motivationInput}
-                placeholder="Type your message..."
-                placeholderTextColor="#94A3B8"
-                autoFocus
-                value={text}
-                onChangeText={setText}
-                onSubmitEditing={() => handleSend()}
-                maxLength={100}
-                returnKeyType="send"
-                blurOnSubmit={false}
-              />
-              <TouchableOpacity onPress={() => setShowCustom(false)} style={styles.cancelBtn}>
-                <X size={18} color="#64748B" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => handleSend()}
-                style={[styles.miniSendBtn, !text.trim() && styles.sendBtnDisabled]}
-                disabled={!text.trim()}
-              >
-                <Send size={14} color="#FFF" />
-              </TouchableOpacity>
+        <View style={[styles.notesArea, expanded && styles.notesAreaExpanded]}>
+          {hasVisibleNotes ? (
+            <View style={styles.notesStack}>
+              {latestPartnerMessage && (
+                <PartnerNote msg={latestPartnerMessage} compact={!expanded} />
+              )}
+              {latestOwnMessage && (
+                <PartnerNote msg={latestOwnMessage} compact={!expanded} isMe />
+              )}
             </View>
           ) : (
-            <View style={styles.quickActionsBox}>
-              <View style={styles.presetsContainer}>
-                <MessagePreset emoji={WATER} label="Water" onPress={() => handleSend(`${WATER} Hydration reminder!`)} disabled={!connected} />
-                <MessagePreset emoji={FIRE} label="Fire" onPress={() => handleSend(`${FIRE} Keep it up!`)} disabled={!connected} />
-                <MessagePreset emoji={HEART} label="Love" onPress={() => handleSend(`${HEART} Thinking of you!`)} disabled={!connected} />
+            <Animated.View entering={FadeIn.duration(200)} style={[styles.emptyState, !expanded && styles.emptyStateCompact]}>
+              <View style={styles.emptyIconCircle}>
+                <PenLine size={expanded ? 22 : 18} color="rgba(255,255,255,0.85)" />
               </View>
-              <TouchableOpacity onPress={() => setShowCustom(true)} style={styles.customMessageBtn} activeOpacity={0.8}>
-                <LinearGradient
-                  colors={[COLORS.coral, '#F43F5E']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.customBtnGradient}
-                >
-                  <MessageSquare size={16} color="#FFF" />
-                  <Text style={styles.customBtnText}>Tap to type custom message...</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            </View>
+              <Text style={[styles.emptyText, !expanded && styles.emptyTextCompact]}>Send a quick note</Text>
+              {!expanded && (
+                <Text style={styles.emptySubText}>Use the note box below</Text>
+              )}
+            </Animated.View>
           )}
+        </View>
+
+        <View style={[styles.footerContainer, expanded && styles.footerContainerExpanded]}>
+          {lastSent && (
+            <Animated.View entering={FadeIn.duration(180)} style={styles.sentChip}>
+              <Text style={styles.sentChipLabel}>Sent</Text>
+              <Text style={styles.sentChipText} numberOfLines={1}>{lastSent}</Text>
+            </Animated.View>
+          )}
+
+          <PartnerNoteCompose
+            partnerName={partnerName}
+            compact={!expanded}
+            disabled={sendDisabled}
+            onSend={handleComposeSend}
+          />
         </View>
       </KeyboardAvoidingView>
     </View>
@@ -390,12 +459,12 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: 'rgba(255,255,255,0.75)',
   },
-  headerLabel: { alignItems: 'center', marginTop: 5 },
-  headerLabelExpanded: { marginTop: 10 },
+  headerLabel: { alignItems: 'center', marginTop: 4 },
+  headerLabelExpanded: { marginTop: 8 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   connDot: { width: 6, height: 6, borderRadius: 3 },
-  headerLabelText: { fontSize: 11, color: '#FFF', letterSpacing: 4, fontWeight: '900' },
-  headerSubText: { fontSize: 9, color: 'rgba(255,255,255,0.6)', marginTop: 2, letterSpacing: 0.5 },
+  headerLabelText: { fontSize: 11, color: '#FFF', letterSpacing: 3, fontWeight: '900' },
+  headerSubText: { fontSize: 9, color: 'rgba(255,255,255,0.65)', marginTop: 3, letterSpacing: 0.4 },
   headerActionsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
   headerActionsRowTight: { marginTop: 6 },
   headerActionButton: {
@@ -421,187 +490,80 @@ const styles = StyleSheet.create({
   },
   headerActionButtonDisabled: { opacity: 0.55 },
   headerActionText: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontFamily: mono,
     color: '#FFF',
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
-  headerActionTextCompact: {
-    fontSize: 9,
-    letterSpacing: 0.5,
+  headerActionTextCompact: { fontSize: 9, letterSpacing: 0.5 },
+
+  body: { flex: 1, justifyContent: 'space-between' },
+  notesArea: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    justifyContent: 'flex-start',
   },
-  scrollWrapper: { flex: 1, width: '100%', marginTop: 8 },
-  scrollWrapperExpanded: { marginTop: 12 },
-  scrollContent: { paddingHorizontal: 12, paddingBottom: 10, flexGrow: 1 },
-  scrollContentExpanded: { paddingBottom: 24 },
-  bubbleContainer: { marginVertical: 8, maxWidth: '82%' },
-  bubbleRight: { alignSelf: 'flex-end' },
-  bubbleLeft: { alignSelf: 'flex-start' },
-  bubble: { paddingHorizontal: 14, paddingVertical: 10, overflow: 'hidden' },
-  retroNote: {
-    borderRadius: 4,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    paddingTop: 18,
-  },
-  retroNoteMe: { backgroundColor: COLORS.noteYellow, borderColor: COLORS.noteYellowDark },
-  retroNotePartner: { backgroundColor: COLORS.notePartner, borderColor: COLORS.notePartnerDark },
-  retroText: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontSize: 13,
-    lineHeight: 20,
-    fontWeight: '600',
-    color: COLORS.inkDark,
-    letterSpacing: 0.3,
-  },
-  tapeStrip: {
-    position: 'absolute',
-    top: -3,
-    width: 40,
-    height: 10,
-    backgroundColor: COLORS.tapeColor,
-    borderRadius: 1,
-    zIndex: 10,
-  },
-  tapeStripLeft: { left: 12 },
-  tapeStripRight: { right: 12 },
-  shadowDepth: {
-    shadowColor: '#5C4033',
-    shadowOffset: { width: 1, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  bubbleSender: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontSize: 9,
-    fontWeight: '800',
-    color: COLORS.inkFaded,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-  },
-  bubbleText: { fontSize: 14, lineHeight: 19, fontWeight: '600' },
-  stepTag: {
-    flexDirection: 'row',
+  notesAreaExpanded: { paddingTop: 12, paddingHorizontal: 16 },
+  notesStack: { gap: 4 },
+
+  emptyState: {
     alignItems: 'center',
-    gap: 4,
-    marginTop: 8,
-    backgroundColor: 'rgba(92, 64, 51, 0.08)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 3,
-    borderWidth: 1,
-    borderColor: 'rgba(92, 64, 51, 0.15)',
-    alignSelf: 'flex-start',
+    paddingVertical: 16,
+    marginBottom: 4,
   },
-  stepTagMe: { backgroundColor: 'rgba(92, 64, 51, 0.12)' },
-  stepTagText: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: COLORS.inkFaded,
-  },
-  bubbleMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
-  retroMetaText: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    color: COLORS.inkFaded,
-    fontSize: 9,
-    letterSpacing: 0.5,
-  },
-  progressBarContainer: {
-    height: 2,
-    borderRadius: 1,
-    marginTop: 6,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(92, 64, 51, 0.15)',
-  },
-  progressBar: { height: '100%', borderRadius: 1, backgroundColor: COLORS.inkFaded },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 30 },
+  emptyStateCompact: { paddingVertical: 8, marginBottom: 0 },
   emptyIconCircle: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   emptyText: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontFamily: mono,
     color: '#FFF',
     fontSize: 13,
     fontWeight: '800',
-    letterSpacing: 2,
+    letterSpacing: 1.5,
     textTransform: 'uppercase',
   },
-  footerContainer: { paddingHorizontal: 16, paddingBottom: 20 },
-  footerContainerExpanded: { paddingBottom: 28 },
-  quickActionsBox: { gap: 10 },
-  presetsContainer: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
-  presetPill: {
-    backgroundColor: '#1E293B',
-    borderRadius: 18,
+  emptyTextCompact: { fontSize: 11, letterSpacing: 1 },
+  emptySubText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+    marginTop: 4,
+  },
+
+  footerContainer: { paddingHorizontal: 14, paddingBottom: 16, paddingTop: 8, gap: 8 },
+  footerContainerExpanded: { paddingHorizontal: 16, paddingBottom: 24 },
+  sentChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(15, 23, 42, 0.28)',
+    borderRadius: 12,
     paddingVertical: 8,
-    paddingHorizontal: 14,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  disabled: { opacity: 0.5 },
-  presetInner: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  presetEmoji: { fontSize: 14 },
-  presetLabel: { color: '#FFF', fontSize: 11, fontWeight: '800' },
-  customMessageBtn: {
-    width: '100%',
-    borderRadius: 18,
-    overflow: 'hidden',
-    elevation: 6,
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-  },
-  customBtnGradient: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  customBtnText: { color: '#FFF', fontSize: 13, fontWeight: '800', letterSpacing: 0.3 },
-  customInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
-  motivationInput: { flex: 1, height: 42, color: '#0F172A', fontSize: 14, fontWeight: '600' },
-  cancelBtn: { padding: 6 },
-  miniSendBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: COLORS.coral,
-    alignItems: 'center',
-    justifyContent: 'center',
+  sentChipLabel: {
+    fontFamily: mono,
+    fontSize: 9,
+    fontWeight: '900',
+    color: 'rgba(255,255,255,0.7)',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
-  sendBtnDisabled: { backgroundColor: '#CBD5E1' },
+  sentChipText: {
+    flex: 1,
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
 });

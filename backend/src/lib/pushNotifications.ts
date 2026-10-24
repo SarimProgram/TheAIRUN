@@ -85,17 +85,45 @@ export async function sendNotificationToUser(params: {
   });
 }
 
+function formatChatPushBody(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return 'New partner message';
+
+  if (trimmed.startsWith('[CUSTOM:v1]')) {
+    try {
+      const payload = JSON.parse(trimmed.slice('[CUSTOM:v1]'.length));
+      const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+      const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+      return text || title || 'New partner reminder';
+    } catch {
+      return 'New partner reminder';
+    }
+  }
+
+  const stripped = trimmed.replace(
+    /^\[(?:STEPS|KCAL|WATER)\s*:\s*(?:hearts|angry|cat|photo\s*:[\w-]+)\]\s*/i,
+    '',
+  );
+  if (stripped !== trimmed) {
+    return stripped.trim() || 'New partner reminder';
+  }
+
+  const plain = trimmed.replace(/^\[(?:STEPS|KCAL|WATER)\]\s*/i, '');
+  return plain.trim() || trimmed;
+}
+
 export async function sendChatMessagePush(params: {
   toUserId: string;
   fromName: string;
   content: string;
 }) {
   const { toUserId, fromName, content } = params;
+  const body = formatChatPushBody(content);
   await sendNotificationToUser({
     userId: toUserId,
     preferenceKey: 'partnerChat',
     title: `New message from ${fromName}`,
-    body: content,
+    body,
     data: {
       type: 'chat_message',
       openChat: '1',
@@ -174,6 +202,25 @@ export async function sendPartnerInviteAcceptedPush(params: {
     body: `${partnerName} accepted your partner invite.`,
     data: {
       type: 'partner_invite_accepted',
+      screen: '/Partner',
+    },
+  });
+}
+
+export async function sendPartnerMemoryPush(params: {
+  toUserId: string;
+  fromName: string;
+  memoryId: string;
+}) {
+  const { toUserId, fromName, memoryId } = params;
+  await sendNotificationToUser({
+    userId: toUserId,
+    preferenceKey: 'partnerChat',
+    title: `${fromName} shared a memory`,
+    body: 'Open your partner timeline to view the photo.',
+    data: {
+      type: 'partner_memory',
+      memoryId,
       screen: '/Partner',
     },
   });

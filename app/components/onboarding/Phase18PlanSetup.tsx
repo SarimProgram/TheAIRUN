@@ -13,23 +13,29 @@ import {
   ScrollView,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { ChevronLeft, Check, Zap } from 'lucide-react-native';
-import { Ionicons } from '@expo/vector-icons';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  Scale,
+  Activity,
+  Target,
+  ClipboardList,
+} from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getGenderMascotSource } from '../../utils/genderMascot';
+import Phase19PlanSummary from './Phase19PlanSummary';
 
-const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
-const width = Math.min(windowWidth, 480);
+const { height: windowHeight } = Dimensions.get('window');
 const screenHeight = Math.min(windowHeight, 800);
 
 const COLORS = {
-  brand: '#FF6B6B',
-  brandDark: '#EE5253',
-  ink: '#121212',
+  coral: '#FF6B6B',
+  coralDark: '#EE5253',
+  coralLight: '#FFF5F5',
   white: '#FFFFFF',
-  muted: '#94A3B8',
-  bg: '#F8FAFC',
-  accent: '#FFF1F1',
+  black: '#1F2937',
+  muted: '#6B7280',
 };
 
 type WeeklyPlanRow = {
@@ -42,8 +48,7 @@ type Insight = {
   id: string;
   label: string;
   value: string;
-  status: string;
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: typeof Scale;
 };
 
 type Props = {
@@ -56,11 +61,18 @@ type Props = {
   heightUnit: string;
   targetWeight?: number | string;
   gender?: string | null;
+  mainGoal?: string | null;
+  planData?: Record<string, unknown>;
+  availableDays?: number[];
+  initialWeeklyPlan?: WeeklyPlanRow[];
+  devView?: 'setup' | 'summary' | 'auto';
 };
 
-const STEP_DELAY = 10000;
-const HOLDING_PROGRESS_PERCENT = 95;
+const MANDATORY_STEP_MS = 1600;
+const HOLDING_PROGRESS_PERCENT = 99;
 const COMPLETION_PROGRESS_PERCENT = 100;
+
+const waitMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function parseWeightKg(weight: number | string, unit: string) {
   const numericWeight = Number(weight);
@@ -91,10 +103,10 @@ function parseHeightMeters(height: number | string, unit: string) {
 }
 
 function classifyBmi(bmi: number) {
-  if (bmi < 18.5) return 'Underweight';
-  if (bmi < 25) return 'Healthy';
-  if (bmi < 30) return 'Overweight';
-  return 'Obese';
+  if (bmi < 18.5) return 'underweight';
+  if (bmi < 25) return 'healthy';
+  if (bmi < 30) return 'overweight';
+  return 'above healthy range';
 }
 
 export default function Phase18PlanSetup({
@@ -107,44 +119,62 @@ export default function Phase18PlanSetup({
   heightUnit,
   targetWeight,
   gender,
+  mainGoal,
+  planData,
+  availableDays,
+  initialWeeklyPlan,
+  devView = 'auto',
 }: Props) {
+  const forceSetup = devView === 'setup';
+  const forceSummary = devView === 'summary';
+  const hasInitialPlan =
+    !forceSetup &&
+    (forceSummary || (devView === 'auto' && Array.isArray(initialWeeklyPlan) && initialWeeklyPlan.length > 0));
   const isCompact = screenHeight < 820;
   const [activeStep, setActiveStep] = useState(0);
-  const [isDone, setIsDone] = useState(false);
+  const [isDone, setIsDone] = useState(hasInitialPlan);
+  const [awaitingPlan, setAwaitingPlan] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progressPercent, setProgressPercent] = useState(0);
+  const [progressPercent, setProgressPercent] = useState(hasInitialPlan ? 100 : 0);
+  const [generatedPlan, setGeneratedPlan] = useState<WeeklyPlanRow[] | null>(
+    hasInitialPlan ? (initialWeeklyPlan ?? []) : null,
+  );
+  const [showSummary, setShowSummary] = useState(hasInitialPlan || forceSummary);
 
-  // Animations
   const mascotScale = useRef(new Animated.Value(1)).current;
   const progressWidth = useRef(new Animated.Value(0)).current;
+  const hasStartedRef = useRef(false);
 
   const insights = useMemo<Insight[]>(() => {
     const weightVal = `${currentWeight} ${weightUnit}`;
-    const targetVal = targetWeight ? `${targetWeight} ${weightUnit}` : '--';
+    const targetVal = targetWeight ? `${targetWeight} ${weightUnit}` : 'Not set';
     const weightKg = parseWeightKg(currentWeight, weightUnit);
     const heightMeters = parseHeightMeters(userHeight, heightUnit);
     const bmi =
       weightKg !== null && heightMeters !== null
         ? weightKg / (heightMeters * heightMeters)
         : null;
-    const bmiVal = bmi ? `${bmi.toFixed(1)} (${classifyBmi(bmi)})` : '--';
-    
+    const bmiVal = bmi ? `${bmi.toFixed(1)} · ${classifyBmi(bmi)}` : 'Not enough info';
+
     return [
-      { id: '1', label: 'Analyzing Baseline', value: weightVal, status: 'Completed', icon: 'barbell-outline' },
-      { id: '2', label: 'Calculating BMI', value: bmiVal, status: 'Verified', icon: 'fitness-outline' },
-      { id: '3', label: 'Mapping Target', value: targetVal, status: 'Aligned', icon: 'flag-outline' },
-      { id: '4', label: 'Finalizing Routine', value: 'Adaptive Plan', status: 'Ready', icon: 'construct-outline' },
+      { id: '1', label: 'Your weight', value: weightVal, icon: Scale },
+      { id: '2', label: 'Your BMI', value: bmiVal, icon: Activity },
+      { id: '3', label: 'Your goal', value: targetVal, icon: Target },
+      { id: '4', label: 'Your plan', value: 'Ready to go', icon: ClipboardList },
     ];
   }, [currentWeight, weightUnit, targetWeight, userHeight, heightUnit]);
+
   const mascotSource = useMemo(() => getGenderMascotSource(gender), [gender]);
 
   useEffect(() => {
-    // Mascot Pulse loop
+    if (hasInitialPlan || forceSummary || hasStartedRef.current) return;
+    hasStartedRef.current = true;
+
     Animated.loop(
       Animated.sequence([
-        Animated.timing(mascotScale, { toValue: 1.05, duration: 1500, useNativeDriver: true }),
-        Animated.timing(mascotScale, { toValue: 1, duration: 1500, useNativeDriver: true }),
-      ])
+        Animated.timing(mascotScale, { toValue: 1.04, duration: 1600, useNativeDriver: true }),
+        Animated.timing(mascotScale, { toValue: 1, duration: 1600, useNativeDriver: true }),
+      ]),
     ).start();
 
     startProcess();
@@ -172,424 +202,448 @@ export default function Phase18PlanSetup({
   const startProcess = async () => {
     setError(null);
     setIsDone(false);
+    setAwaitingPlan(false);
     setActiveStep(0);
     progressWidth.setValue(0);
 
     try {
-      // Start the plan generation in background
       const planPromise = onGeneratePlan();
       const perStepProgress = HOLDING_PROGRESS_PERCENT / insights.length;
 
-      // Sequence the UI steps
       for (let i = 0; i < insights.length; i++) {
         setActiveStep(i);
         const targetProgress =
           i === insights.length - 1
             ? HOLDING_PROGRESS_PERCENT
             : Math.round((i + 1) * perStepProgress);
-        await animateProgressTo(targetProgress, STEP_DELAY);
+        await Promise.all([
+          animateProgressTo(targetProgress, MANDATORY_STEP_MS),
+          waitMs(MANDATORY_STEP_MS),
+        ]);
       }
 
+      setAwaitingPlan(true);
       const plan = await planPromise;
+      if (!Array.isArray(plan) || plan.length === 0) {
+        throw new Error('Your plan came back empty. Please try again.');
+      }
+      setAwaitingPlan(false);
       await animateProgressTo(COMPLETION_PROGRESS_PERCENT, 300);
       setActiveStep(insights.length);
       setIsDone(true);
-      setTimeout(() => onGenerated(plan), 800);
+      setGeneratedPlan(plan);
+      setShowSummary(true);
     } catch (err: any) {
-      setError(err?.message || 'AI Generation Timed Out');
+      setAwaitingPlan(false);
+      setError(err?.message || 'Something went wrong. Please try again.');
     }
   };
 
+  const title = error
+    ? 'That didn\'t work'
+    : isDone
+      ? 'Your plan is ready'
+      : awaitingPlan
+        ? 'Almost there'
+        : 'Building your plan';
+  const subtitle = error
+    ? 'Tap below to try again.'
+    : isDone
+      ? 'Here is your personalized roadmap.'
+      : awaitingPlan
+        ? 'Finishing up your plan.'
+        : 'This only takes a moment.';
+
+  if (showSummary && generatedPlan) {
+    return (
+      <Phase19PlanSummary
+        mainGoal={mainGoal}
+        currentWeight={currentWeight}
+        targetWeight={targetWeight}
+        weightUnit={weightUnit}
+        weeklyPlan={generatedPlan}
+        planData={planData}
+        availableDays={availableDays}
+        onBack={onBack}
+        onContinue={() => onGenerated(generatedPlan)}
+      />
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
-          <ChevronLeft color={COLORS.ink} size={28} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>AI COACHING</Text>
-        <View style={{ width: 44 }} />
-      </View>
+      <LinearGradient
+        colors={['#FFFFFF', '#FDFCFB', '#FEF9F9']}
+        style={StyleSheet.absoluteFill}
+      />
 
-      <ScrollView
-        contentContainerStyle={[
-          styles.scrollMain,
-          isCompact && styles.scrollMainCompact,
-        ]}
-        showsVerticalScrollIndicator={false}
-      >
-        
-        {/* Visual Focus */}
-        <View style={[styles.visualSection, isCompact && styles.visualSectionCompact]}>
-          <Animated.View
-            style={[
-              styles.mascotAura,
-              isCompact && styles.mascotAuraCompact,
-              { transform: [{ scale: mascotScale }] }
-            ]}
-          >
-            <View style={styles.pulseRing3} />
-            <View style={styles.pulseRing2} />
-            <View style={styles.pulseRing1} />
-            <Image 
-              source={mascotSource}
-              style={[styles.mascot, isCompact && styles.mascotCompact]}
-              contentFit="contain"
-            />
-          </Animated.View>
-          
-          <View style={[styles.textStack, isCompact && styles.textStackCompact]}>
-            <Text style={[styles.mainTitle, isCompact && styles.mainTitleCompact]}>
-              {error ? 'Generation Failed' : isDone ? 'Plan Ready!' : 'Finalizing Your Plan'}
-            </Text>
-            <Text style={[styles.subTitle, isCompact && styles.subTitleCompact]}>
-               {error ? 'Something went wrong. Let\'s try again.' : 'Our AI is fine-tuning every workout for your unique profile.'}
-            </Text>
+      <SafeAreaView style={styles.flex}>
+        <View style={styles.content}>
+          <View style={styles.topNav}>
+            <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
+              <ChevronLeft color={COLORS.black} size={22} />
+            </TouchableOpacity>
           </View>
-        </View>
 
-        {/* The New Modern Step List (Cards) */}
-        <View style={[styles.stepGrid, isCompact && styles.stepGridCompact]}>
-          {insights.map((step, index) => {
-            const isPending = activeStep < index;
-            const isActive = activeStep === index;
-            const isCompleted = activeStep > index;
-
-            return (
-              <View 
-                key={step.id} 
+          <ScrollView
+            contentContainerStyle={[
+              styles.scrollContent,
+              isCompact && styles.scrollContentCompact,
+            ]}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={[styles.hero, isCompact && styles.heroCompact]}>
+              <Animated.View
                 style={[
-                  styles.stepCard,
-                  isCompact && styles.stepCardCompact,
-                  isActive && styles.stepCardActive,
-                  isCompleted && styles.stepCardDone
+                  styles.mascotWrap,
+                  isCompact && styles.mascotWrapCompact,
+                  { transform: [{ scale: mascotScale }] },
                 ]}
               >
-                <View style={[
-                  styles.iconCircle,
-                  isActive && { backgroundColor: COLORS.white },
-                  isCompleted && { backgroundColor: COLORS.brand }
-                ]}>
-                  {isCompleted ? (
-                    <Check color={COLORS.white} size={20} strokeWidth={3} />
-                  ) : isActive ? (
-                    <ActivityIndicator size="small" color={COLORS.brand} />
-                  ) : (
-                    <Ionicons name={step.icon} size={24} color={COLORS.muted} />
-                  )}
-                </View>
+                <View style={[styles.mascotGlow, isCompact && styles.mascotGlowCompact]} />
+                <Image
+                  source={mascotSource}
+                  style={[styles.mascot, isCompact && styles.mascotCompact]}
+                  contentFit="contain"
+                />
+              </Animated.View>
 
-                <View style={styles.stepInfo}>
-                  <Text style={[
-                    styles.stepLabel,
-                    (isActive || isCompleted) && { color: COLORS.ink, fontWeight: '800' }
-                  ]}>
-                    {step.label}
-                  </Text>
-                  {isCompleted || isActive ? (
-                    <Text style={styles.stepValue}>{step.value}</Text>
-                  ) : (
-                    <Text style={styles.stepPending}>Waiting...</Text>
-                  )}
-                </View>
-
-                {isCompleted && (
-                  <View style={styles.doneBadge}>
-                    <Text style={styles.doneText}>{step.status}</Text>
-                  </View>
-                )}
+              <View style={styles.miniTag}>
+                <ClipboardList size={13} color={COLORS.coral} />
+                <Text style={styles.miniTagText}>YOUR PLAN</Text>
               </View>
-            );
-          })}
-        </View>
+              <Text style={[styles.title, isCompact && styles.titleCompact]}>{title}</Text>
+              <Text style={[styles.subtitle, isCompact && styles.subtitleCompact]}>{subtitle}</Text>
+            </View>
 
-        {error && (
-          <TouchableOpacity style={styles.retryBtn} onPress={startProcess}>
-            <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={styles.retryGrad}>
-              <Text style={styles.retryText}>Retry Generation</Text>
-              <Zap color={COLORS.white} size={18} />
-            </LinearGradient>
-          </TouchableOpacity>
-        )}
-      </ScrollView>
+            <View style={styles.stepList}>
+              {insights.map((step, index) => {
+                const isPending = activeStep < index;
+                const isActive = activeStep === index;
+                const isCompleted = activeStep > index;
+                const Icon = step.icon;
 
-      {/* Modern Bottom Progress */}
-      <View style={styles.footerContainer}>
-        <View style={styles.progressLabelRow}>
-            <Text style={styles.progressLabel}>AI Crafting Personalised Plan</Text>
-            <Text style={styles.progressPercent}>{progressPercent}%</Text>
+                return (
+                  <View
+                    key={step.id}
+                    style={[
+                      styles.stepRow,
+                      isActive && styles.stepRowActive,
+                      isCompleted && styles.stepRowDone,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.iconTile,
+                        isActive && styles.iconTileActive,
+                        isCompleted && styles.iconTileDone,
+                      ]}
+                    >
+                      {isCompleted ? (
+                        <Check color={COLORS.white} size={18} strokeWidth={3} />
+                      ) : isActive ? (
+                        <ActivityIndicator size="small" color={COLORS.coral} />
+                      ) : (
+                        <Icon color={COLORS.muted} size={20} strokeWidth={2.4} />
+                      )}
+                    </View>
+
+                    <View style={styles.stepCopy}>
+                      <Text
+                        style={[
+                          styles.stepLabel,
+                          (isActive || isCompleted) && styles.stepLabelActive,
+                        ]}
+                      >
+                        {step.label}
+                      </Text>
+                      {!isPending && <Text style={styles.stepValue}>{step.value}</Text>}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            {error && (
+              <TouchableOpacity
+                style={styles.retryBtn}
+                activeOpacity={0.85}
+                onPress={startProcess}
+              >
+                <LinearGradient
+                  colors={[COLORS.coral, COLORS.coralDark]}
+                  style={styles.retryGradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                >
+                  <Text style={styles.retryText}>Try again</Text>
+                  <View style={styles.retryArrow}>
+                    <ChevronRight color={COLORS.coral} size={18} strokeWidth={3} />
+                  </View>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
+          </ScrollView>
+
+          <View style={styles.footer}>
+            <View style={styles.progressRow}>
+              <Text style={styles.progressLabel}>
+                {error ? 'Stopped' : isDone ? 'Done' : awaitingPlan ? 'Almost done' : 'Working on it'}
+              </Text>
+              <Text style={styles.progressPercent}>{progressPercent}%</Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <Animated.View
+                style={[
+                  styles.progressFill,
+                  {
+                    width: progressWidth.interpolate({
+                      inputRange: [0, 100],
+                      outputRange: ['0%', '100%'],
+                    }),
+                  },
+                ]}
+              />
+            </View>
+          </View>
         </View>
-        <View style={styles.progressTrack}>
-          <Animated.View style={[
-            styles.progressFill, 
-            { width: progressWidth.interpolate({
-              inputRange: [0, 100],
-              outputRange: ['0%', '100%']
-            }) }
-          ]} />
-        </View>
-      </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: COLORS.white },
+  flex: { flex: 1 },
+  content: {
     flex: 1,
-    backgroundColor: COLORS.bg,
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 12 : 4,
+    paddingBottom: Platform.OS === 'ios' ? 8 : 16,
   },
-  header: {
-    paddingHorizontal: 16,
-    height: 54,
+
+  topNav: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: COLORS.muted,
-    letterSpacing: 2,
+    marginBottom: 8,
   },
   backBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F1F5F9',
     justifyContent: 'center',
-    backgroundColor: COLORS.white,
-    borderRadius: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    elevation: 2,
-  },
-  scrollMain: {
-    flexGrow: 1,
-    paddingBottom: 120,
-  },
-  scrollMainCompact: {
-    paddingBottom: 108,
-  },
-  visualSection: {
     alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 40,
   },
-  visualSectionCompact: {
-    marginTop: 8,
+
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 24,
+  },
+  scrollContentCompact: {
+    paddingBottom: 16,
+  },
+
+  hero: {
+    alignItems: 'flex-start',
+    marginBottom: 28,
+  },
+  heroCompact: {
     marginBottom: 20,
   },
-  mascotAura: {
-    width: 220,
-    height: 220,
+  mascotWrap: {
+    alignSelf: 'center',
+    width: 148,
+    height: 148,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 20,
   },
-  mascotAuraCompact: {
-    width: 168,
-    height: 168,
+  mascotWrapCompact: {
+    width: 120,
+    height: 120,
+    marginBottom: 14,
   },
-  mascot: {
-    width: 140,
-    height: 140,
-    zIndex: 10,
+  mascotGlow: {
+    position: 'absolute',
+    width: 132,
+    height: 132,
+    borderRadius: 66,
+    backgroundColor: 'rgba(255, 107, 107, 0.1)',
   },
-  mascotCompact: {
+  mascotGlowCompact: {
     width: 108,
     height: 108,
+    borderRadius: 54,
   },
-  pulseRing1: {
-    position: 'absolute',
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: COLORS.brand + '15',
+  mascot: {
+    width: 112,
+    height: 112,
   },
-  pulseRing2: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: COLORS.brand + '08',
+  mascotCompact: {
+    width: 92,
+    height: 92,
   },
-  pulseRing3: {
-    position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: COLORS.brand + '04',
-  },
-  textStack: {
+  miniTag: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
-    paddingHorizontal: 40,
+    gap: 6,
+    marginBottom: 10,
   },
-  textStackCompact: {
-    marginTop: 2,
-    paddingHorizontal: 24,
-  },
-  mainTitle: {
-    fontSize: 32,
+  miniTagText: {
+    fontSize: 11,
     fontWeight: '900',
-    color: COLORS.ink,
-    textAlign: 'center',
+    color: COLORS.coral,
+    letterSpacing: 1.2,
+  },
+  title: {
+    fontSize: 30,
+    fontWeight: '900',
+    color: COLORS.black,
+    lineHeight: 34,
     letterSpacing: -1,
   },
-  mainTitleCompact: {
+  titleCompact: {
     fontSize: 26,
     lineHeight: 30,
   },
-  subTitle: {
+  subtitle: {
     fontSize: 15,
+    fontWeight: '500',
     color: COLORS.muted,
-    textAlign: 'center',
-    marginTop: 10,
     lineHeight: 22,
+    marginTop: 8,
+    maxWidth: 320,
   },
-  subTitleCompact: {
-    fontSize: 13,
+  subtitleCompact: {
+    fontSize: 14,
+    lineHeight: 20,
     marginTop: 6,
-    lineHeight: 19,
   },
-  stepGrid: {
-    paddingHorizontal: 20,
+
+  stepList: {
     gap: 12,
   },
-  stepGridCompact: {
-    paddingHorizontal: 16,
-    gap: 10,
-  },
-  stepCard: {
+  stepRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.white,
-    padding: 16,
-    borderRadius: 24,
-    borderWidth: 1.5,
-    borderColor: '#F1F5F9',
-  },
-  stepCardCompact: {
-    paddingVertical: 12,
-    paddingHorizontal: 14,
     borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    gap: 14,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
   },
-  stepCardActive: {
-    borderColor: COLORS.brand,
-    backgroundColor: COLORS.accent,
-    shadowColor: COLORS.brand,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 5,
+  stepRowActive: {
+    backgroundColor: COLORS.coralLight,
+    shadowColor: COLORS.coral,
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  stepCardDone: {
-    borderColor: '#E2E8F0',
-    backgroundColor: COLORS.white,
-    opacity: 0.9,
+  stepRowDone: {
+    opacity: 0.92,
   },
-  iconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
+  iconTile: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     backgroundColor: '#F8FAFC',
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  stepInfo: {
+  iconTileActive: {
+    backgroundColor: COLORS.white,
+  },
+  iconTileDone: {
+    backgroundColor: COLORS.coral,
+  },
+  stepCopy: {
     flex: 1,
-    marginLeft: 16,
+    gap: 2,
   },
   stepLabel: {
     fontSize: 15,
     fontWeight: '700',
     color: COLORS.muted,
   },
+  stepLabelActive: {
+    color: COLORS.black,
+    fontWeight: '800',
+  },
   stepValue: {
     fontSize: 14,
-    color: COLORS.brand,
+    fontWeight: '700',
+    color: COLORS.coral,
+  },
+
+  retryBtn: {
+    height: 60,
+    borderRadius: 30,
+    overflow: 'hidden',
+    marginTop: 24,
+    shadowColor: COLORS.coral,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  retryGradient: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 26,
+    paddingRight: 8,
+  },
+  retryText: {
+    color: COLORS.white,
+    fontSize: 17,
     fontWeight: '800',
-    marginTop: 2,
+    letterSpacing: -0.3,
   },
-  stepPending: {
-    fontSize: 12,
-    color: '#CBD5E1',
-    marginTop: 2,
-    fontWeight: '600',
-  },
-  doneBadge: {
-    backgroundColor: '#F0FDF4',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-  },
-  doneText: {
-    color: '#15803D',
-    fontSize: 10,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  footerContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+  retryArrow: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: COLORS.white,
-    paddingHorizontal: 30,
-    paddingTop: 20,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 25,
-    borderTopLeftRadius: 36,
-    borderTopRightRadius: 36,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 15,
-    elevation: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  progressLabelRow: {
+
+  footer: {
+    paddingTop: 16,
+    gap: 10,
+  },
+  progressRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    alignItems: 'center',
   },
   progressLabel: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: COLORS.ink,
-    letterSpacing: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.black,
   },
   progressPercent: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: COLORS.brand,
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.coral,
   },
   progressTrack: {
-    height: 8,
+    height: 6,
     backgroundColor: '#F1F5F9',
-    borderRadius: 4,
+    borderRadius: 3,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    backgroundColor: COLORS.brand,
-    borderRadius: 4,
-  },
-  retryBtn: {
-    marginHorizontal: 30,
-    height: 64,
-    marginTop: 30,
-    borderRadius: 22,
-    overflow: 'hidden',
-  },
-  retryGrad: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  retryText: {
-    color: COLORS.white,
-    fontSize: 18,
-    fontWeight: '800',
+    backgroundColor: COLORS.coral,
+    borderRadius: 3,
   },
 });

@@ -6,8 +6,6 @@ import * as Notifications from 'expo-notifications';
 import { API_BASE_URL } from '@/config/api';
 import { loadRuns } from '@/lib/run-storage';
 import { useAuth } from '@/src/auth/authContext';
-import { useEntitlement } from '@/src/billing';
-import type { BillingAccessSnapshot } from '@/src/billing/types';
 import {
   cacheNotificationPreferences,
   loadCachedNotificationPreferences,
@@ -157,35 +155,8 @@ async function buildQuestReminder(authFetch: (url: string, options?: RequestInit
   } satisfies ManagedNotificationRequest;
 }
 
-function buildBillingReminder(access: BillingAccessSnapshot | null): ManagedNotificationRequest | null {
-  if (!access) return null;
-
-  const upcomingRaw = access.trialEndsAt || access.premiumExpiresAt;
-  if (!upcomingRaw) return null;
-
-  const upcomingDate = new Date(upcomingRaw);
-  if (Number.isNaN(upcomingDate.getTime()) || upcomingDate.getTime() <= Date.now()) {
-    return null;
-  }
-
-  const triggerAt = new Date(upcomingDate.getTime() - 24 * 60 * 60 * 1000);
-  const scheduledAt = triggerAt.getTime() > Date.now() ? triggerAt : new Date(Date.now() + 60 * 60 * 1000);
-  const label = access.trialEndsAt ? 'trial' : 'subscription';
-
-  return {
-    key: 'billing_reminder',
-    content: {
-      title: 'Billing reminder',
-      body: `Your ${label} changes on ${upcomingDate.toLocaleDateString()}. Review your access details.`,
-      data: { type: 'billing_reminder' },
-    },
-    trigger: dateTrigger(scheduledAt),
-  };
-}
-
 export default function LocalNotificationScheduler() {
   const { authFetch, isAuthenticated } = useAuth();
-  const { access } = useEntitlement();
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -325,13 +296,6 @@ export default function LocalNotificationScheduler() {
         }
       }
 
-      if (preferences.billingReminder) {
-        const billingReminder = buildBillingReminder(access);
-        if (billingReminder) {
-          entries.push(billingReminder);
-        }
-      }
-
       await replaceManagedLocalNotifications(entries);
     };
 
@@ -351,7 +315,7 @@ export default function LocalNotificationScheduler() {
       active = false;
       appStateSubscription.remove();
     };
-  }, [access, authFetch, isAuthenticated]);
+  }, [authFetch, isAuthenticated]);
 
   return null;
 }

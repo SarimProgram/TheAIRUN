@@ -1,11 +1,13 @@
 {
+  "packageManager": "pnpm@9.15.9",
   "name": "backend",
   "version": "1.0.0",
   "description": "Fitness coach backend (Express + TS + Prisma)",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "test": "tsx --test src/**/*.test.ts",
+    "build": "prisma generate && tsc",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
@@ -23,6 +25,7 @@
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
     "openai": "^6.10.0",
+    "resend": "^6.18.1",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "zod": "^3.25.76"

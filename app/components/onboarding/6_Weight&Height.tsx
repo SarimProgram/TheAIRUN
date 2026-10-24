@@ -205,8 +205,8 @@ export default function WeightHeightSelection({ onContinue, onBack }: Props) {
 
             <Text style={styles.subtitle}>
               {step === 0
-                ? "This helps us make your plan fit you better."
-                : "This helps us make your plan feel more personal."}
+                ? "This helps us figure out the right food and calories for your daily plan."
+                : "This helps us balance your nutrition for your daily plan."}
             </Text>
           </Animated.View>
 

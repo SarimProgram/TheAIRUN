@@ -4,12 +4,9 @@ import {
     Text,
     StyleSheet,
     Animated,
-    Dimensions,
     TouchableOpacity,
-    Vibration,
     Platform,
     Image,
-    SafeAreaView,
     ScrollView,
 } from 'react-native';
 import {
@@ -18,20 +15,30 @@ import {
     Play,
     ChevronRight,
     RotateCcw,
+    Check,
 } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 import Svg, { Circle } from 'react-native-svg';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { InstructionsPanel } from './InstructionsPanel';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const TIMER_SIZE = 90;
-const TOTAL_TIMER_SIZE = 60;
-const STROKE_WIDTH = 5;
+const COLORS = {
+    bg: '#F7F8FA',
+    card: '#FFFFFF',
+    textMain: '#1A1C1E',
+    textSub: '#6C757D',
+    textMuted: '#ADB5BD',
+    line: '#EEF0F3',
+    success: '#00B894',
+};
+
+const TIMER_SIZE = 140;
+const TOTAL_TIMER_SIZE = 44;
+const STROKE_WIDTH = 6;
 const RADIUS = (TIMER_SIZE - STROKE_WIDTH) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 const TOTAL_RADIUS = (TOTAL_TIMER_SIZE - STROKE_WIDTH) / 2;
 const TOTAL_CIRCUMFERENCE = 2 * Math.PI * TOTAL_RADIUS;
-
-const TIMELINE_HEIGHT = 4;
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -60,6 +67,7 @@ type WorkoutExercisePlan = {
     exercise: MobilityExercise;
     rounds: number;
     targetLabel: string;
+    setLabel: string;
     setDurationSeconds: number;
 };
 
@@ -71,6 +79,8 @@ type SessionPhase = {
     instruction: string;
     durationSeconds: number;
     targetLabel?: string;
+    roundNumber?: number;
+    roundTotal?: number;
     exercise?: MobilityExercise;
 };
 
@@ -91,20 +101,61 @@ type Props = {
 };
 
 const WARMUP_INSTRUCTIONS = [
-    'Warm up with easy dynamic movement, deep breathing, and controlled range of motion.',
-    'Prepare hips, ankles, shoulders, and core before the work sets begin.',
-    'Ease into the session and make the first minutes smooth, not rushed.',
+    'Do some light movements to get your body ready for exercise.',
 ];
 
 const COOLDOWN_INSTRUCTIONS = [
-    'Slow down, shake out tension, and bring your breathing back under control.',
-    'Finish with light movement and let your heart rate settle.',
-    'End tall and relaxed so the session feels complete, not abrupt.',
+    'Move your feet slowly. Relax your arms and shoulders. Take slow breaths. Stop when your breathing feels normal.',
 ];
 
 function clampWeek(week: number) {
     if (!Number.isFinite(week)) return 1;
     return Math.max(1, Math.min(12, Math.floor(week)));
+}
+
+function hexToRgba(hex: string, alpha: number) {
+    const normalized = hex.replace('#', '');
+    const value =
+        normalized.length === 3
+            ? normalized
+                  .split('')
+                  .map((char) => char + char)
+                  .join('')
+            : normalized;
+    const r = parseInt(value.slice(0, 2), 16);
+    const g = parseInt(value.slice(2, 4), 16);
+    const b = parseInt(value.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getPhaseColor(phase: SessionPhase) {
+    if (phase.exercise?.color) return phase.exercise.color;
+    if (phase.type === 'warmup') return '#339AF0';
+    if (phase.type === 'cooldown') return COLORS.success;
+    return '#6366F1';
+}
+
+function getPhaseTypeLabel(type: SessionPhase['type']) {
+    if (type === 'warmup') return 'Warm up';
+    if (type === 'cooldown') return 'Cool down';
+    return 'Exercise';
+}
+
+function getSetBlockState(
+    setNumber: number,
+    roundNumber: number,
+    status: 'completed' | 'current' | 'upcoming',
+) {
+    if (status === 'completed') {
+        return setNumber <= roundNumber ? 'done' : 'empty';
+    }
+    if (status === 'current') {
+        if (setNumber < roundNumber) return 'done';
+        if (setNumber === roundNumber) return 'active';
+        return 'empty';
+    }
+    if (setNumber < roundNumber) return 'done';
+    return 'empty';
 }
 
 export function formatClock(totalSeconds: number) {
@@ -123,6 +174,7 @@ export function buildExercisePrescription(exercise: MobilityExercise, currentWee
         return {
             rounds,
             targetLabel: `${rounds} x ${seconds} sec`,
+            setLabel: `${seconds} sec`,
             setDurationSeconds: seconds,
         };
     }
@@ -134,6 +186,7 @@ export function buildExercisePrescription(exercise: MobilityExercise, currentWee
     return {
         rounds,
         targetLabel: `${rounds} x ${repLabel}`,
+        setLabel: repLabel,
         setDurationSeconds: Math.min(75 + (Math.floor((week - 1) / 3) * 10), 105),
     };
 }
@@ -162,6 +215,7 @@ export function buildWorkoutSessionPlan(exercises: MobilityExercise[], currentWe
             exercise,
             rounds: prescription.rounds,
             targetLabel: prescription.targetLabel,
+            setLabel: prescription.setLabel,
             setDurationSeconds: prescription.setDurationSeconds,
         };
     });
@@ -182,11 +236,13 @@ export function buildWorkoutSessionPlan(exercises: MobilityExercise[], currentWe
             phases.push({
                 key: `${block.exercise.id}-${round}`,
                 type: 'exercise',
-                title: `${block.exercise.name} Set ${round}`,
-                subtitle: `${block.targetLabel}`,
-                instruction: block.exercise.instructions[(round - 1) % block.exercise.instructions.length],
+                title: block.exercise.name,
+                subtitle: `Set ${round} of ${block.rounds} · ${block.setLabel}`,
+                instruction: block.exercise.instructions.join(' '),
                 durationSeconds: block.setDurationSeconds,
                 targetLabel: block.targetLabel,
+                roundNumber: round,
+                roundTotal: block.rounds,
                 exercise: block.exercise,
             });
         }
@@ -214,25 +270,29 @@ export function buildWorkoutSessionPlan(exercises: MobilityExercise[], currentWe
 }
 
 export function GuidedMobility({ exercises, currentWeek, onClose, onComplete }: Props) {
+    const insets = useSafeAreaInsets();
     const sessionPlan = useMemo(() => buildWorkoutSessionPlan(exercises, currentWeek), [exercises, currentWeek]);
-    
+
     const [phaseIndex, setPhaseIndex] = useState(0);
     const currentPhase = sessionPlan.phases[phaseIndex];
-    
-    // Dynamic context based on current phase
+
     const activeExercise = currentPhase.exercise ?? sessionPlan.workoutExercises[0]?.exercise ?? exercises[0];
-    const accentColor = activeExercise.color;
-    const displayImage = activeExercise.image || require('../../assets/t.png');
+    const accentColor = getPhaseColor(currentPhase);
+    const accentSoft = hexToRgba(accentColor, 0.12);
+    const accentBorder = hexToRgba(accentColor, 0.22);
 
     const [isActive, setIsActive] = useState(true);
     const [phaseSecondsLeft, setPhaseSecondsLeft] = useState(sessionPlan.phases[0]?.durationSeconds ?? 0);
-    const [totalSecondsLeft, setTotalSecondsLeft] = useState(sessionPlan.phases.reduce((sum, phase) => sum + phase.durationSeconds, 0));
+    const [totalSecondsLeft, setTotalSecondsLeft] = useState(
+        sessionPlan.phases.reduce((sum, phase) => sum + phase.durationSeconds, 0),
+    );
 
     const phaseAnim = useRef(new Animated.Value(1)).current;
     const totalAnim = useRef(new Animated.Value(1)).current;
     const fadeAnim = useRef(new Animated.Value(0)).current;
 
     const totalDurationSeconds = sessionPlan.phases.reduce((sum, phase) => sum + phase.durationSeconds, 0);
+    const sessionProgress = totalDurationSeconds > 0 ? 1 - totalSecondsLeft / totalDurationSeconds : 0;
 
     useEffect(() => {
         setPhaseIndex(0);
@@ -280,7 +340,9 @@ export function GuidedMobility({ exercises, currentWeek, onClose, onComplete }: 
     }, [totalSecondsLeft, totalDurationSeconds, totalAnim]);
 
     const handleAdvancePhase = () => {
-        if (Platform.OS !== 'web') Vibration.vibrate(250);
+        if (Platform.OS !== 'web') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
 
         if (phaseIndex < sessionPlan.phases.length - 1) {
             const nextPhase = sessionPlan.phases[phaseIndex + 1];
@@ -294,10 +356,16 @@ export function GuidedMobility({ exercises, currentWeek, onClose, onComplete }: 
     };
 
     const handleRestart = () => {
+        Haptics.selectionAsync();
         setPhaseIndex(0);
         setIsActive(true);
         setPhaseSecondsLeft(sessionPlan.phases[0]?.durationSeconds ?? 0);
         setTotalSecondsLeft(totalDurationSeconds);
+    };
+
+    const handleToggleActive = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setIsActive((value) => !value);
     };
 
     const phaseStrokeDashoffset = phaseAnim.interpolate({
@@ -313,187 +381,244 @@ export function GuidedMobility({ exercises, currentWeek, onClose, onComplete }: 
     if (!currentPhase || !activeExercise) return null;
 
     return (
-        <SafeAreaView style={styles.container}>
-            {/* COMPACT TOP HEADER */}
+        <SafeAreaView style={styles.container} edges={['top']}>
             <View style={styles.header}>
-                <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-                    <X color="#1A1C1E" size={24} />
+                <TouchableOpacity onPress={onClose} style={styles.headerBtn} activeOpacity={0.7}>
+                    <X color={COLORS.textMain} size={20} strokeWidth={2.5} />
                 </TouchableOpacity>
                 <View style={styles.headerInfo}>
-                    <Text style={styles.headerTitle}>Daily Mobility Mix</Text>
-                    <Text style={styles.headerSub}>Week {sessionPlan.week} • {sessionPlan.totalMinutes}m Session</Text>
+                    <Text style={styles.headerTitle}>Exercise Session</Text>
+                    <Text style={styles.headerSub}>
+                        Week {sessionPlan.week} · {sessionPlan.totalMinutes} min
+                    </Text>
                 </View>
                 <View style={styles.progressionCircle}>
-                    <Svg width={36} height={36}>
+                    <Svg width={TOTAL_TIMER_SIZE} height={TOTAL_TIMER_SIZE}>
                         <Circle
-                            cx={18}
-                            cy={18}
-                            r={15}
-                            stroke="#F1F3F5"
-                            strokeWidth={3}
+                            cx={TOTAL_TIMER_SIZE / 2}
+                            cy={TOTAL_TIMER_SIZE / 2}
+                            r={TOTAL_RADIUS}
+                            stroke={COLORS.line}
+                            strokeWidth={STROKE_WIDTH - 1}
                             fill="transparent"
                         />
                         <AnimatedCircle
-                            cx={18}
-                            cy={18}
-                            r={15}
-                            stroke="#1A1C1E"
-                            strokeWidth={3}
+                            cx={TOTAL_TIMER_SIZE / 2}
+                            cy={TOTAL_TIMER_SIZE / 2}
+                            r={TOTAL_RADIUS}
+                            stroke={accentColor}
+                            strokeWidth={STROKE_WIDTH - 1}
                             fill="transparent"
-                            strokeDasharray={2 * Math.PI * 15}
-                            strokeDashoffset={totalStrokeDashoffset.interpolate({
-                                inputRange: [0, 1],
-                                outputRange: [2 * Math.PI * 15, 0]
-                            })}
+                            strokeDasharray={TOTAL_CIRCUMFERENCE}
+                            strokeDashoffset={totalStrokeDashoffset}
                             strokeLinecap="round"
+                            rotation="-90"
+                            origin={`${TOTAL_TIMER_SIZE / 2}, ${TOTAL_TIMER_SIZE / 2}`}
                         />
                     </Svg>
-                    <Text style={styles.progressPctText}>{Math.round((1 - totalSecondsLeft / totalDurationSeconds) * 100)}%</Text>
+                    <Text style={styles.progressPctText}>{Math.round(sessionProgress * 100)}%</Text>
                 </View>
             </View>
 
-            <ScrollView 
-                style={styles.scroll} 
+            <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${sessionProgress * 100}%`, backgroundColor: accentColor }]} />
+            </View>
+
+            <ScrollView
+                style={styles.scroll}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
             >
                 {sessionPlan.phases.map((phase, index) => {
                     const isCompleted = index < phaseIndex;
-                    const isActive = index === phaseIndex;
+                    const isCurrent = index === phaseIndex;
                     const isUpcoming = index > phaseIndex;
-                    const phaseColor = phase.exercise?.color || '#339AF0';
+                    const phaseColor = getPhaseColor(phase);
+                    const phaseSoft = hexToRgba(phaseColor, 0.12);
+                    const phaseBorder = hexToRgba(phaseColor, 0.22);
+                    const phaseStatus = isCompleted ? 'completed' : isCurrent ? 'current' : 'upcoming';
 
                     return (
                         <View key={phase.key} style={styles.timelineRow}>
-                            {/* LEFT LINE SYSTEM */}
                             <View style={styles.indicatorCol}>
-                                <View 
+                                <View
                                     style={[
-                                        styles.verticalLine, 
+                                        styles.verticalLine,
                                         index === 0 && { top: '50%' },
                                         index === sessionPlan.phases.length - 1 && { height: '50%' },
-                                        isCompleted && { backgroundColor: '#1A1C1E' }
-                                    ]} 
+                                        isCompleted && { backgroundColor: phaseColor },
+                                    ]}
                                 />
-                                <View 
+                                <View
                                     style={[
-                                        styles.dot, 
-                                        isCompleted && { backgroundColor: '#1A1C1E', borderColor: '#1A1C1E' },
-                                        isActive && { backgroundColor: '#FFF', borderColor: phaseColor, transform: [{ scale: 1.2 }] },
-                                        isUpcoming && { backgroundColor: '#F1F3F5', borderColor: '#DEE2E6' }
+                                        styles.dot,
+                                        isCompleted && { backgroundColor: phaseColor, borderColor: phaseColor },
+                                        isCurrent && { backgroundColor: COLORS.card, borderColor: phaseColor, transform: [{ scale: 1.15 }] },
+                                        isUpcoming && { backgroundColor: COLORS.bg, borderColor: COLORS.line },
                                     ]}
                                 >
-                                    {isCompleted && <Play size={10} color="#FFF" fill="#FFF" />}
-                                    {isActive && <View style={[styles.activeCore, { backgroundColor: phaseColor }]} />}
+                                    {isCompleted && <Check size={11} color="#FFF" strokeWidth={3} />}
+                                    {isCurrent && <View style={[styles.activeCore, { backgroundColor: phaseColor }]} />}
                                 </View>
                             </View>
 
-                            {/* RIGHT CONTENT */}
-                            <TouchableOpacity 
-                                activeOpacity={0.9}
-                                disabled={!isUpcoming} // Allow tapping ahead if we wanted skip logic
+                            <View
                                 style={[
                                     styles.contentCol,
-                                    isActive && styles.activeCard,
-                                    isCompleted && styles.completedRow
+                                    isCurrent && styles.activeCard,
+                                    isCompleted && styles.completedRow,
                                 ]}
                             >
                                 <View style={styles.phaseHeader}>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={[
-                                            styles.phaseTitle,
-                                            isCompleted && styles.dimmedText,
-                                            isActive && { color: phaseColor }
-                                        ]}>
+                                    <View style={styles.phaseHeaderText}>
+                                        <View style={[styles.phaseTypePill, { backgroundColor: phaseSoft, borderColor: phaseBorder }]}>
+                                            <Text style={[styles.phaseTypeText, { color: phaseColor }]}>
+                                                {getPhaseTypeLabel(phase.type)}
+                                            </Text>
+                                        </View>
+                                        <Text
+                                            style={[
+                                                styles.phaseTitle,
+                                                isCompleted && styles.dimmedText,
+                                                isCurrent && { color: COLORS.textMain },
+                                            ]}
+                                        >
                                             {phase.title}
                                         </Text>
-                                        <Text style={[
-                                            styles.phaseTarget,
-                                            isCompleted && styles.dimmedText
-                                        ]}>
+                                        <Text style={[styles.phaseTarget, isCompleted && styles.dimmedText]}>
                                             {phase.subtitle}
                                         </Text>
+                                        {phase.roundTotal && phase.roundNumber && phase.roundTotal > 1 ? (
+                                            <View style={styles.setBlocksRow}>
+                                                {Array.from({ length: phase.roundTotal }, (_, blockIndex) => {
+                                                    const setNumber = blockIndex + 1;
+                                                    const blockState = getSetBlockState(
+                                                        setNumber,
+                                                        phase.roundNumber!,
+                                                        phaseStatus,
+                                                    );
+                                                    return (
+                                                        <View
+                                                            key={setNumber}
+                                                            style={[
+                                                                styles.setBlock,
+                                                                blockState === 'done' && {
+                                                                    backgroundColor: phaseColor,
+                                                                    borderColor: phaseColor,
+                                                                },
+                                                                blockState === 'active' && {
+                                                                    backgroundColor: phaseSoft,
+                                                                    borderColor: phaseColor,
+                                                                },
+                                                                blockState === 'empty' && styles.setBlockEmpty,
+                                                            ]}
+                                                        />
+                                                    );
+                                                })}
+                                            </View>
+                                        ) : null}
                                     </View>
-                                    {isActive && (
-                                        <View style={styles.timeBadge}>
+                                    {isCurrent && (
+                                        <View style={[styles.timeBadge, { backgroundColor: phaseColor }]}>
                                             <Text style={styles.timeBadgeText}>{formatClock(phaseSecondsLeft)}</Text>
                                         </View>
                                     )}
                                 </View>
 
-                                {isActive && (
+                                {isCurrent && (
                                     <Animated.View style={[styles.expandedContent, { opacity: fadeAnim }]}>
-                                        <View style={styles.instructionBox}>
-                                            <Text style={styles.instructionText}>{phase.instruction}</Text>
-                                        </View>
-                                        
+                                        {phase.exercise ? (
+                                            <InstructionsPanel
+                                                key={phase.key}
+                                                embedded
+                                                instructions={phase.exercise.instructions}
+                                                accentColor={phaseColor}
+                                                borderColor={phaseBorder}
+                                            />
+                                        ) : (
+                                            <InstructionsPanel
+                                                key={phase.key}
+                                                embedded
+                                                title="Instructions"
+                                                singleInstruction={phase.instruction}
+                                                accentColor={phaseColor}
+                                                borderColor={phaseBorder}
+                                            />
+                                        )}
+
                                         {phase.exercise && (
-                                            <View style={styles.mediaContainer}>
-                                                <Image 
-                                                    source={phase.exercise.image || require('../../assets/t.png')} 
-                                                    style={styles.mediaImage}
-                                                    resizeMode="contain"
-                                                />
-                                                <View style={[styles.imageGlow, { backgroundColor: '#FFFFFF' }]} />
+                                            <View style={styles.mediaSection}>
+                                                <View style={[styles.mediaCard, { borderColor: phaseBorder }]}>
+                                                    <Image
+                                                        source={phase.exercise.image || require('../../assets/t.png')}
+                                                        style={styles.mediaImage}
+                                                        resizeMode="contain"
+                                                    />
+                                                </View>
                                             </View>
                                         )}
 
                                         <View style={styles.phaseTimerWrapper}>
-                                            <Svg width={120} height={120} style={styles.bigTimerSvg}>
+                                            <Svg width={TIMER_SIZE} height={TIMER_SIZE}>
                                                 <Circle
-                                                    cx={60}
-                                                    cy={60}
-                                                    r={54}
-                                                    stroke="#F1F3F5"
-                                                    strokeWidth={6}
+                                                    cx={TIMER_SIZE / 2}
+                                                    cy={TIMER_SIZE / 2}
+                                                    r={RADIUS}
+                                                    stroke={COLORS.line}
+                                                    strokeWidth={STROKE_WIDTH}
                                                     fill="transparent"
                                                 />
                                                 <AnimatedCircle
-                                                    cx={60}
-                                                    cy={60}
-                                                    r={54}
+                                                    cx={TIMER_SIZE / 2}
+                                                    cy={TIMER_SIZE / 2}
+                                                    r={RADIUS}
                                                     stroke={phaseColor}
-                                                    strokeWidth={6}
+                                                    strokeWidth={STROKE_WIDTH}
                                                     fill="transparent"
-                                                    strokeDasharray={2 * Math.PI * 54}
-                                                    strokeDashoffset={phaseStrokeDashoffset.interpolate({
-                                                        inputRange: [0, 1],
-                                                        outputRange: [2 * Math.PI * 54, 0]
-                                                    })}
+                                                    strokeDasharray={CIRCUMFERENCE}
+                                                    strokeDashoffset={phaseStrokeDashoffset}
                                                     strokeLinecap="round"
+                                                    rotation="-90"
+                                                    origin={`${TIMER_SIZE / 2}, ${TIMER_SIZE / 2}`}
                                                 />
                                             </Svg>
                                             <View style={styles.bigTimerTextContainer}>
                                                 <Text style={styles.bigTimerText}>{formatClock(phaseSecondsLeft)}</Text>
-                                                <Text style={styles.bigTimerLabel}>remains</Text>
+                                                <Text style={styles.bigTimerLabel}>
+                                                    {isActive ? 'Running' : 'Paused'}
+                                                </Text>
                                             </View>
                                         </View>
                                     </Animated.View>
                                 )}
-                            </TouchableOpacity>
+                            </View>
                         </View>
                     );
                 })}
             </ScrollView>
 
-            {/* STICKY FOOTER CONTROLS */}
-            <View style={styles.stickyFooter}>
-                <TouchableOpacity onPress={handleRestart} style={styles.controlIconBtn}>
-                    <RotateCcw size={22} color="#495057" />
+            <View style={[styles.stickyFooter, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+                <TouchableOpacity onPress={handleRestart} style={styles.controlIconBtn} activeOpacity={0.7}>
+                    <RotateCcw size={20} color={COLORS.textSub} />
                 </TouchableOpacity>
 
-                <TouchableOpacity 
-                    onPress={() => setIsActive(!isActive)} 
+                <TouchableOpacity
+                    onPress={handleToggleActive}
                     style={[styles.playBtn, { backgroundColor: accentColor }]}
+                    activeOpacity={0.85}
                 >
-                    {isActive ? <Pause size={28} color="#FFF" fill="#FFF" /> : <Play size={28} color="#FFF" fill="#FFF" />}
+                    {isActive ? (
+                        <Pause size={28} color="#FFF" fill="#FFF" />
+                    ) : (
+                        <Play size={28} color="#FFF" fill="#FFF" />
+                    )}
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={handleAdvancePhase} style={styles.nextBtn}>
+                <TouchableOpacity onPress={handleAdvancePhase} style={styles.nextBtn} activeOpacity={0.85}>
                     <Text style={styles.nextText}>
-                        {phaseIndex === sessionPlan.phases.length - 1 ? 'Finish' : 'Next Step'}
+                        {phaseIndex === sessionPlan.phases.length - 1 ? 'Finish' : 'Next step'}
                     </Text>
-                    <ChevronRight size={20} color="#1A1C1E" />
+                    <ChevronRight size={18} color="#FFF" strokeWidth={2.5} />
                 </TouchableOpacity>
             </View>
         </SafeAreaView>
@@ -501,64 +626,83 @@ export function GuidedMobility({ exercises, currentWeek, onClose, onComplete }: 
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#FFF' },
+    container: {
+        flex: 1,
+        backgroundColor: COLORS.bg,
+    },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 20,
-        paddingVertical: 14,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F1F3F5',
-        backgroundColor: '#FFF',
+        paddingTop: 8,
+        paddingBottom: 12,
+        backgroundColor: COLORS.bg,
     },
-    closeBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#F8F9FA',
+    headerBtn: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        borderCurve: 'continuous',
+        backgroundColor: COLORS.card,
+        borderWidth: 1,
+        borderColor: COLORS.line,
         justifyContent: 'center',
         alignItems: 'center',
     },
     headerInfo: {
         flex: 1,
-        marginLeft: 16,
+        marginLeft: 14,
     },
     headerTitle: {
-        fontSize: 16,
-        fontWeight: '900',
-        color: '#1A1C1E',
+        fontSize: 17,
+        fontWeight: '800',
+        color: COLORS.textMain,
+        letterSpacing: -0.3,
     },
     headerSub: {
-        fontSize: 12,
-        color: '#6C757D',
+        fontSize: 13,
+        color: COLORS.textSub,
         fontWeight: '600',
-        marginTop: 1,
+        marginTop: 2,
     },
     progressionCircle: {
-        width: 36,
-        height: 36,
+        width: TOTAL_TIMER_SIZE,
+        height: TOTAL_TIMER_SIZE,
         justifyContent: 'center',
         alignItems: 'center',
     },
     progressPctText: {
         position: 'absolute',
-        fontSize: 9,
+        fontSize: 10,
         fontWeight: '900',
-        color: '#1A1C1E',
+        color: COLORS.textMain,
+        fontVariant: ['tabular-nums'],
+    },
+    progressTrack: {
+        height: 3,
+        marginHorizontal: 20,
+        marginBottom: 8,
+        backgroundColor: COLORS.line,
+        borderRadius: 2,
+        overflow: 'hidden',
+    },
+    progressFill: {
+        height: '100%',
+        borderRadius: 2,
     },
     scroll: {
         flex: 1,
     },
     scrollContent: {
-        paddingTop: 24,
-        paddingBottom: 120, // Space for sticky footer
+        paddingTop: 16,
+        paddingBottom: 140,
     },
     timelineRow: {
         flexDirection: 'row',
         paddingHorizontal: 20,
     },
     indicatorCol: {
-        width: 40,
+        width: 36,
         alignItems: 'center',
     },
     verticalLine: {
@@ -566,15 +710,16 @@ const styles = StyleSheet.create({
         width: 2,
         top: 0,
         bottom: 0,
-        backgroundColor: '#F1F3F5',
+        backgroundColor: COLORS.line,
     },
     dot: {
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        backgroundColor: '#FFF',
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        borderCurve: 'continuous',
+        backgroundColor: COLORS.card,
         borderWidth: 2,
-        borderColor: '#DEE2E6',
+        borderColor: COLORS.line,
         justifyContent: 'center',
         alignItems: 'center',
         marginTop: 4,
@@ -584,105 +729,124 @@ const styles = StyleSheet.create({
         width: 10,
         height: 10,
         borderRadius: 5,
+        borderCurve: 'continuous',
     },
     contentCol: {
         flex: 1,
         marginLeft: 12,
-        paddingBottom: 32,
+        paddingBottom: 24,
     },
     activeCard: {
-        backgroundColor: '#F8F9FA',
+        backgroundColor: COLORS.card,
         borderRadius: 24,
+        borderCurve: 'continuous',
         padding: 20,
         marginLeft: 4,
         borderWidth: 1,
-        borderColor: '#F1F3F5',
-        shadowColor: '#000',
-        shadowOpacity: 0.03,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 2,
+        borderColor: COLORS.line,
+        shadowColor: '#1A1C1E',
+        shadowOpacity: 0.05,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 },
+        elevation: 3,
     },
     completedRow: {
-        opacity: 0.5,
+        opacity: 0.55,
     },
     phaseHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
+        gap: 12,
     },
-    phaseTitle: {
-        fontSize: 14,
-        fontWeight: '900',
-        color: '#495057',
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
+    phaseHeaderText: {
+        flex: 1,
+        gap: 6,
     },
-    phaseTarget: {
-        fontSize: 14,
-        color: '#1A1C1E',
-        fontWeight: '800',
-        marginTop: 2,
-    },
-    dimmedText: {
-        color: '#ADB5BD',
-    },
-    timeBadge: {
-        backgroundColor: '#1A1C1E',
+    phaseTypePill: {
+        alignSelf: 'flex-start',
         paddingHorizontal: 10,
         paddingVertical: 4,
+        borderRadius: 20,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+    },
+    phaseTypeText: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    phaseTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: COLORS.textSub,
+        letterSpacing: -0.3,
+    },
+    phaseTarget: {
+        fontSize: 13,
+        color: COLORS.textSub,
+        fontWeight: '600',
+    },
+    setBlocksRow: {
+        flexDirection: 'row',
+        gap: 6,
+        marginTop: 10,
+    },
+    setBlock: {
+        flex: 1,
+        height: 6,
+        borderRadius: 3,
+        borderWidth: 1,
+    },
+    setBlockEmpty: {
+        backgroundColor: COLORS.line,
+        borderColor: COLORS.line,
+    },
+    dimmedText: {
+        color: COLORS.textMuted,
+    },
+    timeBadge: {
+        paddingHorizontal: 10,
+        paddingVertical: 5,
         borderRadius: 12,
+        borderCurve: 'continuous',
     },
     timeBadgeText: {
         color: '#FFF',
         fontSize: 12,
-        fontWeight: '900',
+        fontWeight: '800',
         fontVariant: ['tabular-nums'],
     },
     expandedContent: {
         marginTop: 16,
     },
-    instructionBox: {
-        backgroundColor: '#FFF',
-        padding: 16,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: '#F1F3F5',
-        marginBottom: 20,
-    },
-    instructionText: {
-        fontSize: 18,
-        lineHeight: 26,
-        fontWeight: '800',
-        color: '#1A1C1E',
-    },
-    mediaContainer: {
-        width: '100%',
-        height: 180,
-        justifyContent: 'center',
+    mediaSection: {
         alignItems: 'center',
         marginBottom: 24,
     },
-    mediaImage: {
-        width: '100%',
-        height: '100%',
-        zIndex: 2,
+    mediaCard: {
+        width: 160,
+        height: 160,
+        borderRadius: 28,
+        borderCurve: 'continuous',
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        shadowColor: '#1A1C1E',
+        shadowOpacity: 0.06,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 },
+        elevation: 3,
     },
-    imageGlow: {
-        position: 'absolute',
-        width: 120,
-        height: 120,
-        borderRadius: 60,
-        opacity: 0.1,
-        ...Platform.select({ web: { filter: 'blur(30px)' }, default: {} }),
+    mediaImage: {
+        width: '88%',
+        height: '88%',
     },
     phaseTimerWrapper: {
         alignItems: 'center',
         justifyContent: 'center',
-        marginTop: 10,
-    },
-    bigTimerSvg: {
-        transform: [{ rotateZ: '-90deg' }],
+        marginTop: 4,
     },
     bigTimerTextContainer: {
         position: 'absolute',
@@ -691,63 +855,69 @@ const styles = StyleSheet.create({
     bigTimerText: {
         fontSize: 28,
         fontWeight: '900',
-        color: '#1A1C1E',
+        color: COLORS.textMain,
         fontVariant: ['tabular-nums'],
+        letterSpacing: -0.5,
     },
     bigTimerLabel: {
         fontSize: 10,
-        fontWeight: '800',
-        color: '#ADB5BD',
+        fontWeight: '700',
+        color: COLORS.textMuted,
         textTransform: 'uppercase',
-        marginTop: -2,
+        letterSpacing: 0.6,
+        marginTop: 2,
     },
     stickyFooter: {
         position: 'absolute',
         bottom: 0,
         left: 0,
         right: 0,
-        backgroundColor: 'rgba(255,255,255,0.95)',
+        backgroundColor: 'rgba(255,255,255,0.96)',
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 24,
-        paddingTop: 16,
-        paddingBottom: 34,
+        paddingHorizontal: 20,
+        paddingTop: 14,
         borderTopWidth: 1,
-        borderTopColor: '#F1F3F5',
-        gap: 16,
+        borderTopColor: COLORS.line,
+        gap: 12,
     },
     controlIconBtn: {
         width: 52,
         height: 52,
         borderRadius: 26,
-        backgroundColor: '#F8F9FA',
+        borderCurve: 'continuous',
+        backgroundColor: COLORS.bg,
+        borderWidth: 1,
+        borderColor: COLORS.line,
         justifyContent: 'center',
         alignItems: 'center',
     },
     playBtn: {
         flex: 1,
-        height: 60,
-        borderRadius: 30,
+        height: 56,
+        borderRadius: 28,
+        borderCurve: 'continuous',
         justifyContent: 'center',
         alignItems: 'center',
         shadowColor: '#000',
-        shadowOpacity: 0.1,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 5 },
+        shadowOpacity: 0.12,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
         elevation: 4,
     },
     nextBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#1A1C1E',
+        backgroundColor: COLORS.textMain,
         height: 52,
-        paddingHorizontal: 20,
+        paddingHorizontal: 18,
         borderRadius: 26,
-        gap: 6,
+        borderCurve: 'continuous',
+        gap: 4,
     },
     nextText: {
         color: '#FFF',
-        fontWeight: '900',
+        fontWeight: '800',
         fontSize: 14,
     },
 });

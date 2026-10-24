@@ -8,33 +8,35 @@ import {
     ScrollView,
     Image,
     Switch,
+    SafeAreaView,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import {
     X,
     Clock,
     Check,
     Activity,
     Play,
-    Heart,
     ChevronRight,
+    Home,
 } from 'lucide-react-native';
 import { GuidedMobility, buildExercisePrescription, buildWorkoutSessionPlan, MobilityExercise } from './GuidedMobility';
 import { ExerciseGuidePage } from './ExerciseGuidePage';
-import { Dimensions } from 'react-native';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const COLORS = {
     primary: '#FF6B6B',
-    bg: '#FAFAFA',
+    primarySoft: '#FFF0F0',
+    bg: '#F7F8FA',
     card: '#FFFFFF',
     textMain: '#1A1C1E',
     textSub: '#6C757D',
-    line: '#F1F3F5',
+    textMuted: '#ADB5BD',
+    line: '#EEF0F3',
+    lineStrong: '#E5E7EB',
     success: '#00B894',
-    successFade: 'rgba(0, 184, 148, 0.08)',
+    successFade: 'rgba(0, 184, 148, 0.1)',
 };
+
+const POINTS_REWARD = 5;
 
 const MOBILITY_EXERCISES: MobilityExercise[] = [
     {
@@ -43,7 +45,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '3 min',
         reps: '12 per leg',
         description: 'A lower-body strength movement that builds balance, leg drive, and hip stability.',
-        instructions: ['Stand tall', 'Step forward', 'Lower with control', 'Drive back up'],
+        instructions: [
+            'Stand straight with your feet a little apart.',
+            'Take one big step forward.',
+            'Bend both knees and move your body down.',
+            'Stand up and do the same with the other leg.',
+        ],
         benefits: ['Strength', 'Balance'],
         imagePlaceholder: 'lunges',
         image: require('../../assets/exercise/Lunges.png'),
@@ -62,7 +69,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '3 min',
         reps: '10 per leg',
         description: 'Develops leg strength and coordination with a simple single-leg drive pattern.',
-        instructions: ['Face the bench', 'Plant your foot', 'Drive up tall', 'Step down slowly'],
+        instructions: [
+            'Stand close to the step or bench.',
+            'Put one foot on top of the step.',
+            'Push with that foot and move your body up.',
+            'Step down slowly and change to the other foot.',
+        ],
         benefits: ['Power', 'Coordination'],
         imagePlaceholder: 'step_ups',
         image: require('../../assets/exercise/stepup.png'),
@@ -81,7 +93,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '4 min',
         reps: '10 reps',
         description: 'A hinge exercise that strengthens the back side of the body and improves force production.',
-        instructions: ['Brace your core', 'Push hips back', 'Keep back flat', 'Drive hips forward'],
+        instructions: [
+            'Stand straight and hold the weight in both hands.',
+            'Bend your knees a little and move your hips back.',
+            'Lower the weight while keeping your back straight.',
+            'Push your feet down and stand up again.',
+        ],
         benefits: ['Posterior chain', 'Hip hinge'],
         imagePlaceholder: 'deadlifts',
         image: require('../../assets/exercise/deadlift.png'),
@@ -99,7 +116,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '3 min',
         reps: '12 reps',
         description: 'A lower-body foundation movement for legs, glutes, and body control.',
-        instructions: ['Chest up', 'Sit down and back', 'Keep heels grounded', 'Stand tall'],
+        instructions: [
+            'Stand with your feet a little wider apart.',
+            'Move your hips back and bend your knees.',
+            'Move your body down as far as you can.',
+            'Push through your feet and stand up again.',
+        ],
         benefits: ['Strength', 'Control'],
         imagePlaceholder: 'squats',
         image: require('../../assets/exercise/squats.png'),
@@ -117,7 +139,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '3 min',
         reps: '10 reps',
         description: 'A simple upper-body press that also challenges core tension and body alignment.',
-        instructions: ['Start in plank', 'Lower chest with control', 'Keep body straight', 'Press back up'],
+        instructions: [
+            'Put your hands on the floor under your shoulders.',
+            'Keep your body straight from head to feet.',
+            'Bend your arms and move your chest down.',
+            'Push with your hands to move back up.',
+        ],
         benefits: ['Push strength', 'Core'],
         imagePlaceholder: 'pushups',
         image: require('../../assets/exercise/pushups.png'),
@@ -135,7 +162,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '3 min',
         reps: '8-10 reps',
         description: 'Upper-body pulling work for back strength, posture, and shoulder balance.',
-        instructions: ['Set shoulders first', 'Pull with control', 'Squeeze upper back', 'Lower slowly'],
+        instructions: [
+            'Hold the weights or bar with both hands.',
+            'Pull your hands toward your body.',
+            'Keep your body still while you pull.',
+            'Slowly return to the start.',
+        ],
         benefits: ['Pull strength', 'Posture'],
         imagePlaceholder: 'rows_or_pull_ups',
         image: require('../../assets/exercise/pullups.png'),
@@ -153,7 +185,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '3 min',
         reps: '12 reps',
         description: 'A posterior-chain exercise that strengthens glutes and helps support hip drive.',
-        instructions: ['Lie on your back with knees bent', 'Press through your heels', 'Lift hips until body is straight', 'Lower under control'],
+        instructions: [
+            'Lie on your back and bend your knees.',
+            'Keep both feet flat on the floor.',
+            'Push through your feet and lift your hips.',
+            'Slowly lower your hips to the floor.',
+        ],
         benefits: ['Glute strength', 'Hip stability'],
         imagePlaceholder: 'glute_bridges',
         image: require('../../assets/exercise/glute_bridge.png'),
@@ -171,7 +208,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '30 sec',
         reps: '30 seconds',
         description: 'A static core hold that builds stiffness, posture, and control through the trunk.',
-        instructions: ['Stack shoulders over elbows', 'Keep hips level', 'Brace your core', 'Breathe slowly'],
+        instructions: [
+            'Place your elbows on the floor under your shoulders.',
+            'Keep your body straight from head to feet.',
+            'Hold your body still in this position.',
+            'Keep breathing slowly while you hold.',
+        ],
         benefits: ['Core stability', 'Posture'],
         imagePlaceholder: 'plank',
         image: require('../../assets/exercise/Plank.png'),
@@ -189,7 +231,12 @@ const MOBILITY_EXERCISES: MobilityExercise[] = [
         duration: '2 min',
         reps: '10 reps each side',
         description: 'A core-control drill that improves trunk stability and coordination.',
-        instructions: ['Lie on your back with knees up', 'Brace your core', 'Extend opposite arm and leg slowly', 'Return and switch sides'],
+        instructions: [
+            'Lie on your back and lift your arms.',
+            'Bend your knees and lift your feet.',
+            'Lower one arm and the other-side leg.',
+            'Bring them back and change sides.',
+        ],
         benefits: ['Core control', 'Coordination'],
         imagePlaceholder: 'dead_bug',
         image: require('../../assets/exercise/Dead_bug.png'),
@@ -248,135 +295,167 @@ export function MobilityExercises({ visible, onClose, currentWeek, onMixedSessio
     };
 
     const renderExerciseList = () => (
-        <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-            <View style={styles.horizontalHeader}>
-                <TouchableOpacity onPress={onClose} style={styles.exitBtn}>
-                    <X size={20} color={COLORS.textMain} />
-                </TouchableOpacity>
-                <View style={styles.sessionOverview}>
-                    <Text style={styles.sessionLabel}>WEEK {currentWeek}</Text>
-                    <Text style={styles.sessionMainTitle}>Mobility Mix</Text>
-                </View>
-                <View style={{ width: 40 }} /> 
-            </View>
-
-            <LinearGradient
-                colors={['#FF6B6B', '#FF8E8E']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.heroPreview}
-            >
-                <View style={styles.heroHeader}>
-                    <View style={styles.heroBadgeRow}>
-                        <View style={styles.heroPointsBadge}>
-                            <Heart size={12} color="#FF6B6B" fill="#FF6B6B" />
-                            <Text style={styles.heroPointsText}>+5 PTS</Text>
-                        </View>
-                        <View style={styles.heroKcalBox}>
-                            <Activity size={12} color="#FFF" />
-                            <Text style={styles.heroKcalText}>~{totalKcals} KCAL</Text>
+        <View style={styles.screen}>
+            <SafeAreaView style={styles.safeHeader}>
+                <View style={styles.horizontalHeader}>
+                    <TouchableOpacity onPress={onClose} style={styles.exitBtn} activeOpacity={0.7}>
+                        <X size={20} color={COLORS.textMain} strokeWidth={2.5} />
+                    </TouchableOpacity>
+                    <View style={styles.sessionOverview}>
+                        <Text style={styles.sessionMainTitle}>Exercises</Text>
+                        <View style={styles.weekBadge}>
+                            <Text style={styles.weekBadgeText}>Week {currentWeek}</Text>
                         </View>
                     </View>
-                    
-                    <View style={styles.heroToggleWrapper}>
-                        <Text style={styles.heroToggleLabel}>HOME BASED</Text>
+                    <View style={styles.headerSpacer} />
+                </View>
+            </SafeAreaView>
+
+            <ScrollView
+                style={styles.container}
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+            >
+                <View style={styles.heroCard}>
+                    <View style={styles.heroTitleBlock}>
+                        <Text style={styles.heroTitle}>Today's Exercise Session</Text>
+                        <View style={styles.heroMetaChips}>
+                            <View style={styles.heroMetaChip}>
+                                <Clock size={12} color={COLORS.textSub} />
+                                <Text style={styles.heroMetaChipText}>~12 min</Text>
+                            </View>
+                            <View style={styles.heroMetaChipDot} />
+                            <View style={styles.heroMetaChip}>
+                                <Text style={styles.heroMetaChipText}>{totalKcals} kcal</Text>
+                            </View>
+                        </View>
+                    </View>
+
+                    <View style={styles.heroVisualRow}>
+                        {sessionPreview.workoutExercises.map((block, index) => (
+                            <View
+                                key={block.exercise.id}
+                                style={[
+                                    styles.heroVisualItem,
+                                    index > 0 && styles.heroVisualItemOverlap,
+                                ]}
+                            >
+                                {block.exercise.image ? (
+                                    <Image
+                                        source={block.exercise.image}
+                                        style={styles.heroVisualImage}
+                                        resizeMode="contain"
+                                    />
+                                ) : (
+                                    <Activity size={22} color={block.exercise.color} />
+                                )}
+                            </View>
+                        ))}
+                    </View>
+
+                    <View style={styles.heroRewardRow}>
+                        <View style={styles.heroRewardBlock}>
+                            <Text style={styles.heroRewardValue}>+{POINTS_REWARD}</Text>
+                            <Text style={styles.heroRewardUnit}>pts to earn</Text>
+                        </View>
+                        <TouchableOpacity
+                            onPress={() => setShowWorkout(true)}
+                            style={styles.heroCta}
+                            activeOpacity={0.9}
+                        >
+                            <Play size={16} color="#FFFFFF" fill="#FFFFFF" />
+                            <Text style={styles.heroCtaText}>Start</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.heroExerciseList}>
+                        {sessionPreview.workoutExercises.map((block) => (
+                            <View key={block.exercise.id} style={styles.heroExerciseRow}>
+                                <View style={styles.heroExerciseThumb}>
+                                    {block.exercise.image ? (
+                                        <Image
+                                            source={block.exercise.image}
+                                            style={styles.heroExerciseThumbImage}
+                                            resizeMode="contain"
+                                        />
+                                    ) : (
+                                        <Activity size={16} color={block.exercise.color} />
+                                    )}
+                                </View>
+                                <Text style={styles.heroExerciseName} numberOfLines={1}>
+                                    {block.exercise.name}
+                                </Text>
+                                <Text style={styles.heroExerciseMeta}>{block.targetLabel}</Text>
+                            </View>
+                        ))}
+                    </View>
+
+                    <View style={styles.heroHomeToggle}>
+                        <Home size={14} color={homeBasedOnly ? COLORS.primary : COLORS.textSub} />
+                        <Text style={[styles.heroHomeToggleLabel, homeBasedOnly && styles.heroHomeToggleLabelActive]}>
+                            Home based exercise only
+                        </Text>
                         <Switch
                             value={homeBasedOnly}
                             onValueChange={setHomeBasedOnly}
-                            trackColor={{ false: 'rgba(0,0,0,0.1)', true: 'rgba(255,255,255,0.4)' }}
-                            thumbColor={homeBasedOnly ? '#FFF' : '#F1F3F5'}
-                            style={{ transform: [{ scaleX: 0.7 }, { scaleY: 0.7 }] }}
+                            trackColor={{ false: COLORS.lineStrong, true: COLORS.primary }}
+                            thumbColor="#FFFFFF"
+                            ios_backgroundColor={COLORS.lineStrong}
                         />
                     </View>
                 </View>
 
-                <View style={styles.heroMainContent}>
-                    <View style={styles.heroTextSection}>
-                        <Text style={styles.heroUpperTitle}>WEEK {currentWeek}</Text>
-                        <Text style={styles.heroMainTitle}>Performance Mix</Text>
-                        
-                        <View style={styles.heroVerticalList}>
-                            {sessionPreview.workoutExercises.map((block) => (
-                                <View key={block.exercise.id} style={styles.heroListRow}>
-                                    <View style={[styles.miniDot, { backgroundColor: block.exercise.color }]} />
-                                    <Text style={styles.heroListText} numberOfLines={1}>{block.exercise.name}</Text>
-                                    <Text style={styles.heroListReps}>{block.targetLabel}</Text>
+                <View style={styles.libraryHeader}>
+                    <Text style={styles.libraryTitle}>All exercises</Text>
+                    <View style={styles.libraryCountBadge}>
+                        <Text style={styles.libraryCountText}>{availableExercises.length}</Text>
+                    </View>
+                </View>
+
+                <View style={styles.listContainer}>
+                    {availableExercises.map((exercise) => {
+                        const isComplete = completedExercises.includes(exercise.id);
+                        const prescription = buildExercisePrescription(exercise, currentWeek);
+                        return (
+                            <TouchableOpacity
+                                key={exercise.id}
+                                style={[styles.listItem, isComplete && styles.listItemComplete]}
+                                onPress={() => setSelectedExercise(exercise)}
+                                activeOpacity={0.75}
+                            >
+                                <View style={styles.listItemImageContainer}>
+                                    {exercise.image ? (
+                                        <View style={styles.listItemImageWrapper}>
+                                            <Image source={exercise.image} style={styles.listItemImage} resizeMode="contain" />
+                                        </View>
+                                    ) : (
+                                        <View style={styles.listItemIconWrapper}>
+                                            <Activity size={28} color={exercise.color} />
+                                        </View>
+                                    )}
+                                    <View style={[styles.listItemAccent, { backgroundColor: exercise.color }]} />
                                 </View>
-                            ))}
-                        </View>
-                    </View>
 
-                    <TouchableOpacity onPress={() => setShowWorkout(true)} style={styles.heroBigPlayBtn}>
-                        <Play size={24} color="#FF6B6B" fill="#FF6B6B" />
-                    </TouchableOpacity>
-                </View>
+                                <View style={styles.listItemBody}>
+                                    <Text style={[styles.listItemName, isComplete && styles.listItemNameComplete]} numberOfLines={1}>
+                                        {exercise.name}
+                                    </Text>
+                                    <Text style={styles.listItemReps}>{prescription.targetLabel}</Text>
+                                </View>
 
-                <View style={styles.heroFooter}>
-                    <View style={styles.heroFooterInfo}>
-                        <Clock size={12} color="rgba(255,255,255,0.7)" />
-                        <Text style={styles.heroFooterText}>approx. 12 mins</Text>
-                    </View>
-                    <View style={styles.heroFooterDivider} />
-                    <View style={styles.heroFooterInfo}>
-                        <Activity size={12} color="rgba(255,255,255,0.7)" />
-                        <Text style={styles.heroFooterText}>Focused Mobility</Text>
-                    </View>
-                </View>
-            </LinearGradient>
-
-            <View style={styles.libraryHeader}>
-                <Text style={styles.libraryTitle}>Form Library</Text>
-                <Text style={styles.librarySubtext}>Master individual exercises</Text>
-            </View>
-
-            <View style={styles.listContainer}>
-                {availableExercises.map((exercise) => {
-                    const isComplete = completedExercises.includes(exercise.id);
-                    const prescription = buildExercisePrescription(exercise, currentWeek);
-                    return (
-                        <TouchableOpacity
-                            key={exercise.id}
-                            style={[styles.listItem, isComplete && styles.listItemComplete]}
-                            onPress={() => setSelectedExercise(exercise)}
-                            activeOpacity={0.8}
-                        >
-                            <View style={styles.listItemImageContainer}>
-                                {exercise.image ? (
-                                    <View style={styles.listItemImageWrapper}>
-                                        <Image source={exercise.image} style={styles.listItemImage} resizeMode="contain" />
+                                {isComplete ? (
+                                    <View style={styles.listItemCompleteBadge}>
+                                        <Check size={14} color={COLORS.success} strokeWidth={3} />
                                     </View>
                                 ) : (
-                                    <View style={[styles.listItemIconWrapper, { backgroundColor: `${exercise.color}10` }]}>
-                                        <Activity size={24} color={exercise.color} />
-                                    </View>
+                                    <ChevronRight size={18} color={COLORS.textMuted} strokeWidth={2} />
                                 )}
-                                <View style={[styles.listItemDot, { backgroundColor: exercise.color }]} />
-                            </View>
-
-                            <View style={styles.listItemBody}>
-                                <Text style={[styles.listItemName, isComplete && styles.listItemNameComplete]}>{exercise.name}</Text>
-                                <View style={styles.listItemMeta}>
-                                    <Text style={styles.listItemReps}>{prescription.targetLabel}</Text>
-                                    <View style={styles.listItemDivider} />
-                                    <Text style={styles.listItemSets}>{prescription.rounds} SETS</Text>
-                                </View>
-                            </View>
-
-                            {isComplete ? (
-                                <View style={styles.listItemCheckMark}>
-                                    <Check size={18} color={COLORS.success} strokeWidth={3} />
-                                </View>
-                            ) : (
-                                <View style={styles.listItemArrow}>
-                                    <ChevronRight size={18} color={COLORS.textSub} />
-                                </View>
-                            )}
-                        </TouchableOpacity>
-                    );
-                })}
-                <View style={{ height: 40 }} />
-            </View>
-        </ScrollView>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </View>
+            </ScrollView>
+        </View>
     );
 
     return (
@@ -402,301 +481,347 @@ export function MobilityExercises({ visible, onClose, currentWeek, onMixedSessio
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.bg },
+    screen: {
+        flex: 1,
+        backgroundColor: COLORS.bg,
+    },
+    safeHeader: {
+        backgroundColor: COLORS.bg,
+    },
+    container: {
+        flex: 1,
+    },
+    scrollContent: {
+        paddingBottom: 48,
+    },
     horizontalHeader: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        paddingTop: 16,
+        paddingHorizontal: 24,
+        paddingTop: 8,
+        paddingBottom: 4,
+    },
+    headerSpacer: {
+        width: 44,
     },
     exitBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: COLORS.line,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: COLORS.card,
+        borderWidth: 1,
+        borderColor: COLORS.line,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    sessionOverview: { alignItems: 'center' },
-    sessionLabel: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: COLORS.textSub,
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-        marginBottom: 4,
+    sessionOverview: {
+        alignItems: 'center',
+        gap: 6,
     },
     sessionMainTitle: {
-        fontSize: 16,
-        fontWeight: '900',
+        fontSize: 20,
+        fontWeight: '800',
         color: COLORS.textMain,
+        letterSpacing: -0.4,
     },
-    heroPreview: {
-        marginHorizontal: 20,
-        marginTop: 20,
-        borderRadius: 32,
-        padding: 24,
-        shadowColor: '#FF6B6B',
-        shadowOpacity: 0.3,
-        shadowRadius: 15,
-        shadowOffset: { width: 0, height: 8 },
-        elevation: 10,
+    weekBadge: {
+        backgroundColor: COLORS.line,
+        paddingHorizontal: 10,
+        paddingVertical: 3,
+        borderRadius: 10,
     },
-    heroHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 24,
-    },
-    heroBadgeRow: {
-        flexDirection: 'row',
-        gap: 8,
-    },
-    heroPointsBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#FFFFFF',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 14,
-        gap: 6,
-    },
-    heroPointsText: {
-        color: '#FF6B6B',
-        fontSize: 11,
-        fontWeight: '900',
-        letterSpacing: 0.5,
-    },
-    heroKcalBox: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 14,
-        gap: 6,
-    },
-    heroKcalText: {
-        color: '#FFFFFF',
+    weekBadgeText: {
         fontSize: 11,
         fontWeight: '700',
+        color: COLORS.textSub,
     },
-    heroToggleWrapper: {
+    heroCard: {
+        marginHorizontal: 20,
+        marginTop: 16,
+        backgroundColor: COLORS.card,
+        borderRadius: 24,
+        padding: 22,
+        borderWidth: 1,
+        borderColor: COLORS.line,
+        shadowColor: '#1A1C1E',
+        shadowOpacity: 0.04,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+        elevation: 2,
+    },
+    heroTitleBlock: {
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 18,
+    },
+    heroTitle: {
+        fontSize: 20,
+        fontWeight: '800',
+        color: COLORS.textMain,
+        letterSpacing: -0.4,
+        textAlign: 'center',
+    },
+    heroMetaChips: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.05)',
-        paddingLeft: 12,
-        paddingRight: 4,
-        paddingVertical: 2,
-        borderRadius: 20,
+        gap: 8,
+    },
+    heroMetaChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
         gap: 4,
     },
-    heroToggleLabel: {
-        fontSize: 8,
-        fontWeight: '900',
-        color: 'rgba(255,255,255,0.9)',
-        letterSpacing: 0.2,
+    heroMetaChipDot: {
+        width: 3,
+        height: 3,
+        borderRadius: 1.5,
+        backgroundColor: COLORS.textMuted,
     },
-    heroMainContent: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 24,
-    },
-    heroTextSection: {
-        flex: 1,
-    },
-    heroUpperTitle: {
-        fontSize: 10,
-        fontWeight: '900',
-        color: 'rgba(255,255,255,0.8)',
-        letterSpacing: 2,
-        marginBottom: 4,
-    },
-    heroMainTitle: {
-        fontSize: 28,
-        fontWeight: '900',
-        color: '#FFFFFF',
-        marginBottom: 12,
-        letterSpacing: -0.5,
-    },
-    heroVerticalList: {
-        gap: 8,
-    },
-    heroListRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 14,
-    },
-    heroListText: {
+    heroMetaChipText: {
         fontSize: 12,
-        fontWeight: '800',
-        color: '#FFFFFF',
-        flex: 1,
+        fontWeight: '600',
+        color: COLORS.textSub,
     },
-    heroListReps: {
-        fontSize: 10,
-        fontWeight: '700',
-        color: 'rgba(255,255,255,0.7)',
+    heroVisualRow: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 18,
     },
-    miniDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-    },
-    heroBigPlayBtn: {
-        width: 68,
-        height: 68,
-        borderRadius: 34,
+    heroVisualItem: {
+        width: 60,
+        height: 60,
+        borderRadius: 20,
         backgroundColor: '#FFFFFF',
+        borderWidth: 2,
+        borderColor: COLORS.line,
         alignItems: 'center',
         justifyContent: 'center',
-        shadowColor: '#000',
-        shadowOpacity: 0.1,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 6,
+        overflow: 'hidden',
     },
-    heroFooter: {
+    heroVisualItemOverlap: {
+        marginLeft: -14,
+    },
+    heroVisualImage: {
+        width: '85%',
+        height: '85%',
+    },
+    heroRewardRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.2)',
-        paddingTop: 16,
-        gap: 12,
+        justifyContent: 'space-between',
+        marginBottom: 20,
     },
-    heroFooterInfo: {
+    heroRewardBlock: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'baseline',
         gap: 6,
     },
-    heroFooterText: {
-        color: 'rgba(255,255,255,0.8)',
-        fontSize: 11,
-        fontWeight: '600',
+    heroRewardValue: {
+        fontSize: 40,
+        fontWeight: '900',
+        color: COLORS.primary,
+        letterSpacing: -1.5,
+        lineHeight: 44,
     },
-    heroFooterDivider: {
-        width: 1,
-        height: 12,
-        backgroundColor: 'rgba(255,255,255,0.2)',
+    heroRewardUnit: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: COLORS.textSub,
+    },
+    heroExerciseList: {
+        gap: 4,
+        marginBottom: 18,
+        paddingTop: 16,
+        borderTopWidth: 1,
+        borderTopColor: COLORS.line,
+    },
+    heroExerciseRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingVertical: 6,
+    },
+    heroExerciseThumb: {
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: COLORS.line,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+    },
+    heroExerciseThumbImage: {
+        width: '85%',
+        height: '85%',
+    },
+    heroExerciseName: {
+        flex: 1,
+        fontSize: 14,
+        fontWeight: '600',
+        color: COLORS.textMain,
+    },
+    heroExerciseMeta: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: COLORS.textSub,
+    },
+    heroHomeToggle: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        backgroundColor: '#FAFBFC',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: COLORS.line,
+    },
+    heroHomeToggleLabel: {
+        flex: 1,
+        fontSize: 13,
+        fontWeight: '600',
+        color: COLORS.textSub,
+    },
+    heroHomeToggleLabelActive: {
+        color: COLORS.textMain,
+    },
+    heroCta: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        backgroundColor: COLORS.primary,
+        paddingVertical: 12,
+        paddingHorizontal: 22,
+        borderRadius: 14,
+        shadowColor: COLORS.primary,
+        shadowOpacity: 0.3,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 4,
+    },
+    heroCtaText: {
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontWeight: '800',
     },
     libraryHeader: {
-        paddingHorizontal: 28,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 24,
         paddingTop: 28,
         paddingBottom: 12,
     },
     libraryTitle: {
-        fontSize: 20,
-        fontWeight: '900',
+        fontSize: 18,
+        fontWeight: '800',
         color: COLORS.textMain,
+        letterSpacing: -0.3,
     },
-    librarySubtext: {
-        fontSize: 13,
-        color: COLORS.textSub,
-        fontWeight: '600',
-        marginTop: 2,
+    libraryCountBadge: {
+        minWidth: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: COLORS.primarySoft,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 10,
+    },
+    libraryCountText: {
+        fontSize: 14,
+        fontWeight: '800',
+        color: COLORS.primary,
     },
     listContainer: {
-        paddingHorizontal: 20,
-        gap: 12,
-        paddingTop: 8,
+        paddingHorizontal: 24,
+        gap: 14,
     },
     listItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#FFFFFF',
-        borderRadius: 24,
-        padding: 12,
-        gap: 14,
+        backgroundColor: COLORS.card,
+        borderRadius: 22,
+        padding: 16,
+        gap: 16,
         borderWidth: 1,
         borderColor: COLORS.line,
-        shadowColor: '#000',
-        shadowOpacity: 0.02,
-        shadowRadius: 8,
+        shadowColor: '#1A1C1E',
+        shadowOpacity: 0.04,
+        shadowRadius: 12,
         shadowOffset: { width: 0, height: 4 },
         elevation: 2,
     },
     listItemComplete: {
-        backgroundColor: '#F8F9FA',
-        borderColor: '#E9ECEF',
+        backgroundColor: COLORS.successFade,
+        borderColor: 'rgba(0, 184, 148, 0.18)',
     },
     listItemImageContainer: {
         position: 'relative',
     },
     listItemImageWrapper: {
-        width: 60,
-        height: 60,
+        width: 64,
+        height: 64,
         borderRadius: 18,
-        backgroundColor: '#F8F9FA',
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: COLORS.line,
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
     },
     listItemImage: {
-        width: '85%',
-        height: '85%',
+        width: '90%',
+        height: '90%',
     },
     listItemIconWrapper: {
-        width: 60,
-        height: 60,
+        width: 64,
+        height: 64,
         borderRadius: 18,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: COLORS.line,
         alignItems: 'center',
         justifyContent: 'center',
     },
-    listItemDot: {
+    listItemAccent: {
         position: 'absolute',
-        top: -2,
-        right: -2,
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        borderWidth: 1.5,
-        borderColor: '#FFFFFF',
+        left: 0,
+        top: 12,
+        bottom: 12,
+        width: 3,
+        borderTopRightRadius: 2,
+        borderBottomRightRadius: 2,
     },
     listItemBody: {
         flex: 1,
         gap: 4,
+        minWidth: 0,
     },
     listItemName: {
         fontSize: 16,
-        fontWeight: '900',
+        fontWeight: '700',
         color: COLORS.textMain,
+        letterSpacing: -0.2,
     },
     listItemNameComplete: {
         color: COLORS.textSub,
-        textDecorationLine: 'line-through',
     },
-    listItemMeta: {
-        flexDirection: 'row',
+    listItemCompleteBadge: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        backgroundColor: COLORS.successFade,
         alignItems: 'center',
-        gap: 8,
+        justifyContent: 'center',
     },
     listItemReps: {
-        fontSize: 12,
-        fontWeight: '700',
+        fontSize: 13,
+        fontWeight: '600',
         color: COLORS.textSub,
-    },
-    listItemDivider: {
-        width: 4,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: '#DEE2E6',
-    },
-    listItemSets: {
-        fontSize: 11,
-        fontWeight: '800',
-        color: COLORS.primary,
-        letterSpacing: 0.5,
-    },
-    listItemArrow: {
-        paddingRight: 4,
-    },
-    listItemCheckMark: {
-        paddingRight: 4,
     },
 });

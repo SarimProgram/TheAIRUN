@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { ChevronLeft, ArrowRight, User, Mail, Lock } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import SocialAuthRow from './SocialAuthRow';
 
 const COLORS = {
     brand: '#FF6B6B', 
@@ -33,11 +34,27 @@ type Props = {
     onBack: () => void;
     onSuccess: () => void;
     onRegister: (name: string, email: string, password: string) => Promise<void>;
+    initialEmail?: string;
+    subtitle?: string;
+    onLoginPress?: () => void;
+    onApplePress?: () => void;
+    socialLoading?: 'google' | 'apple' | null;
+    userName?: string;
 };
 
-export default function Phase0ManualAuth({ onBack, onSuccess, onRegister }: Props) {
+export default function Phase0ManualAuth({
+    onBack,
+    onSuccess,
+    onRegister,
+    initialEmail = '',
+    subtitle,
+    onLoginPress,
+    onApplePress,
+    socialLoading = null,
+    userName = '',
+}: Props) {
     const [name, setName] = useState('');
-    const [email, setEmail] = useState('');
+    const [email, setEmail] = useState(initialEmail);
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [loading, setLoading] = useState(false);
@@ -51,6 +68,12 @@ export default function Phase0ManualAuth({ onBack, onSuccess, onRegister }: Prop
             Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
         ]).start();
     }, []);
+
+    useEffect(() => {
+        if (initialEmail.trim()) {
+            setEmail(initialEmail.trim());
+        }
+    }, [initialEmail]);
 
     const handleSubmit = async () => {
         if (!name.trim() || !email.trim() || !password || !confirmPassword) {
@@ -103,8 +126,10 @@ export default function Phase0ManualAuth({ onBack, onSuccess, onRegister }: Prop
                         keyboardShouldPersistTaps="handled"
                     >
                         <View style={styles.textGroup}>
-                            <Text style={styles.mainTitle}>Join the<Text style={{ color: COLORS.brand }}> team.</Text></Text>
-                            <Text style={styles.subtitle}>Create an account to start tracking progress with your partner.</Text>
+                            <Text style={styles.mainTitle}>Register your<Text style={{ color: COLORS.brand }}> account.</Text></Text>
+                            <Text style={styles.subtitle}>
+                                {subtitle ?? 'Create your account to get your fitness plan and start tracking your progress.'}
+                            </Text>
                         </View>
 
                         <View style={styles.form}>
@@ -166,6 +191,25 @@ export default function Phase0ManualAuth({ onBack, onSuccess, onRegister }: Prop
                         </View>
                         
                         <Text style={styles.encryptionNote}>🔒 Your data is private & encrypted</Text>
+
+                        <View style={styles.dividerRow}>
+                            <View style={styles.dividerLine} />
+                            <Text style={styles.dividerText}>or continue with</Text>
+                            <View style={styles.dividerLine} />
+                        </View>
+
+                        <SocialAuthRow
+                            onSuccess={onSuccess}
+                            onApplePress={onApplePress}
+                            socialLoading={socialLoading}
+                            userName={userName || name}
+                        />
+
+                        {onLoginPress ? (
+                            <TouchableOpacity onPress={onLoginPress} style={styles.loginLink} activeOpacity={0.7}>
+                                <Text style={styles.loginLinkText}>Already have an account? Log in</Text>
+                            </TouchableOpacity>
+                        ) : null}
                     </ScrollView>
 
                     <View style={styles.footer}>
@@ -185,7 +229,7 @@ export default function Phase0ManualAuth({ onBack, onSuccess, onRegister }: Prop
                                     <ActivityIndicator color={COLORS.white} />
                                 ) : (
                                     <>
-                                        <Text style={styles.ctaText}>Create Account</Text>
+                                        <Text style={styles.ctaText}>Register Account</Text>
                                         <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
                                     </>
                                 )}
@@ -282,6 +326,36 @@ const styles = StyleSheet.create({
         color: COLORS.muted,
         fontWeight: '600',
         textAlign: 'center',
+    },
+    dividerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        marginTop: 28,
+        marginBottom: 22,
+    },
+    dividerLine: {
+        flex: 1,
+        height: 1,
+        backgroundColor: COLORS.border,
+    },
+    dividerText: {
+        fontSize: 12,
+        color: COLORS.muted,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.8,
+    },
+    loginLink: {
+        marginTop: 22,
+        alignSelf: 'center',
+        marginBottom: 8,
+    },
+    loginLinkText: {
+        fontSize: 14,
+        color: COLORS.ink,
+        fontWeight: '700',
+        textDecorationLine: 'underline',
     },
     footer: {
         paddingHorizontal: 24,

@@ -1,12 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   StyleSheet,
   View,
   Text,
   SafeAreaView,
   TouchableOpacity,
-  Animated,
-  StatusBar,
   Dimensions,
   Platform,
   ScrollView,
@@ -42,95 +40,182 @@ const COLORS = {
   offWhite: '#F5F5F7',
 };
 
+const MAX_WEEKLY_LOSS_KG = 1.5;
+
+function addWeeks(date: Date, weeks: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + weeks * 7);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function getMinWeeksForSafePace(weightDiff: number) {
+  if (weightDiff <= 0) return 1;
+  return Math.ceil(weightDiff / MAX_WEEKLY_LOSS_KG);
+}
+
+function startOfDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function formatWeightAmount(value: number, unit?: string) {
+  const normalizedUnit = unit?.toLowerCase() === 'lbs' ? 'lbs' : 'kg';
+  const amount = Number.isInteger(value) ? value : Number(value.toFixed(1));
+  return `${amount} ${normalizedUnit}`;
+}
+
+function formatMaxWeeklyLoss(unit?: string) {
+  const normalizedUnit = unit?.toLowerCase() === 'lbs' ? 'lbs' : 'kg';
+  const amount = normalizedUnit === 'lbs'
+    ? MAX_WEEKLY_LOSS_KG * 2.20462
+    : MAX_WEEKLY_LOSS_KG;
+  return `${amount.toFixed(1)} ${normalizedUnit}`;
+}
+
 const STEPS = [
   {
     id: 'timeline',
-    title: 'Your Timeline',
-    desc: 'How would you like to achieve your goal?',
+    title: 'Pick your pace',
+    desc: '',
     options: [
-      { id: 'moderate', label: 'Slow & Steady', icon: 'chart-timeline-variant', desc: 'Balanced transformation' },
-      { id: 'aggressive', label: 'Aggressive', icon: 'fire', desc: 'Quickest sustainable path' },
-      { id: 'custom', label: 'By a Date', icon: 'calendar-star', desc: 'Pick your own target' },
+      { id: 'moderate', label: 'Slow and steady', icon: 'chart-timeline-variant' },
+      { id: 'aggressive', label: 'Faster pace', icon: 'fire' },
+      { id: 'custom', label: 'Pick a date', icon: 'calendar-star' },
     ],
   },
   {
     id: 'trainingStyle',
-    title: 'Training Method',
-    desc: 'How do you want to lose the weight?',
+    title: 'Walking or running?',
+    desc: 'Pick what fits your week.',
     options: [
-      { id: 'walkOnly', label: 'Walk Only', icon: 'walk', desc: 'Sustainable & low impact' },
-      { id: 'runOnly', label: 'Running Only', icon: 'run', desc: 'High intensity cardio' },
-      { id: 'walkAndRun', label: 'Walk + Run', icon: 'vector-combine', desc: 'The most effective hybrid' },
+      { id: 'walkOnly', label: 'Walk only', icon: 'walk' },
+      { id: 'runOnly', label: 'Run only', icon: 'run' },
+      { id: 'walkAndRun', label: 'Walk and run', icon: 'vector-combine' },
     ],
   },
   {
     id: 'raceTraining',
-    title: 'Race Goal',
-    desc: 'Do you have a race specific goal or race date?',
+    title: 'Got a race?',
+    desc: 'This helps us shape your plan.',
     options: [
-      { id: 'yes', label: 'Yes, specific Run', icon: 'flag-checkered', desc: 'Preparing for an run event' },
-      { id: 'no', label: 'Just weight loss', icon: 'heart-pulse', desc: 'General Weight Loss' },
+      { id: 'yes', label: 'Yes, I have a race', icon: 'flag-checkered' },
+      { id: 'no', label: 'No, just weight loss', icon: 'heart-pulse' },
     ],
   },
 ];
 
-export default function WeightBranch({ onComplete, currentWeight, targetWeight, unit, gender }: any) {
+export default function WeightBranch({ onComplete, onBack, currentWeight, targetWeight, unit, gender }: any) {
   const [currentStep, setCurrentStep] = useState(0);
   const [selections, setSelections] = useState<Record<string, string>>({});
   const [targetDate, setTargetDate] = useState<Date | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [calculatedWeeks, setCalculatedWeeks] = useState<number | null>(null);
   const [isViable, setIsViable] = useState(true);
+  const [showMinDateBlockedHint, setShowMinDateBlockedHint] = useState(false);
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(40)).current;
-  const direction = useRef(1);
+  const weightDiff = useMemo(
+    () => Math.max(0, Math.abs(Number(currentWeight) - Number(targetWeight))),
+    [currentWeight, targetWeight]
+  );
+  const minWeeksRequired = useMemo(() => getMinWeeksForSafePace(weightDiff), [weightDiff]);
+  const minimumTargetDate = useMemo(() => addWeeks(new Date(), minWeeksRequired), [minWeeksRequired]);
+  const minimumDateReason = useMemo(() => {
+    if (weightDiff <= 0) {
+      return 'Pick the day you want to hit your goal.';
+    }
 
-  useEffect(() => {
-    runEnterAnimation();
-  }, [currentStep]);
+    return `Losing ${formatWeightAmount(weightDiff, unit)} safely needs at least ${minWeeksRequired} weeks. We cap progress at ${formatMaxWeeklyLoss(unit)}/week, so earlier dates are blocked.`;
+  }, [minWeeksRequired, unit, weightDiff]);
+  const minimumDateBlockedMessage = useMemo(() => {
+    if (weightDiff <= 0) return '';
 
-  const runEnterAnimation = () => {
-    fadeAnim.setValue(currentStep === 0 ? 0 : 0.4);
-    slideAnim.setValue(20);
-
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, tension: 20, useNativeDriver: true })
-    ]).start();
-  };
+    return `That date is too soon. ${formatWeightAmount(weightDiff, unit)} in less than ${minWeeksRequired} weeks would be faster than ${formatMaxWeeklyLoss(unit)}/week. Earliest date: ${minimumTargetDate.toLocaleDateString()}.`;
+  }, [minWeeksRequired, minimumTargetDate, unit, weightDiff]);
+  const lastPickerDateRef = useRef<Date | null>(null);
+  const pickerMoveCountRef = useRef(0);
 
   const calculateWeeksFromDate = (date: Date) => {
     const diff = date.getTime() - new Date().getTime();
-    const weeks = Math.ceil(diff / (1000 * 60 * 60 * 24 * 7));
+    const weeks = Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24 * 7)));
     setCalculatedWeeks(weeks);
-
-    const weightDiff = Math.abs(Number(currentWeight) - Number(targetWeight));
-    const minWeeksRequired = weightDiff / 1.0; 
-
-    setIsViable(!(weeks < minWeeksRequired && weightDiff > 0));
+    setIsViable(weeks >= minWeeksRequired || weightDiff <= 0);
     return weeks;
+  };
+
+  const applySelectedDate = (selectedDate: Date, options?: { keepBlockedHint?: boolean }) => {
+    const picked = startOfDay(selectedDate);
+    const minimum = startOfDay(minimumTargetDate);
+
+    if (picked < minimum) {
+      setShowMinDateBlockedHint(true);
+      setTargetDate(minimum);
+      calculateWeeksFromDate(minimum);
+      lastPickerDateRef.current = minimum;
+      return minimum;
+    }
+
+    if (!options?.keepBlockedHint) {
+      setShowMinDateBlockedHint(false);
+    }
+    setTargetDate(picked);
+    calculateWeeksFromDate(picked);
+    lastPickerDateRef.current = picked;
+    return picked;
   };
 
   const onDateChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
       setShowCalendar(false);
       if (selectedDate) {
-        setTargetDate(selectedDate);
-        calculateWeeksFromDate(selectedDate);
+        applySelectedDate(selectedDate);
         setSelections({ ...selections, timeline: 'custom' });
       }
-    } else if (selectedDate) {
-      setTargetDate(selectedDate);
+      return;
+    }
+
+    if (!selectedDate) return;
+
+    pickerMoveCountRef.current += 1;
+
+    const minimum = startOfDay(minimumTargetDate);
+    const picked = startOfDay(selectedDate);
+    const lastPicked = lastPickerDateRef.current ? startOfDay(lastPickerDateRef.current) : null;
+    const blockedAtMinimum =
+      picked.getTime() === minimum.getTime() &&
+      lastPicked?.getTime() === minimum.getTime() &&
+      pickerMoveCountRef.current > 1 &&
+      event?.type === 'set';
+
+    applySelectedDate(selectedDate, { keepBlockedHint: blockedAtMinimum });
+    if (blockedAtMinimum) {
+      setShowMinDateBlockedHint(true);
     }
   };
 
   const confirmIosDate = () => {
-    if (targetDate) {
-      calculateWeeksFromDate(targetDate);
-      setSelections({ ...selections, timeline: 'custom' });
-      setShowCalendar(false);
-    }
+    const resolvedDate = targetDate
+      ? applySelectedDate(targetDate)
+      : applySelectedDate(minimumTargetDate);
+
+    setSelections({ ...selections, timeline: 'custom' });
+    setTargetDate(resolvedDate);
+    setShowCalendar(false);
+  };
+
+  const openCustomDatePicker = () => {
+    setShowMinDateBlockedHint(false);
+    pickerMoveCountRef.current = 0;
+    const initialDate =
+      targetDate && startOfDay(targetDate) >= startOfDay(minimumTargetDate)
+        ? startOfDay(targetDate)
+        : startOfDay(minimumTargetDate);
+
+    setTargetDate(initialDate);
+    calculateWeeksFromDate(initialDate);
+    lastPickerDateRef.current = initialDate;
+    setShowCalendar(true);
   };
 
   const handleNext = async () => {
@@ -140,7 +225,6 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
     }
 
     if (currentStep < STEPS.length - 1) {
-      direction.current = 1;
       setCurrentStep(currentStep + 1);
     } else {
       onComplete?.({ ...selections, targetDate, calculatedWeeks });
@@ -149,25 +233,29 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
 
   const handleBack = () => {
     if (currentStep > 0) {
-      direction.current = -1;
       setCurrentStep(currentStep - 1);
+    } else {
+      onBack?.();
     }
   };
 
   const toggleSelection = (id: string) => {
     if (id === 'custom') {
-      if (!targetDate) setTargetDate(new Date());
-      setShowCalendar(true);
+      openCustomDatePicker();
       return;
     }
 
-    const weightDiff = Math.abs(Number(currentWeight) - Number(targetWeight));
+    const nextWeightDiff = Math.abs(Number(currentWeight) - Number(targetWeight));
     if (id === 'moderate') {
-      setCalculatedWeeks(Math.ceil(weightDiff / 0.5));
+      setCalculatedWeeks(Math.ceil(nextWeightDiff / 0.5));
       setIsViable(true);
+      setTargetDate(null);
+      setShowMinDateBlockedHint(false);
     } else if (id === 'aggressive') {
-      setCalculatedWeeks(Math.ceil(weightDiff / 1.0));
+      setCalculatedWeeks(Math.ceil(nextWeightDiff / 1.0));
       setIsViable(true);
+      setTargetDate(null);
+      setShowMinDateBlockedHint(false);
     } else {
       setCalculatedWeeks(null);
       setIsViable(true);
@@ -180,6 +268,12 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
   const selectedOptionId = selections[stepData.id];
   const isButtonActive = !!selectedOptionId;
   const mascotSource = getGenderMascotSource(gender);
+  const showAggressiveDateWarning =
+    currentStep === 0 &&
+    selections.timeline === 'custom' &&
+    !!targetDate &&
+    calculatedWeeks !== null &&
+    !isViable;
 
   return (
     <View style={styles.container}>
@@ -190,8 +284,7 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                     <View style={[styles.navRow, useCompactLayout && styles.navRowCompact]}>
                         <TouchableOpacity
                             onPress={handleBack}
-                            style={[styles.backBtn, useCompactLayout && styles.backBtnCompact, currentStep === 0 && { opacity: 0 }]}
-                            disabled={currentStep === 0}
+                            style={[styles.backBtn, useCompactLayout && styles.backBtnCompact]}
                         >
                             <ChevronLeft color={COLORS.white} size={28} />
                         </TouchableOpacity>
@@ -211,11 +304,10 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
             </LinearGradient>
         </View>
 
-      <Animated.View 
+      <View
         style={[
-            styles.contentMask, 
+            styles.contentMask,
             useCompactLayout && styles.contentMaskCompact,
-            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
         ]}
       >
         <View style={styles.content}>
@@ -225,7 +317,9 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
             >
                 <View style={[styles.textGroup, useCompactLayout && styles.textGroupCompact]}>
                     <Text style={[styles.mainTitle, useCompactLayout && styles.mainTitleCompact]}>{stepData.title}</Text>
-                    <Text style={[styles.subTitle, useCompactLayout && styles.subTitleCompact]}>{stepData.desc}</Text>
+                    {!!stepData.desc && (
+                        <Text style={[styles.subTitle, useCompactLayout && styles.subTitleCompact]}>{stepData.desc}</Text>
+                    )}
                 </View>
 
                 <View style={[styles.optionStack, useCompactLayout && styles.optionStackCompact]}>
@@ -245,13 +339,12 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                                 <View style={[styles.iconWrap, useCompactLayout && styles.iconWrapCompact, isSelected && styles.iconWrapActive]}>
                                     <MaterialCommunityIcons 
                                         name={item.icon as any} 
-                                        size={useCompactLayout ? 21 : 24} 
+                                        size={useCompactLayout ? 21 : 24}
                                         color={isSelected ? COLORS.white : COLORS.brand} 
                                     />
                                 </View>
                                 <View style={[styles.optionTextWrap, useCompactLayout && styles.optionTextWrapCompact]}>
                                     <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, isSelected && { color: COLORS.brand }]}>{item.label}</Text>
-                                    <Text style={[styles.optionSub, useCompactLayout && styles.optionSubCompact]}>{item.desc}</Text>
                                 </View>
                                 <MaterialCommunityIcons 
                                     name={isSelected ? "check-circle" : "chevron-right"} 
@@ -270,8 +363,13 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                                 ? `Target: ${targetDate.toLocaleDateString()} • ${calculatedWeeks} weeks`
                                 : isViable
                                     ? `Estimated: ${calculatedWeeks} weeks until goal`
-                                    : `⚠️ Too aggressive (${calculatedWeeks} weeks). Try a later date.`}
+                                    : `Too soon for your goal (${calculatedWeeks} weeks).`}
                         </Text>
+                        {showAggressiveDateWarning ? (
+                            <Text style={[styles.weeksHintText, useCompactLayout && styles.weeksHintTextCompact]}>
+                                {minimumDateBlockedMessage}
+                            </Text>
+                        ) : null}
                     </View>
                 )}
                 
@@ -294,7 +392,7 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
                 </TouchableOpacity>
             </View>
         </View>
-      </Animated.View>
+      </View>
 
       {/* iOS Modal Date Picker */}
       {Platform.OS === 'ios' && (
@@ -307,14 +405,20 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
             <TouchableOpacity activeOpacity={1} style={styles.modalContent}>
               <View style={styles.modalHandle} />
               <Text style={styles.modalTitle}>Choose Target Date</Text>
-              <Text style={styles.modalSubtitle}>Pick the day you want to hit your goal.</Text>
+              <Text style={styles.modalSubtitle}>{minimumDateReason}</Text>
+
+              {showMinDateBlockedHint ? (
+                <View style={styles.modalNotice}>
+                  <Text style={styles.modalNoticeText}>{minimumDateBlockedMessage}</Text>
+                </View>
+              ) : null}
 
               <View style={styles.modalPickerWrap}>
                 <DateTimePicker
-                  value={targetDate || new Date()}
+                  value={targetDate && targetDate >= minimumTargetDate ? targetDate : minimumTargetDate}
                   mode="date"
                   display="spinner"
-                  minimumDate={new Date()}
+                  minimumDate={minimumTargetDate}
                   onChange={onDateChange}
                   themeVariant="light"
                   style={styles.modalCalendar}
@@ -345,9 +449,9 @@ export default function WeightBranch({ onComplete, currentWeight, targetWeight, 
 
       {showCalendar && Platform.OS === 'android' && (
         <DateTimePicker
-            value={targetDate || new Date()}
+            value={targetDate && targetDate >= minimumTargetDate ? targetDate : minimumTargetDate}
             mode="date"
-            minimumDate={new Date()}
+            minimumDate={minimumTargetDate}
             onChange={onDateChange}
         />
       )}
@@ -552,15 +656,6 @@ const styles = StyleSheet.create({
   optionTitleCompact: {
     fontSize: 15,
   },
-  optionSub: {
-    fontSize: 13,
-    color: COLORS.muted,
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  optionSubCompact: {
-    fontSize: 12,
-  },
   weeksBadge: {
     backgroundColor: '#FAFAFA',
     padding: 16,
@@ -589,6 +684,18 @@ const styles = StyleSheet.create({
   },
   weeksTextWarning: {
     color: COLORS.brand,
+  },
+  weeksHintText: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    color: COLORS.muted,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  weeksHintTextCompact: {
+    fontSize: 11,
+    lineHeight: 16,
   },
   footer: {
     position: 'absolute',
@@ -693,6 +800,24 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 4,
     fontWeight: '500',
+    lineHeight: 19,
+    paddingHorizontal: 4,
+  },
+  modalNotice: {
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: COLORS.accent,
+    borderWidth: 1,
+    borderColor: '#FFD6D6',
+  },
+  modalNoticeText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: COLORS.brand,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   modalPickerWrap: {
     alignItems: 'center',

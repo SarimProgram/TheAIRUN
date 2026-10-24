@@ -16,6 +16,7 @@ import {
     Clock, Timer, Hourglass,
     ChevronRight
 } from 'lucide-react-native';
+import { useSmoothStepTransition } from './useSmoothStepTransition';
 
 const { width: windowWidth } = Dimensions.get('window');
 const width = Math.min(windowWidth, 480);
@@ -76,6 +77,7 @@ export default function Phase20RunningHabits({ onComplete }: any) {
 
     const fadeAnim = useRef(new Animated.Value(1)).current;
     const slideAnim = useRef(new Animated.Value(0)).current;
+    const { animatedStyle, isTransitioning, runTransition } = useSmoothStepTransition();
 
     const stepData = STEPS[currentStep];
     const selectedOptionId = selections[stepData.id];
@@ -83,13 +85,9 @@ export default function Phase20RunningHabits({ onComplete }: any) {
 
     const handleNext = () => {
         if (currentStep < STEPS.length - 1) {
-            // Animate out
-            Animated.parallel([
-                Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
-                Animated.timing(slideAnim, { toValue: -10, duration: 200, useNativeDriver: true })
-            ]).start(() => {
+            runTransition(() => {
                 setCurrentStep(currentStep + 1);
-                // Animate in
+                fadeAnim.setValue(0);
                 slideAnim.setValue(20);
                 Animated.parallel([
                     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
@@ -106,7 +104,10 @@ export default function Phase20RunningHabits({ onComplete }: any) {
     };
 
     return (
-        <View style={styles.container}>
+        <Animated.View
+            pointerEvents={isTransitioning ? 'none' : 'auto'}
+            style={[styles.container, animatedStyle]}
+        >
             <StatusBar barStyle="dark-content" />
 
             {/* Modern Top Wave Gradient */}
@@ -166,7 +167,7 @@ export default function Phase20RunningHabits({ onComplete }: any) {
                     <TouchableOpacity
                         style={[styles.button, !isButtonActive && styles.buttonDisabled]}
                         onPress={handleNext}
-                        disabled={!isButtonActive}
+                        disabled={!isButtonActive || isTransitioning}
                     >
                         <Text style={[styles.buttonText, !isButtonActive && styles.buttonTextDisabled]}>
                             {currentStep === STEPS.length - 1 ? 'Finish Setup' : 'Confirm & Continue'}
@@ -179,7 +180,7 @@ export default function Phase20RunningHabits({ onComplete }: any) {
                     </TouchableOpacity>
                 </Animated.View>
             </SafeAreaView>
-        </View>
+        </Animated.View>
     );
 }
 

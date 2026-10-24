@@ -126,7 +126,7 @@ export default function TargetWeight({ currentWeight, unit = 'kg', onContinue, o
               <Text style={{ color: COLORS.coral }}>Goal Weight?</Text>
             </Text>
             <Text style={styles.subtitle}>
-              Helping us calculate your daily calorie budget and timeline.
+              We'll create a plan to help you hit your target.
             </Text>
           </Animated.View>
 

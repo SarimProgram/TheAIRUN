@@ -6,6 +6,7 @@ import { z } from "zod";
 import prisma from "../db/prisma";
 import { AuthRequest } from "../middleware/auth";
 import { generateTrainingPlan, UserContext, WeeklySchedule } from "../generators";
+import { ensurePaceProfile } from "../services/pacePersonalisation";
 import { requireStringParam } from "../utils/params";
 
 const router = Router();
@@ -45,8 +46,12 @@ router.post("/generate", async (req: AuthRequest, res, next) => {
 
         if (!user) return res.status(404).json({ message: "User not found" });
 
+        const paceProfile = await ensurePaceProfile(prisma, req.user.id);
+
         const userContext: UserContext = {
-            baselinePaceSecPerKm: user.baselinePaceSecPerKm ?? undefined,
+            baselinePaceSecPerKm: paceProfile.runningBaselinePaceSecPerKm,
+            runningBaselinePaceSecPerKm: paceProfile.runningBaselinePaceSecPerKm,
+            walkingBaselinePaceSecPerKm: paceProfile.walkingBaselinePaceSecPerKm,
             ageYears: user.plan?.ageYears ?? undefined,
             heightCm: user.plan?.heightCm ?? undefined,
             weightKg: user.plan?.weightKg ?? undefined,

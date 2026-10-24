@@ -178,17 +178,50 @@ function normalize(text: string | null | undefined): string {
   return (text || '').trim().toLowerCase();
 }
 
+function matchesRunTypeAlias(runType: string, alias: string): boolean {
+  const input = normalize(runType);
+  const needle = normalize(alias);
+  if (!input || !needle) return false;
+  return input === needle || input.includes(needle);
+}
+
 export function getRunMeta(runType: string | null | undefined): RunMeta {
   const input = normalize(runType);
   const fallback = RUN_META_MAP['Easy Run'];
 
   if (!input) return fallback;
 
-  const found = Object.values(RUN_META_MAP).find((meta) =>
-    meta.aliases.some((alias) => input.includes(alias) || alias.includes(input))
-  );
+  let best: { meta: RunMeta; aliasLen: number } | null = null;
 
-  return found || fallback;
+  for (const meta of Object.values(RUN_META_MAP)) {
+    for (const alias of meta.aliases) {
+      if (!matchesRunTypeAlias(input, alias)) continue;
+      const aliasLen = normalize(alias).length;
+      if (!best || aliasLen > best.aliasLen) {
+        best = { meta, aliasLen };
+      }
+    }
+  }
+
+  return best?.meta ?? fallback;
+}
+
+export function getPlanSessionStartLabel(
+  runType: string | null | undefined,
+  runKm?: number | null,
+): string {
+  const title = getRunMeta(runType).details.title;
+  const distance =
+    typeof runKm === 'number' && Number.isFinite(runKm) && runKm > 0
+      ? `${runKm.toFixed(1)}km `
+      : '';
+  return `Start ${distance}${title}`;
+}
+
+export function matchesRunTypeAliases(runType: string | null | undefined, aliases: string[]): boolean {
+  const meta = getRunMeta(runType);
+  const allowed = new Set(aliases.map((alias) => normalize(alias)));
+  return meta.aliases.some((alias) => allowed.has(normalize(alias)));
 }
 
 export function getRunInfo(runType: string | null | undefined): RunInfoDetail {

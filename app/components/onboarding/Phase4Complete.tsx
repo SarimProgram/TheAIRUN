@@ -134,6 +134,8 @@ export default function Phase4Complete({ onComplete, onBack }: Phase4Props) {
               </Text>
             </View>
 
+            <View style={styles.pickerSpacer} />
+
             <View style={styles.pickerContainer}>
               <View style={styles.indicator} pointerEvents="none" />
 
@@ -201,10 +203,9 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 32,
     paddingTop: 8,
-    justifyContent: 'center',
   },
   topSection: {
-    marginBottom: 36,
+    marginBottom: 8,
   },
   title: {
     fontSize: titleSize,
@@ -221,7 +222,9 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   pickerSection: {
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
     paddingBottom: 8,
   },
   ageBadge: {
@@ -232,8 +235,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 999,
-    marginBottom: 12,
     gap: 10,
+  },
+  pickerSpacer: {
+    height: 28,
   },
   ageBadgeLabel: {
     fontSize: 11,

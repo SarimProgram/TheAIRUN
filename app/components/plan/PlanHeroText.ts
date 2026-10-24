@@ -42,30 +42,33 @@ const PERIOD_LABEL: Record<HeroPeriod, string> = {
 };
 
 const RUN_LINES: Record<HeroPeriod, string> = {
-  morning: 'Run day is live.\nSet the pace early and own the day.',
-  afternoon: 'Run day check-in.\nA steady effort now keeps momentum high.',
-  evening: 'Run day finish.\nLock in the distance before the day closes.',
-  day: 'Run day is on.\nShow up and keep the streak moving.',
+  morning: "Start your day with today's run.",
+  afternoon: "It's a good time to complete today's run.",
+  evening: 'Complete your run before the day ends.',
+  day: 'This is your running plan for the day.',
 };
 
 const EXERCISE_LINES: Record<HeroPeriod, string> = {
-  morning: 'Performance day starts now.\nBuild control and strength this morning.',
-  afternoon: 'Performance day is active.\nKeep form clean through this block.',
-  evening: 'Performance day closeout.\nFinish with quality movement and recovery.',
-  day: 'Performance day.\nKeep your muscles sharp and consistent.',
+  morning: "Start your day with today's exercise.",
+  afternoon: "It's a good time to complete your workout.",
+  evening: 'Complete your exercise before the day ends.',
+  day: 'This is your exercise plan for the day.',
 };
 
-const GENERAL_MOTIVATION = [
-  'One focused session today beats a perfect plan tomorrow.',
-  'Discipline today compounds into easier weeks ahead.',
-  'Small wins today become visible results this week.',
+const PARTNER_MOTIVATION = [
+  'Complete one goal today and give your partner a reason to be proud.',
+  'Your progress might inspire your partner to get moving too.',
+  'Every goal you complete helps both of you build a healthier future.',
+  'Show your partner what you can achieve when you stay consistent.',
+  "Complete today's plan and celebrate another win with your partner.",
+  'Your effort today could motivate your partner to take their next step.',
 ];
 
 function getWeightLine(weightDeltaKg?: number | null): string {
-  if (typeof weightDeltaKg !== 'number') return '';
-  if (weightDeltaKg > 0.2) return `Weight trend is up ${weightDeltaKg.toFixed(1)} kg, tighten execution today.`;
-  if (weightDeltaKg < -0.2) return `Weight trend is down ${Math.abs(weightDeltaKg).toFixed(1)} kg, stay consistent.`;
-  return 'Weight trend is stable, keep stacking clean days.';
+  if (typeof weightDeltaKg !== 'number') return 'Log your weight to see how your progress changes over time.';
+  if (weightDeltaKg > 0.2) return 'Your weight moved up a little. Stay focused and complete today’s goals.';
+  if (weightDeltaKg < -0.2) return 'Your weight is moving down. Your hard work is starting to show.';
+  return 'Your weight is steady. Keep following your plan and building healthy habits.';
 }
 
 export function getPlanHeroCopy(ctx: PlanHeroCopyContext): PlanHeroCopy {
@@ -74,8 +77,12 @@ export function getPlanHeroCopy(ctx: PlanHeroCopyContext): PlanHeroCopy {
   const stepRecoverySteps = ctx.nightWalkRecoverySteps ?? 0;
   const stepRecoveryKm = ctx.nightWalkRecoveryKm ?? 0;
 
-  const weekLine = `Week ${ctx.currentWeek} focus.`;
-  const motivation = GENERAL_MOTIVATION[(ctx.currentWeek - 1) % GENERAL_MOTIVATION.length];
+  const weekLine = `You’re in Week ${ctx.currentWeek} of your plan. Let’s keep moving forward together.`;
+  const motivationStart = (ctx.currentWeek + ctx.dayNumber - 2) % PARTNER_MOTIVATION.length;
+  const motivationLines = [
+    PARTNER_MOTIVATION[motivationStart],
+    PARTNER_MOTIVATION[(motivationStart + 1) % PARTNER_MOTIVATION.length],
+  ];
   const weightLine = getWeightLine(ctx.weightDeltaKg);
 
   let mainMessage: string;
@@ -92,8 +99,7 @@ export function getPlanHeroCopy(ctx: PlanHeroCopyContext): PlanHeroCopy {
     mainMessage = 'Stay on schedule.\nHit the core targets for this day.';
   }
 
-  const contextLine = [weekLine, weightLine].filter(Boolean).join(' ');
-  const messageQueue = [mainMessage, contextLine, motivation].filter(Boolean);
+  const messageQueue = [mainMessage, weekLine, weightLine, ...motivationLines].filter(Boolean);
 
   return {
     dayTag,

@@ -13,13 +13,26 @@ import {
   Calendar, ChevronLeft, ChevronRight, Activity, AlertTriangle, X, AlertCircle,
   Footprints, Moon,
 } from 'lucide-react-native';
-import Svg, { Path, Defs, LinearGradient, Stop } from 'react-native-svg';
+import Reanimated, {
+  cancelAnimation,
+  Easing as ReanimatedEasing,
+  useAnimatedProps,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from 'react-native-reanimated';
+import Svg, { Path, Defs, LinearGradient, Stop, Rect, Text as SvgText, Mask } from 'react-native-svg';
 import { getPlanHeroCopy, type HeroDayType, type HeroPeriod } from './PlanHeroText';
+import { getPlanSessionStartLabel } from '../../constants/runDetails';
 import { getGenderMascotSource } from '../../utils/genderMascot';
 import type { DaySchedule } from '../../utils/planProjection';
+import { APP_NAME } from '@/constants/branding';
 
 const { width } = Dimensions.get('window');
 const HERO_HEIGHT = 400;
+const HERO_INTRO_VIEWBOX_WIDTH = 240;
+const AnimatedSvgRect = Reanimated.createAnimatedComponent(Rect);
 
 export const COLORS = {
   // Theme-matching Palette
@@ -98,6 +111,8 @@ export type PlanHeroProps = {
   nightWalkRecoveryKm?: number;
   onConvertNightStepsToWalk?: () => void;
   weightDeltaKg?: number | null;
+  showWelcomeMessage?: boolean;
+  isActive?: boolean;
 };
 
 /** Format Date → YYYY-MM-DD (local) */
@@ -131,6 +146,8 @@ export function PlanHero({
   nightWalkRecoveryKm,
   onConvertNightStepsToWalk,
   weightDeltaKg,
+  showWelcomeMessage = false,
+  isActive = true,
 }: PlanHeroProps) {
   const [missedModal, setMissedModal] = useState<{ visible: boolean; dayKey: string; runKm: number }>({
     visible: false,
@@ -140,6 +157,8 @@ export function PlanHero({
   const [activeMessageIndex, setActiveMessageIndex] = useState(0);
   const textOpacity = useRef(new Animated.Value(1)).current;
   const textTranslateY = useRef(new Animated.Value(0)).current;
+  const shineX = useSharedValue(-56);
+  const reduceMotion = useReducedMotion();
 
   // Calculate the Monday of the selected date's week
   const mondayOfWeek = new Date(selectedDate);
@@ -162,8 +181,6 @@ export function PlanHero({
     dailyTargets.find(dt => dt.dayOfWeek === selectedDayOfWeek)?.dayType ??
     'STEP'
   ) as HeroDayType;
-  const normalizedRunType = String(projectedRunInfo.runType || '').trim().toLowerCase();
-  const isWalkSession = normalizedRunType.includes('walk');
   const now = new Date();
   const isToday = selectedDayKey === formatDayKey(now);
   const hour = now.getHours();
@@ -194,37 +211,75 @@ export function PlanHero({
     showStepRecoveryPrompt: false,
     weightDeltaKg,
   });
-  const heroMessages = heroCopy.messageQueue.length ? heroCopy.messageQueue : [heroCopy.mainMessage];
-  const heroMessageKey = heroMessages.join('||');
+  const welcomeMessage = `${APP_NAME} creates your plans and helps you earn points.`;
+  const planIntroMessage = 'Your personalised plan';
+  const rotatingHeroMessages = showWelcomeMessage
+    ? [welcomeMessage]
+    : heroCopy.messageQueue.length
+      ? heroCopy.messageQueue
+      : [heroCopy.mainMessage];
+  const heroMessages = [planIntroMessage, ...rotatingHeroMessages];
+  const heroMessagesLengthRef = useRef(heroMessages.length);
+  const rotatingMessagesLengthRef = useRef(rotatingHeroMessages.length);
+  heroMessagesLengthRef.current = heroMessages.length;
+  rotatingMessagesLengthRef.current = rotatingHeroMessages.length;
   const activeHeroMessage = heroMessages[Math.min(activeMessageIndex, heroMessages.length - 1)] ?? heroCopy.mainMessage;
+  const showHeroMainCTA = projectedRunInfo.isRunDay && !showNightWalkRecoveryPrompt;
   const heroMainCtaLabel = projectedRunInfo.isRunDay
-    ? `Start ${projectedRunInfo.runKm > 0 ? `${projectedRunInfo.runKm.toFixed(1)}km ` : ''}${isWalkSession ? 'Walk' : 'Run'}`
+    ? getPlanSessionStartLabel(projectedRunInfo.runType, projectedRunInfo.runKm)
     : heroCopy.mainCtaLabel;
   const avatarSource = getGenderMascotSource(userGender);
+  const shineAnimatedProps = useAnimatedProps(() => ({
+    x: shineX.get(),
+  }));
 
   useEffect(() => {
+    if (!isActive) {
+      setActiveMessageIndex(0);
+      textOpacity.setValue(1);
+      textTranslateY.setValue(0);
+      return;
+    }
+
     setActiveMessageIndex(0);
     textOpacity.setValue(0);
-    textTranslateY.setValue(12);
+    textTranslateY.setValue(0);
 
-    Animated.parallel([
-      Animated.timing(textOpacity, {
-        toValue: 1,
-        duration: 320,
-        useNativeDriver: true,
-      }),
-      Animated.timing(textTranslateY, {
-        toValue: 0,
-        duration: 320,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [heroMessageKey, textOpacity, textTranslateY]);
+    Animated.timing(textOpacity, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+
+    return () => {
+      textOpacity.stopAnimation();
+      textTranslateY.stopAnimation();
+    };
+  }, [isActive, textOpacity, textTranslateY]);
 
   useEffect(() => {
-    if (heroMessages.length <= 1) return;
+    cancelAnimation(shineX);
+    shineX.set(-56);
 
-    const interval = setInterval(() => {
+    if (!isActive || reduceMotion) return;
+
+    shineX.set(withDelay(450, withTiming(HERO_INTRO_VIEWBOX_WIDTH, {
+      duration: 900,
+      easing: ReanimatedEasing.bezier(0.23, 1, 0.32, 1),
+    })));
+
+    return () => {
+      cancelAnimation(shineX);
+    };
+  }, [isActive, reduceMotion, shineX]);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    let timeout: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const showNextMessage = () => {
       Animated.parallel([
         Animated.timing(textOpacity, {
           toValue: 0,
@@ -237,8 +292,14 @@ export function PlanHero({
           useNativeDriver: true,
         }),
       ]).start(() => {
+        if (cancelled) return;
+
         setActiveMessageIndex((prev) => {
-          const next = (prev + 1) % heroMessages.length;
+          const next = prev === 0
+            ? 1
+            : prev === heroMessagesLengthRef.current - 1
+              ? 1
+              : prev + 1;
           textTranslateY.setValue(12);
           Animated.parallel([
             Animated.timing(textOpacity, {
@@ -251,14 +312,23 @@ export function PlanHero({
               duration: 260,
               useNativeDriver: true,
             }),
-          ]).start();
+          ]).start(() => {
+            if (!cancelled && rotatingMessagesLengthRef.current > 1) {
+              timeout = setTimeout(showNextMessage, 3200);
+            }
+          });
           return next;
         });
       });
-    }, 3200);
+    };
 
-    return () => clearInterval(interval);
-  }, [heroMessageKey, heroMessages.length, textOpacity, textTranslateY]);
+    timeout = setTimeout(showNextMessage, 3000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [isActive, textOpacity, textTranslateY]);
 
   const handleDayPress = (date: Date, i: number) => {
     const dayKey = formatDayKey(date);
@@ -413,15 +483,69 @@ export function PlanHero({
             <Animated.View
               style={[
                 styles.heroTextFrame,
+                showHeroMainCTA && styles.heroTextFrameWithCTA,
+                activeMessageIndex === 0 && styles.heroIntroFrame,
                 { opacity: textOpacity, transform: [{ translateY: textTranslateY }] },
               ]}
             >
-              <Text style={styles.heroTextMain}>
-                {activeHeroMessage}
-              </Text>
+              {activeMessageIndex === 0 ? (
+                <Svg
+                  width="100%"
+                  height={96}
+                  viewBox={`0 0 ${HERO_INTRO_VIEWBOX_WIDTH} 96`}
+                  accessibilityLabel={planIntroMessage}
+                >
+                  <Defs>
+                    <LinearGradient id="planIntroShine" x1="0" y1="0" x2="1" y2="0">
+                      <Stop offset="0" stopColor="#FFF" stopOpacity="0" />
+                      <Stop offset="0.5" stopColor="#FFF" stopOpacity="0.95" />
+                      <Stop offset="1" stopColor="#FFF" stopOpacity="0" />
+                    </LinearGradient>
+                    <Mask id="planIntroTextMask">
+                      <SvgText
+                        x={HERO_INTRO_VIEWBOX_WIDTH / 2}
+                        y={56}
+                        textAnchor="middle"
+                        fontSize={20}
+                        fontWeight="800"
+                        fill="#FFF"
+                      >
+                        {planIntroMessage}
+                      </SvgText>
+                    </Mask>
+                  </Defs>
+                  <SvgText
+                    x={HERO_INTRO_VIEWBOX_WIDTH / 2}
+                    y={56}
+                    textAnchor="middle"
+                    fontSize={20}
+                    fontWeight="800"
+                    fill="rgba(255,255,255,0.78)"
+                  >
+                    {planIntroMessage}
+                  </SvgText>
+                  <AnimatedSvgRect
+                    animatedProps={shineAnimatedProps}
+                    y={0}
+                    width={56}
+                    height={96}
+                    fill="url(#planIntroShine)"
+                    mask="url(#planIntroTextMask)"
+                  />
+                </Svg>
+              ) : (
+                <Text
+                  style={styles.heroTextMain}
+                  numberOfLines={showHeroMainCTA ? 4 : undefined}
+                  adjustsFontSizeToFit={showHeroMainCTA}
+                  minimumFontScale={0.78}
+                >
+                  {activeHeroMessage}
+                </Text>
+              )}
             </Animated.View>
 
-            {projectedRunInfo.isRunDay && !showNightWalkRecoveryPrompt && (
+            {showHeroMainCTA && (
               <TouchableOpacity
                 style={styles.heroMainCTA}
                 onPress={onStartRunPress}
@@ -760,6 +884,14 @@ const styles = StyleSheet.create({
   heroTextFrame: {
     minHeight: 96,
     justifyContent: 'flex-start',
+  },
+  heroTextFrameWithCTA: {
+    height: 96,
+  },
+  heroIntroFrame: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   heroTextMain: {
     fontSize: 20,

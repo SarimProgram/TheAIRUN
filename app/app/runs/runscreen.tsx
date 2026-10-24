@@ -1,16 +1,17 @@
 // app/app/runs/runscreen.tsx
 // Unified Run Session Engine - Core component for all run types
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     StyleSheet, View, Text, TouchableOpacity, StatusBar,
-    Dimensions, Alert, Platform, PanResponder
-} from "react-native";
+    Dimensions, Alert, Platform, PanResponder, BackHandler, Image,
+} from 'react-native';
 import MapView, { PROVIDER_GOOGLE, Polyline, Marker, type LatLng } from "react-native-maps";
 import { LinearGradient } from 'expo-linear-gradient';
+import { saveRun, syncPendingRuns } from '@/lib/run-storage';
 import * as Location from "expo-location";
 import {
-    Play, Pause, Square, Brain, Heart, Zap, ChevronRight, ChevronLeft, Target,
+    Play, Pause, Square, Brain, Heart, Zap, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Target,
     LocateFixed
 } from 'lucide-react-native';
 import Animated, {
@@ -20,17 +21,17 @@ import Animated, {
 import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Image } from 'react-native';
 import { RunResultScreen } from "./RunPhotoCaptur";
 import { API_BASE_URL, getDefaultHeaders } from "@/config/api";
 import { useRunTracker } from "@/hooks/useRunTracker";
-import { saveRun } from "@/lib/run-storage";
 import { useAuth } from "@/src/auth/authContext";
 import { useTabBar } from "@/contexts/TabBarContext";
 import { getRunTemplate, RUN_TEMPLATES } from "@/lib/run-templates";
-import type { RunTemplate, RunType, SessionAim } from "@/types/RunTemplate";
+import { APP_NAME } from '@/constants/branding';
+import type { RunType, SessionAim } from "@/types/RunTemplate";
 import type { Run } from "@/types/run";
 import { getCuesForRun } from "@/lib/cues";
+import { estimateDistanceCalories } from '@/lib/calorie-burn';
 import { haversineDistanceMeters } from "@/lib/geo";
 import { generateApproxLoopRoute, generateRoadLoopRoute } from "@/lib/loop-route";
 import { getGenderMascotSource } from "@/utils/genderMascot";
@@ -40,6 +41,15 @@ import {
     pickConfiguredRunInstruction,
     type RunInstructionTrigger,
 } from "@/lib/run-instruction-config";
+import { usePaceProfile } from '@/hooks/usePaceProfile';
+import {
+    buildPaceBarZones,
+    buildRunPhasePlan,
+    getPaceBarPosition as getPersonalizedPaceBarPosition,
+    getPhaseProgressFromPlan,
+} from '@/lib/run-pace-targets';
+
+import type { PerceivedEffort } from '@/lib/pace-personalization';
 
 const { width, height } = Dimensions.get('window');
 
@@ -55,7 +65,6 @@ const COLORS = {
 };
 
 const METERS_PER_DEG_LAT = 111_111;
-const EASY_PACE_MULTIPLIER = 1.15;
 
 function offsetCoordinate(
     coordinate: LatLng,
@@ -79,17 +88,6 @@ function shortestHeadingDelta(from: number, to: number): number {
     return ((to - from + 540) % 360) - 180;
 }
 
-function formatPaceLabel(secPerKm: number | null | undefined): string | null {
-    if (!secPerKm || !Number.isFinite(secPerKm) || secPerKm <= 0) {
-        return null;
-    }
-
-    const rounded = Math.round(secPerKm);
-    const minutes = Math.floor(rounded / 60);
-    const seconds = rounded % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')} / km`;
-}
-
 // Icon mapping for session aims
 const AIM_ICONS: Record<SessionAim['icon'], React.ComponentType<any>> = {
     brain: Brain,
@@ -110,6 +108,7 @@ export default function RunScreen() {
         distanceKm?: string;
         weekContext?: string;
         askLoop?: string;
+        runType?: string;
     }>();
 
     // Determine which template to use - with fallback to 'easy' 
@@ -124,7 +123,11 @@ export default function RunScreen() {
     }
     
     const template = useMemo(() => getRunTemplate(templateId), [templateId]);
-
+    const workoutLabel = typeof params.runType === 'string' && params.runType.trim()
+        ? params.runType.trim()
+        : template.title;
+    const workoutType: NonNullable<Run['workoutType']> =
+        templateId === 'walk' || templateId.endsWith('_walk') ? 'WALK' : 'RUN';
     // Use session/day km when provided and valid, otherwise fall back to template default.
     const parsedDistanceKm = params.distanceKm ? parseFloat(params.distanceKm) : NaN;
     const targetDistanceKm =
@@ -153,6 +156,7 @@ export default function RunScreen() {
     } = useRunTracker();
 
     const [isSaving, setIsSaving] = useState(false);
+    const savedFinishedRunRef = React.useRef(false);
     const [plannedLoopCoords, setPlannedLoopCoords] = useState<LatLng[]>([]);
     const [plannedLoopDistanceM, setPlannedLoopDistanceM] = useState(0);
     const [loopPreviewActive, setLoopPreviewActive] = useState(false);
@@ -161,15 +165,19 @@ export default function RunScreen() {
     const [loopAnchor, setLoopAnchor] = useState<LatLng | null>(null);
     const [isFollowingUser, setIsFollowingUser] = useState(true);
     const [cameraHeading, setCameraHeading] = useState(0);
-    const [baselinePaceSecPerKm, setBaselinePaceSecPerKm] = useState<number | null>(null);
+    const [isHudCollapsed, setIsHudCollapsed] = useState(true);
     const [userGender, setUserGender] = useState<string | null>(
         typeof user?.gender === 'string' ? user.gender : null
+    );
+    const [userWeightKg, setUserWeightKg] = useState<number | null>(
+        typeof user?.weightKg === 'number' && user.weightKg > 0 ? user.weightKg : null
     );
     const lastFollowCameraHeadingRef = React.useRef<number | null>(null);
     const lastFollowCameraCoordinateRef = React.useRef<LatLng | null>(null);
     const coachAvatarSource = useMemo(() => getGenderMascotSource(userGender), [userGender]);
+    const { profile: paceProfile } = usePaceProfile(true);
 
-    // AI Coach & HUD State
+    // RunTogether guidance & HUD state
     const [instruction, setInstruction] = useState<string | null>(null);
     const instructionAnim = useSharedValue(0); 
     const introAnim = useSharedValue(0); 
@@ -178,6 +186,13 @@ export default function RunScreen() {
     const instructionCountsRef = React.useRef<Record<string, number>>({});
     const instructionLastShownAtRef = React.useRef<Record<string, number>>({});
     const instructionHideTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const instructionSwipeStartRef = React.useRef(0);
+    const lastInstructionSwipeAtRef = React.useRef(0);
+    const handleBackPressRef = React.useRef<() => void>(() => {});
+    const coachDistanceRef = React.useRef(0);
+    const lastObservedCoachDistanceRef = React.useRef(0);
+    const periodicCoachDistanceRef = React.useRef(0);
+    const lastCoachMovementAtRef = React.useRef(0);
     const coachContextRef = React.useRef({
         templateId,
         phaseLabel: "WARM UP",
@@ -206,7 +221,10 @@ export default function RunScreen() {
         if (typeof user?.gender === 'string' && user.gender.trim().length > 0) {
             setUserGender(user.gender);
         }
-    }, [user?.gender]);
+        if (typeof user?.weightKg === 'number' && user.weightKg > 0) {
+            setUserWeightKg(user.weightKg);
+        }
+    }, [user?.gender, user?.weightKg]);
 
     useEffect(() => {
         let isActive = true;
@@ -223,9 +241,13 @@ export default function RunScreen() {
 
                 const json = await response.json();
                 const nextGender = json?.user?.gender;
+                const nextWeight = json?.user?.weightKg ?? json?.plan?.weightKg;
 
                 if (isActive && typeof nextGender === 'string' && nextGender.trim().length > 0) {
                     setUserGender(nextGender);
+                }
+                if (isActive && typeof nextWeight === 'number' && nextWeight > 0) {
+                    setUserWeightKg(nextWeight);
                 }
             } catch (error) {
                 console.warn('Failed to load run profile gender', error);
@@ -238,48 +260,6 @@ export default function RunScreen() {
             isActive = false;
         };
     }, [authFetch]);
-
-    useEffect(() => {
-        let isActive = true;
-
-        if (templateId !== 'easy') {
-            setBaselinePaceSecPerKm(null);
-            return () => {
-                isActive = false;
-            };
-        }
-
-        const loadBaselinePace = async () => {
-            try {
-                const response = await authFetch(`${API_BASE_URL}/profile`, {
-                    headers: getDefaultHeaders(API_BASE_URL),
-                });
-
-                if (!response.ok) {
-                    return;
-                }
-
-                const json = await response.json();
-                const nextBaseline = json?.user?.baselinePaceSecPerKm;
-
-                if (isActive) {
-                    setBaselinePaceSecPerKm(
-                        typeof nextBaseline === 'number' && Number.isFinite(nextBaseline) && nextBaseline > 0
-                            ? nextBaseline
-                            : null
-                    );
-                }
-            } catch (error) {
-                console.warn('Failed to load easy run pace target', error);
-            }
-        };
-
-        loadBaselinePace();
-
-        return () => {
-            isActive = false;
-        };
-    }, [authFetch, templateId]);
 
     // --- FAT BURN PULSE ANIMATION ---
     const pulseOpacity = useSharedValue(0.7);
@@ -323,17 +303,68 @@ export default function RunScreen() {
         }, 10000);
     };
 
+    const goToHudPage = (page: 0 | 1) => {
+        if (instructionHideTimeoutRef.current) {
+            clearTimeout(instructionHideTimeoutRef.current);
+            instructionHideTimeoutRef.current = null;
+        }
+
+        lastInstructionSwipeAtRef.current = Date.now();
+        instructionAnim.value = withSpring(page, {
+            duration: 350,
+            dampingRatio: 1,
+        });
+    };
+
+    const toggleHudPage = () => {
+        goToHudPage(instructionAnim.value >= 0.5 ? 0 : 1);
+    };
+
     const instructionSwipeResponder = useMemo(
         () =>
             PanResponder.create({
                 onMoveShouldSetPanResponder: (_, gestureState) =>
-                    instructionAnim.value > 0.5 &&
-                    Math.abs(gestureState.dx) > Math.abs(gestureState.dy) &&
-                    gestureState.dx > 12,
-                onPanResponderRelease: (_, gestureState) => {
-                    if (gestureState.dx > 40) {
-                        hideInstruction();
+                    Math.abs(gestureState.dx) > 10 &&
+                    Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2,
+                onMoveShouldSetPanResponderCapture: (_, gestureState) =>
+                    Math.abs(gestureState.dx) > 10 &&
+                    Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2,
+                onPanResponderGrant: () => {
+                    instructionSwipeStartRef.current = instructionAnim.value;
+                    if (instructionHideTimeoutRef.current) {
+                        clearTimeout(instructionHideTimeoutRef.current);
+                        instructionHideTimeoutRef.current = null;
                     }
+                },
+                onPanResponderMove: (_, gestureState) => {
+                    const pageWidth = Math.max(1, width - 68);
+                    const nextProgress = instructionSwipeStartRef.current - gestureState.dx / pageWidth;
+                    instructionAnim.value = Math.max(0, Math.min(1, nextProgress));
+                },
+                onPanResponderRelease: (_, gestureState) => {
+                    lastInstructionSwipeAtRef.current = Date.now();
+                    const movedLeft = gestureState.dx < -32 || gestureState.vx < -0.35;
+                    const movedRight = gestureState.dx > 32 || gestureState.vx > 0.35;
+                    const targetPage = movedLeft
+                        ? 1
+                        : movedRight
+                            ? 0
+                            : instructionSwipeStartRef.current >= 0.5
+                                ? 1
+                                : 0;
+
+                    instructionAnim.value = withSpring(targetPage, {
+                        duration: 350,
+                        dampingRatio: 1,
+                        velocity: -gestureState.vx,
+                    });
+                },
+                onPanResponderTerminate: () => {
+                    lastInstructionSwipeAtRef.current = Date.now();
+                    instructionAnim.value = withSpring(
+                        instructionAnim.value >= 0.5 ? 1 : 0,
+                        { duration: 350, dampingRatio: 1 }
+                    );
                 },
             }),
         []
@@ -366,16 +397,41 @@ export default function RunScreen() {
         showInstruction(message);
     };
 
-    // Rotate through cues using the AI Coach logic
+    useEffect(() => {
+        coachDistanceRef.current = distanceM;
+
+        if (runState === 'idle') {
+            lastObservedCoachDistanceRef.current = 0;
+            periodicCoachDistanceRef.current = 0;
+            lastCoachMovementAtRef.current = 0;
+            return;
+        }
+
+        if (runState === 'running' && distanceM > lastObservedCoachDistanceRef.current + 1) {
+            lastCoachMovementAtRef.current = Date.now();
+        }
+
+        lastObservedCoachDistanceRef.current = distanceM;
+    }, [distanceM, runState]);
+
+    // Rotate through cues only while GPS confirms recent movement.
     useEffect(() => {
         if (runState === 'running') {
+            periodicCoachDistanceRef.current = coachDistanceRef.current;
+
             // Initial intro animation
             if (introAnim.value === 0) {
                 introAnim.value = withDelay(200, withSpring(1, { damping: 15 }));
             }
 
             const coachInterval = setInterval(() => {
-                triggerCoachInstruction("periodic");
+                const currentDistanceM = coachDistanceRef.current;
+                const movementSinceLastCheckM = currentDistanceM - periodicCoachDistanceRef.current;
+                periodicCoachDistanceRef.current = currentDistanceM;
+
+                if (movementSinceLastCheckM >= 8) {
+                    triggerCoachInstruction('periodic');
+                }
             }, 25000); // Coach speaks every 25 seconds
 
             return () => clearInterval(coachInterval);
@@ -384,122 +440,45 @@ export default function RunScreen() {
 
     // Derived values
     const currentKm = (distanceM / 1000).toFixed(2);
-    const calories = Math.floor(distanceM * 0.065);
+    const calories = estimateDistanceCalories(
+        distanceM,
+        workoutType === 'WALK' ? 'WALK' : 'RUN',
+        userWeightKg ?? undefined,
+    );
     const formatTime = (sec: number) => `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, '0')}`;
 
-    const easyTargetPaceSecPerKm = useMemo(
-        () =>
-            templateId === 'easy' && (baselinePaceSecPerKm ?? user?.baselinePaceSecPerKm)
-                ? Math.round((baselinePaceSecPerKm ?? user?.baselinePaceSecPerKm) * EASY_PACE_MULTIPLIER)
-                : null,
-        [baselinePaceSecPerKm, templateId, user?.baselinePaceSecPerKm]
+    const runPhasePlan = useMemo(
+        () => buildRunPhasePlan(
+            paceProfile,
+            template,
+            templateId,
+            targetDistanceKm,
+            workoutLabel,
+        ),
+        [paceProfile, template, templateId, targetDistanceKm, workoutLabel],
     );
 
-    const easyRunPhasePlan = useMemo(() => {
-        if (templateId !== 'easy') {
-            return null;
-        }
-
-        const warmupKm = Math.min(0.5, targetDistanceKm * 0.15);
-        const cooldownKm = Math.min(0.3, targetDistanceKm * 0.1);
-        const mainKm = Math.max(0.5, targetDistanceKm - warmupKm - cooldownKm);
-        const totalKm = warmupKm + mainKm + cooldownKm;
-
-        if (!Number.isFinite(totalKm) || totalKm <= 0) {
-            return null;
-        }
-
-        return {
-            totalKm,
-            phases: [
-                { label: 'WARM UP', color: '#F59E0B', durationPercent: (warmupKm / totalKm) * 100 },
-                { label: 'RUN', color: template.primaryColor, durationPercent: (mainKm / totalKm) * 100 },
-                { label: 'COOL DOWN', color: '#22C55E', durationPercent: (cooldownKm / totalKm) * 100 },
-            ],
-        };
-    }, [targetDistanceKm, template.primaryColor, templateId]);
-
-    // Default phases if template doesn't define them
-    const defaultPhases = [
-        { label: 'WARM UP', color: '#F59E0B', durationPercent: 15 },
-        { label: 'RUN', color: template.primaryColor, durationPercent: 70 },
-        { label: 'SLOW DOWN', color: '#22C55E', durationPercent: 15 },
-    ];
-    const phases = easyRunPhasePlan?.phases ?? template.phases ?? defaultPhases;
-    const estimatedDistanceKm = easyRunPhasePlan?.totalKm ?? targetDistanceKm;
-    const effectiveTargetPaceSecPerKm =
-        easyTargetPaceSecPerKm ??
-        template.paceZones[template.targetZoneIndex]?.maxPaceSecPerKm ??
-        420;
-    const effectiveTargetPaceLabel = formatPaceLabel(effectiveTargetPaceSecPerKm) ?? 'TARGET';
-    const targetDisplayLabel = easyTargetPaceSecPerKm
-        ? formatPaceLabel(easyTargetPaceSecPerKm)
-        : template.paceRangeLabel || 'TARGET';
-
-    // Calculate current phase based on distance progress (with more detail)
-    const getPhaseInfo = () => {
-        const totalEstimatedTimeSec = estimatedDistanceKm * effectiveTargetPaceSecPerKm;
-        
-        // Calculate progress based on TIME for the phases (to stay in sync with countdown)
-        const timeProgressPercent = (elapsedSec / totalEstimatedTimeSec) * 100;
-        
-        // Also keep track of distance progress for the overall run completion
-        const distanceProgressPercent = (distanceM / (targetDistanceKm * 1000)) * 100;
-        
-        let accumulatedPercent = 0;
-        
-        for (let i = 0; i < phases.length; i++) {
-            const phase = phases[i];
-            const phaseStartPercent = accumulatedPercent;
-            accumulatedPercent += phase.durationPercent;
-            
-            // Phase change is now driven by timeProgressPercent
-            if (timeProgressPercent <= accumulatedPercent || i === phases.length - 1) {
-                // Total expected duration of THIS phase
-                const phaseTotalTimeSec = (phase.durationPercent / 100) * totalEstimatedTimeSec;
-                const phaseStartSec = (phaseStartPercent / 100) * totalEstimatedTimeSec;
-
-                // Real-time countdown: Total expected end time of phase - current elapsed time
-                const phaseEndSec = phaseStartSec + phaseTotalTimeSec;
-                const timeRemainingSec = Math.max(0, Math.round(phaseEndSec - elapsedSec));
-                
-                // Progress within this specific phase (for progress bars)
-                const progressInPhase = Math.min(1, Math.max(0, (elapsedSec - phaseStartSec) / phaseTotalTimeSec));
-                
-                return {
-                    currentPhase: phase,
-                    currentPhaseIndex: i,
-                    progressInPhase,
-                    timeRemainingSec,
-                    nextPhase: i < phases.length - 1 ? phases[i + 1] : null,
-                    totalPhases: phases.length,
-                    // We can also return distance progress for secondary metrics
-                    distanceProgressPercent
-                };
-            }
-        }
-        
-        // Fallback to last phase if we exceed estimated time but haven't finished distance
-        return {
-            currentPhase: phases[phases.length - 1],
-            currentPhaseIndex: phases.length - 1,
-            progressInPhase: 1,
-            timeRemainingSec: 0,
-            nextPhase: null,
-            totalPhases: phases.length,
-            distanceProgressPercent
-        };
-    };
-    
-    const phaseInfo = getPhaseInfo();
+    const distanceProgressPercent = (distanceM / (targetDistanceKm * 1000)) * 100;
+    const phaseInfo = getPhaseProgressFromPlan(runPhasePlan, elapsedSec, distanceProgressPercent);
     const currentPhase = phaseInfo.currentPhase;
+    const currentPhasePace = currentPhase.pace;
     const phaseCountdown = formatTime(phaseInfo.timeRemainingSec);
     const weekNumber = useMemo(() => parseWeekNumber(weekContext), [weekContext]);
     const instructionWeekNumber = weekNumber ?? 1;
-    const targetPaceZone = template.paceZones[template.targetZoneIndex];
+    const targetDisplayLabel = currentPhasePace.displayLabel;
+    const paceBarZones = useMemo(
+        () => buildPaceBarZones(runPhasePlan.mainRange, template),
+        [runPhasePlan.mainRange, template],
+    );
+    const paceBarTargetZoneIndex = 1;
+    const paceBarPointerPosition = getPersonalizedPaceBarPosition(paceSecPerKm, paceBarZones);
     const paceState = useMemo(
-        () => getPaceState(paceSecPerKm, targetPaceZone?.minPaceSecPerKm, targetPaceZone?.maxPaceSecPerKm),
-        [paceSecPerKm, targetPaceZone]
+        () => getPaceState(
+            paceSecPerKm,
+            currentPhasePace.minPaceSecPerKm,
+            currentPhasePace.maxPaceSecPerKm,
+        ),
+        [paceSecPerKm, currentPhasePace],
     );
 
     useEffect(() => {
@@ -523,9 +502,14 @@ export default function RunScreen() {
             return;
         }
 
+        const hasRecentMovement = Date.now() - lastCoachMovementAtRef.current <= 15000;
+        if (!hasRecentMovement) {
+            return;
+        }
+
         lastPhaseInstructionIndexRef.current = phaseInfo.currentPhaseIndex;
         triggerCoachInstruction("phase_start");
-    }, [runState, phaseInfo.currentPhaseIndex]);
+    }, [distanceM, runState, phaseInfo.currentPhaseIndex]);
 
     // Track user location with smooth animation instead of rigid region prop
     const currentMarkerCoordinate = useMemo(() => {
@@ -606,20 +590,9 @@ export default function RunScreen() {
         focusCameraOnUser(140, true);
     }, [currentMarkerCoordinate, currentMarkerHeading, focusCameraOnUser, runState, isFollowingUser]);
 
-    // Calculate current pace for display (use actual or simulate for display)
     const currentPace = paceSecPerKm
         ? (paceSecPerKm / 60).toFixed(2)
         : '0.00';
-
-    // Calculate pace bar pointer position based on current pace
-    const getPaceBarPosition = () => {
-        if (!paceSecPerKm) return 50;
-        const minPace = template.paceZones[template.paceZones.length - 1].minPaceSecPerKm;
-        const maxPace = template.paceZones[0].maxPaceSecPerKm;
-        const range = maxPace - minPace;
-        const position = ((maxPace - paceSecPerKm) / range) * 100;
-        return Math.max(5, Math.min(95, position));
-    };
 
     // --- ANIMATED STYLES ---
     const timerContainerStyle = useAnimatedStyle(() => {
@@ -636,10 +609,10 @@ export default function RunScreen() {
     const hudProgressBarStyle = useAnimatedStyle(() => {
         const config = { duration: 300, easing: Easing.out(Easing.exp) };
         return {
-            height: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [50, 0]), config),
+            height: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [38, 0]), config),
             opacity: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [1, 0]), config),
-            marginTop: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [15, 0]), config),
-            overflow: 'hidden'
+            marginTop: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [8, 0]), config),
+            overflow: 'visible',
         };
     });
 
@@ -648,16 +621,37 @@ export default function RunScreen() {
     const hudPaginationStyle = useAnimatedStyle(() => {
         return {
             transform: [{ 
-                translateX: withTiming(
-                    interpolate(instructionAnim.value, [0, 1], [0, -HUD_CARD_INNER_WIDTH]), 
-                    { duration: 600, easing: Easing.bezier(0.33, 1, 0.68, 1) }
-                ) 
+                translateX: interpolate(instructionAnim.value, [0, 1], [0, -HUD_CARD_INNER_WIDTH])
             }]
+        };
+    });
+
+    const hudPagerCollapseStyle = useAnimatedStyle(() => {
+        const config = { duration: 240, easing: Easing.bezier(0.23, 1, 0.32, 1) };
+        return {
+            height: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [110, 0]), config),
+            opacity: withTiming(interpolate(hudShrinkAnim.value, [0, 0.65, 1], [1, 0, 0]), config),
+            marginBottom: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [8, 0]), config),
+        };
+    });
+
+    const phaseHeaderCollapseStyle = useAnimatedStyle(() => {
+        const config = { duration: 240, easing: Easing.bezier(0.23, 1, 0.32, 1) };
+        return {
+            marginBottom: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [24, 0]), config),
+            paddingBottom: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [20, 0]), config),
+            borderBottomWidth: withTiming(interpolate(hudShrinkAnim.value, [0, 1], [1.5, 0]), config),
         };
     });
 
     const page1Style = useAnimatedStyle(() => ({ opacity: 1 }));
     const page2Style = useAnimatedStyle(() => ({ opacity: 1 }));
+    const forwardChevronStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(instructionAnim.value, [0, 0.45], [1, 0]),
+    }));
+    const backChevronStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(instructionAnim.value, [0.55, 1], [0, 1]),
+    }));
 
     const coachContainerStyle = useAnimatedStyle(() => {
         return {
@@ -718,12 +712,33 @@ export default function RunScreen() {
             durationSeconds: elapsedSec,
             totalDistanceMeters: distanceM,
             avgPaceSecPerKm: paceSecPerKm,
+            workoutType,
+            title: workoutLabel,
+            calories,
             route,
         } as Run;
-    }, [runState, startTime, endTime, elapsedSec, distanceM, paceSecPerKm, route]);
+    }, [runState, startTime, endTime, elapsedSec, distanceM, paceSecPerKm, route, workoutLabel, workoutType, calories]);
+
+    const handleEffortSelect = async (perceivedEffort: PerceivedEffort) => {
+        if (!runSummary) return null;
+        setIsSaving(true);
+        try {
+            const paceUpdate = await saveRun({ ...runSummary, perceivedEffort }, authFetch);
+            savedFinishedRunRef.current = true;
+            return paceUpdate;
+        } finally {
+            setIsSaving(false);
+        }
+    };
 
     const handleSave = async () => {
         if (!runSummary) return;
+        if (savedFinishedRunRef.current) {
+            clearLoopPreview();
+            resetRun();
+            router.back();
+            return;
+        }
         try {
             setIsSaving(true);
             await saveRun(runSummary, authFetch);
@@ -753,10 +768,79 @@ export default function RunScreen() {
         setLoopAnchor(null);
     };
 
-    const handleBackPress = () => {
-        clearLoopPreview();
-        router.back();
+    const saveAndExitCurrentSession = async () => {
+        if (!startTime || isSaving) return;
+
+        const finalEndTime = endTime ?? new Date();
+        const partialRun: Run = {
+            id: `${startTime.toISOString()}_${finalEndTime.toISOString()}`,
+            startedAt: startTime.toISOString(),
+            endedAt: finalEndTime.toISOString(),
+            durationSeconds: elapsedSec,
+            totalDistanceMeters: distanceM,
+            avgPaceSecPerKm: distanceM > 10 ? elapsedSec / (distanceM / 1000) : null,
+            workoutType,
+            title: workoutLabel,
+            calories,
+            route,
+        };
+
+        try {
+            setIsSaving(true);
+            await finishRun();
+            await saveRun(partialRun);
+            void syncPendingRuns(authFetch).catch(() => {});
+            clearLoopPreview();
+            router.back();
+        } catch (error) {
+            console.warn('Failed to save partial workout before exit', error);
+            Alert.alert(
+                'Could not save workout',
+                'Your workout is still open. Please try again so your distance is not lost.'
+            );
+        } finally {
+            setIsSaving(false);
+        }
     };
+
+    const handleBackPress = () => {
+        if (isSaving) return;
+
+        if (runState === 'idle' || !startTime) {
+            clearLoopPreview();
+            router.back();
+            return;
+        }
+
+        const activityName = workoutType === 'WALK' ? 'walk' : 'run';
+        Alert.alert(
+            `Save and exit this ${activityName}?`,
+            `Your completed ${currentKm} km will be saved to your activity history.`,
+            [
+                {
+                    text: 'Keep Going',
+                    style: 'cancel',
+                },
+                {
+                    text: 'Save & Exit',
+                    onPress: () => {
+                        void saveAndExitCurrentSession();
+                    },
+                },
+            ]
+        );
+    };
+
+    handleBackPressRef.current = handleBackPress;
+
+    useEffect(() => {
+        const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+            handleBackPressRef.current();
+            return true;
+        });
+
+        return () => subscription.remove();
+    }, []);
 
     const displayLoopAnchor = useMemo(() => {
         if (!loopAnchor) return null;
@@ -950,13 +1034,14 @@ export default function RunScreen() {
                 }}
                 onDone={handleSave}
                 onSkip={handleSave}
+                onEffortSelect={handleEffortSelect}
             />
         );
     }
 
     return (
         <View style={styles.container}>
-            <Stack.Screen options={{ headerShown: false }} />
+            <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
             <StatusBar barStyle="light-content" />
 
             {/* BACKGROUND MAP */}
@@ -1144,24 +1229,29 @@ export default function RunScreen() {
                         {/* A. INTEGRATED TOP BAR (Pace + Phase) */}
                         {template.hud.showPaceBar && (
                             <Animated.View style={[styles.topHud, timerContainerStyle]} pointerEvents="box-none">
-                                    <TouchableOpacity 
-                                        activeOpacity={0.95} 
-                                        onPress={() => {
-                                            hudShrinkAnim.value = hudShrinkAnim.value === 0 ? 1 : 0;
-                                        }}
-                                        style={styles.paceCard}
-                                    >
+                                    <View style={styles.paceCard}>
                                         {/* Phase Header */}
-                                        <View style={styles.phaseHeaderIntegrated}>
-                                            <TouchableOpacity onPress={handleBackPress} style={styles.paceBackButtonCompact}>
+                                        <Animated.View style={[styles.phaseHeaderIntegrated, phaseHeaderCollapseStyle]}>
+                                            <TouchableOpacity
+                                                disabled={isSaving}
+                                                onPress={handleBackPress}
+                                                style={styles.paceBackButtonCompact}
+                                            >
                                                 <ChevronLeft color={COLORS.textDark} size={20} strokeWidth={3} />
                                             </TouchableOpacity>
                                             
                                             <View style={styles.phaseMetaCluster}>
-                                                <Text style={styles.phaseLabelMiniLight}>
-                                                    BLOCK {phaseInfo.currentPhaseIndex + 1} OF {phaseInfo.totalPhases}
-                                                </Text>
-                                                <Text style={styles.phaseTagValue}>
+                                                {!isHudCollapsed && (
+                                                    <Text style={styles.phaseLabelMiniLight}>
+                                                        BLOCK {phaseInfo.currentPhaseIndex + 1} OF {phaseInfo.totalPhases}
+                                                    </Text>
+                                                )}
+                                                <Text
+                                                    numberOfLines={1}
+                                                    adjustsFontSizeToFit
+                                                    minimumFontScale={0.78}
+                                                    style={styles.phaseTagValue}
+                                                >
                                                     {currentPhase.label}
                                                 </Text>
                                             </View>
@@ -1170,11 +1260,33 @@ export default function RunScreen() {
                                                 <Text style={styles.phaseTimeLeftLabel}>REMAINING</Text>
                                                 <Text style={styles.phaseTimeLeft}>{phaseCountdown}</Text>
                                             </View>
-                                        </View>
+                                            <TouchableOpacity
+                                                accessibilityRole='button'
+                                                accessibilityLabel={isHudCollapsed ? 'Expand workout details' : 'Collapse workout details'}
+                                                accessibilityState={{ expanded: !isHudCollapsed }}
+                                                activeOpacity={0.7}
+                                                style={styles.hudCollapseButton}
+                                                onPress={() => {
+                                                    const nextCollapsed = !isHudCollapsed;
+                                                    setIsHudCollapsed(nextCollapsed);
+                                                    hudShrinkAnim.value = nextCollapsed ? 1 : 0;
+                                                }}
+                                            >
+                                                {isHudCollapsed ? (
+                                                    <ChevronDown color={COLORS.textDark} size={20} strokeWidth={2.75} />
+                                                ) : (
+                                                    <ChevronUp color={COLORS.textDark} size={20} strokeWidth={2.75} />
+                                                )}
+                                            </TouchableOpacity>
+                                        </Animated.View>
 
                                         {/* Paginated Header: Pace vs Coach */}
-                                        <View style={styles.hudSliderContainer} {...instructionSwipeResponder.panHandlers}>
-                                            <Animated.View style={[styles.hudSliderTrack, hudPaginationStyle]}>
+                                        <Animated.View
+                                            pointerEvents={isHudCollapsed ? 'none' : 'auto'}
+                                            style={[styles.hudPagerShell, hudPagerCollapseStyle]}
+                                        >
+                                            <View style={styles.hudSliderContainer} {...instructionSwipeResponder.panHandlers}>
+                                                <Animated.View style={[styles.hudSliderTrack, hudPaginationStyle]}>
                                                 
                                                 {/* PAGE 1: Pace Metrics */}
                                                 <Animated.View style={[styles.hudSlidePage, page1Style]}>
@@ -1190,7 +1302,7 @@ export default function RunScreen() {
                                                                     TARGET
                                                                 </Text>
                                                                 <Text style={[styles.paceTargetValue, { color: COLORS.coral }]}>
-                                                                    {templateId === 'easy' ? effectiveTargetPaceLabel : targetDisplayLabel}
+                                                                    {targetDisplayLabel}
                                                                 </Text>
                                                             </View>
                                                         </View>
@@ -1200,7 +1312,7 @@ export default function RunScreen() {
                                                 {/* PAGE 2: Coach Instruction */}
                                                 <Animated.View style={[styles.hudSlidePage, page2Style]}>
                                                     <View style={styles.hudCoachContentSimple}>
-                                                            <View style={styles.hudCoachIconContainer}>
+                                                        <View style={styles.hudCoachIconContainer}>
                                                                 <View style={styles.hudCoachIconCircle} />
                                                             <Image 
                                                                 source={coachAvatarSource}
@@ -1209,7 +1321,7 @@ export default function RunScreen() {
                                                             />
                                                         </View>
                                                         <View style={styles.hudCoachTextContainerFull}>
-                                                            <Text style={styles.hudCoachLabel}>COACH SAYS</Text>
+                                                            <Text style={styles.hudCoachLabel}>{APP_NAME} says</Text>
                                                             <Text
                                                                 style={styles.hudCoachInstructionLarge}
                                                                 numberOfLines={3}
@@ -1222,36 +1334,62 @@ export default function RunScreen() {
                                                     </View>
                                                 </Animated.View>
 
-                                            </Animated.View>
-                                        </View>
+                                                </Animated.View>
+                                            </View>
+                                            <TouchableOpacity
+                                                accessibilityRole='button'
+                                                accessibilityLabel='Toggle pace and coach'
+                                                activeOpacity={0.72}
+                                                hitSlop={4}
+                                                style={styles.hudEdgeChevron}
+                                                onPress={(event) => {
+                                                    event.stopPropagation();
+                                                    toggleHudPage();
+                                                }}
+                                            >
+                                                <Animated.View style={forwardChevronStyle}>
+                                                    <ChevronRight color={COLORS.textDark} size={22} strokeWidth={3} />
+                                                </Animated.View>
+                                                <Animated.View style={[styles.hudChevronIconOverlay, backChevronStyle]}>
+                                                    <ChevronLeft color={COLORS.textDark} size={22} strokeWidth={3} />
+                                                </Animated.View>
+                                            </TouchableOpacity>
+                                        </Animated.View>
 
                                         {/* Labeled Progress Bar */}
                                         <Animated.View style={[styles.weightLossBarContainer, hudProgressBarStyle]}>
                                             <View style={styles.zoneLabels}>
-                                                {template.paceZones.map((zone, idx) => (
+                                                {paceBarZones.map((zone, idx) => (
                                                     <Text key={idx} style={[
                                                         styles.zoneLabelText,
-                                                        idx === template.targetZoneIndex && { color: zone.color, fontWeight: '900' }
+                                                        idx === paceBarTargetZoneIndex && { color: zone.color, fontWeight: '900' }
                                                     ]}>
                                                         {zone.label}
                                                     </Text>
                                                 ))}
                                             </View>
-                                            <View style={styles.weightLossBar}>
-                                                {template.paceZones.map((zone, idx) => (
-                                                    <Animated.View
-                                                        key={idx}
-                                                        style={[
-                                                            styles.barZone,
-                                                            { flex: 1, backgroundColor: zone.color },
-                                                            idx === template.targetZoneIndex && animatedPulseStyle
-                                                        ]}
-                                                    />
-                                                ))}
-                                                <View style={[styles.barPointer, { left: `${getPaceBarPosition()}%` }]} />
+                                            <View style={styles.weightLossBarTrack}>
+                                                <View style={styles.weightLossBar}>
+                                                    {paceBarZones.map((zone, idx) => (
+                                                        <Animated.View
+                                                            key={idx}
+                                                            style={[
+                                                                styles.barZone,
+                                                                { flex: 1, backgroundColor: zone.color },
+                                                                idx === paceBarTargetZoneIndex && animatedPulseStyle
+                                                            ]}
+                                                        />
+                                                    ))}
+                                                </View>
+                                                <View
+                                                    style={[
+                                                        styles.barPointer,
+                                                        { left: `${paceBarPointerPosition}%` },
+                                                    ]}
+                                                />
                                             </View>
                                         </Animated.View>
-                                    </TouchableOpacity>
+                                    </View>
                             </Animated.View>
                         )}
 
@@ -1294,7 +1432,7 @@ export default function RunScreen() {
                                     )}
                                 </View>
 
-                                {/* B2. Avatar / AI Coach Button */}
+                                {/* B2. Avatar / guidance button */}
                                 <View style={styles.bottomCoachButton}>
                                     <TouchableOpacity 
                                         onPress={() => triggerCoachInstruction("manual")}
@@ -1372,12 +1510,28 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(15, 23, 42, 0.05)',
     },
     // HUD Paging
-    hudSliderContainer: { width: '100%', overflow: 'hidden', height: 110, marginBottom: 8 },
+    hudPagerShell: { position: 'relative', width: '100%', height: 110, marginBottom: 8 },
+    hudSliderContainer: { width: '100%', overflow: 'hidden', height: 110 },
     hudSliderTrack: { flexDirection: 'row', width: '200%' },
     hudSlidePage: { width: '50%' },
     paceHeaderInside: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: '100%' },
     
-    hudCoachContentSimple: { flexDirection: 'row', alignItems: 'center', width: '100%', height: '100%', gap: 12 },
+    hudCoachContentSimple: { flexDirection: 'row', alignItems: 'center', width: '100%', height: '100%', gap: 12, paddingRight: 24 },
+    hudEdgeChevron: {
+        position: 'absolute',
+        top: 35,
+        right: -20,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(241, 245, 249, 0.88)',
+        borderWidth: 1,
+        borderColor: 'rgba(15, 23, 42, 0.06)',
+        zIndex: 10,
+    },
+    hudChevronIconOverlay: { position: 'absolute' },
     hudCoachIconContainer: { width: 60, height: 60, justifyContent: 'center', alignItems: 'center' },
     hudCoachIconCircle: { position: 'absolute', width: 44, height: 44, borderRadius: 22, backgroundColor: '#f1f5f9' },
     hudCoachIconImage: { width: 65, height: 65, marginTop: -8 },
@@ -1399,9 +1553,32 @@ const styles = StyleSheet.create({
     paceUnit: { fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.5 },
     paceTargetValue: { fontSize: 13, fontWeight: '900', marginTop: 1 },
     paceGoalContainer: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(15, 23, 42, 0.04)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14 },
+    weightLossBarTrack: {
+        position: 'relative',
+        width: '100%',
+        height: 14,
+        justifyContent: 'center',
+        overflow: 'visible',
+    },
     weightLossBar: { height: 6, borderRadius: 4, flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.26)', overflow: 'hidden' },
     barZone: { height: '100%' },
-    barPointer: { position: 'absolute', top: -2, width: 4, height: 10, backgroundColor: '#FFFFFF', borderRadius: 2, zIndex: 10 },
+    barPointer: {
+        position: 'absolute',
+        top: 2,
+        width: 5,
+        height: 12,
+        marginLeft: -2.5,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 2,
+        borderWidth: 1,
+        borderColor: 'rgba(15, 23, 42, 0.35)',
+        shadowColor: '#0F172A',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.35,
+        shadowRadius: 2,
+        elevation: 4,
+        zIndex: 20,
+    },
 
     bottomArea: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 20 },
     bottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', height: 100 },
@@ -1546,6 +1723,16 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1.5,
         borderBottomColor: 'rgba(15,23,42,0.08)',
     },
+    hudCollapseButton: {
+        width: 44,
+        height: 44,
+        marginLeft: 4,
+        borderRadius: 14,
+        borderCurve: 'continuous',
+        backgroundColor: 'rgba(15, 23, 42, 0.04)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     paceBackButtonCompact: {
         width: 44,
         height: 44,
@@ -1557,7 +1744,7 @@ const styles = StyleSheet.create({
     phaseMetaCluster: {
         flex: 1,
         alignItems: 'flex-start',
-        marginHorizontal: 16,
+        marginHorizontal: 8,
     },
     phaseLabelMiniLight: {
         fontSize: 10,
@@ -1568,7 +1755,7 @@ const styles = StyleSheet.create({
         marginBottom: 2,
     },
     phaseTagValue: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: '900',
         color: COLORS.textDark,
         textTransform: 'uppercase',
@@ -1586,7 +1773,7 @@ const styles = StyleSheet.create({
     },
     phaseTimeLeft: {
         color: COLORS.textDark,
-        fontSize: 36,
+        fontSize: 32,
         fontWeight: '900',
         fontStyle: 'italic',
         fontVariant: ['tabular-nums'],
@@ -1594,6 +1781,10 @@ const styles = StyleSheet.create({
         marginTop: -4,
     },
     paceMain: {
+        flex: 1,
+        flexBasis: 0,
+        flexShrink: 1,
+        minWidth: 0,
         alignItems: 'flex-start',
         gap: -4,
     },
@@ -1607,6 +1798,7 @@ const styles = StyleSheet.create({
     weightLossBarContainer: {
         width: '100%',
         marginTop: 15,
+        overflow: 'visible',
     },
     zoneLabels: {
         flexDirection: 'row',

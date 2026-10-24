@@ -20,7 +20,19 @@ const envSchema = z.object({
   APNS_BUNDLE_ID: z.string().optional().default(''),
   APNS_AUTH_KEY: z.string().optional().default(''),
   APNS_AUTH_KEY_PATH: z.string().optional().default(''),
-  APNS_USE_SANDBOX: z.coerce.boolean().default(false),
+  APNS_USE_SANDBOX: z
+    .string()
+    .optional()
+    .default('false')
+    .transform((value) => ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())),
+  RESEND_API_KEY: z.string().optional().default(''),
+  EMAIL_FROM: z.string().optional().default(''),
+  APP_STORE_URL: z.string().optional().default(''),
+  EMAIL_INVITES_ENABLED: z
+    .string()
+    .optional()
+    .default('false')
+    .transform((value) => ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())),
 });
 
 export const env = envSchema.parse({
@@ -41,4 +53,8 @@ export const env = envSchema.parse({
   APNS_AUTH_KEY: process.env.APNS_AUTH_KEY,
   APNS_AUTH_KEY_PATH: process.env.APNS_AUTH_KEY_PATH,
   APNS_USE_SANDBOX: process.env.APNS_USE_SANDBOX,
+  RESEND_API_KEY: process.env.RESEND_API_KEY,
+  EMAIL_FROM: process.env.EMAIL_FROM,
+  APP_STORE_URL: process.env.APP_STORE_URL,
+  EMAIL_INVITES_ENABLED: process.env.EMAIL_INVITES_ENABLED,
 });

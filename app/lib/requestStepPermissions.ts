@@ -7,6 +7,7 @@ import GoogleFit, { Scopes } from 'react-native-google-fit';
 
 import { setStepPermissionConsent } from '../config/healthPermissions';
 import { registerBackgroundStepSync } from '../tasks/backgroundStepSync';
+import { APP_NAME } from '@/constants/branding';
 
 const HK_STEP_COUNT = 'HKQuantityTypeIdentifierStepCount' as QuantityTypeIdentifier;
 
@@ -29,7 +30,7 @@ export async function requestStepPermissions(): Promise<boolean> {
       PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION,
       {
         title: 'Step Data Access',
-        message: 'Allow activity access to read your step count for coaching insights.',
+        message: `Allow activity access to read your step count for ${APP_NAME} insights.`,
         buttonPositive: 'Allow',
         buttonNegative: 'Deny',
       }

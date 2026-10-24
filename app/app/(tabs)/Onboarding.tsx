@@ -4,9 +4,9 @@ import {
     Text,
     View,
     TouchableOpacity,
-    SafeAreaView,
     StatusBar,
     Animated,
+    Easing,
     Dimensions,
     Platform,
     Alert,
@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -23,7 +24,8 @@ import { useTabBar } from '@/contexts/TabBarContext';
 import { useAuth } from '@/src/auth/authContext';
 import { useEntitlement } from '@/src/billing';
 import { upsertTrainingProfile } from '@/db/offlineDb';
-import { setAnalyticsUserProperties, trackEvent } from '@/src/analytics/analytics';
+import { setAnalyticsUserProperties, trackEvent, trackOnboardingStep } from '@/src/analytics/analytics';
+import { resolveOnboardingAnalytics } from '@/src/analytics/onboardingPhases';
 import {
     loadOnboardingCheckpoint,
     markOnboardingComplete,
@@ -38,17 +40,17 @@ import Phase0ManualLogin from '../../components/onboarding/Phase0ManualLogin';
 import Phase1HealthConsent from '../../components/onboarding/Phase1HealthConsent';
 import Phase2Goals from '../../components/onboarding/Phase2Goals';
 import Phase3Profile from '../../components/onboarding/Phase3Profile';
-import Phase4PartnerCode from '../../components/onboarding/Phase4PartnerCode';
+import Phase3ProofChart from '../../components/onboarding/Phase3ProofChart';
+import Phase4PartnerCode, { type PartnerLookupInvite } from '../../components/onboarding/Phase4PartnerCode';
 import Phase4Complete from '../../components/onboarding/Phase4Complete';
 import Phase5Dummy from '../../components/onboarding/5_PrimaryGoal';
 import WeightHeightSelection from '../../components/onboarding/6_Weight&Height';
 import TargetWeight from '../../components/onboarding/7_TargetWeight';
+import WeightHabitPlan from '../../components/onboarding/7b_WeightHabitPlan';
 import JourneyTypeSelection from '../../components/onboarding/8_StartingPoint';
 import AvailableDays from '../../components/onboarding/10_AvailableDays';
-import Phase12Promo from '../../components/onboarding/9_PromoCouple';
 import PreferredTime from '../../components/onboarding/11_PreferredTime';
 import MarketplaceHowItWorks from '../../components/onboarding/12_PromoHowto';
-import MarketplaceMotivation from '../../components/onboarding/13_OwnReward';
 import Phase16Dummy from '../../components/onboarding/Phase16Dummy';
 import Phase17Dummy from '../../components/onboarding/Phase17Dummy';
 import Phase18PlanSetup from '../../components/onboarding/Phase18PlanSetup';
@@ -56,6 +58,8 @@ import Phase19PlanTimeline from '../../components/onboarding/Phase19PlanTimeline
 import WeightBranch from '../../components/onboarding/Weight_Branch';
 import RunningBranch from '../../components/onboarding/Running_Branch';
 import Phase20RunningHabits from '../../components/onboarding/Phase20RunningHabits';
+import OnboardingPhaseTransition from '../../components/onboarding/OnboardingPhaseTransition';
+import { useOnboardingCrossDissolve } from '../../components/onboarding/useOnboardingCrossDissolve';
 
 const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
 const isTablet = Platform.OS === 'ios' ? Platform.isPad : windowWidth >= 600;
@@ -69,8 +73,46 @@ const COLORS = {
     textSub: '#6B7280',  // Light Grey
     iconBg: '#FFF0F0',   // Light Coral Wash
 };
-const TOTAL_PHASES = 24;
-const DEV_LAST_PHASE = 24;
+const TOTAL_PHASES = 25;
+
+type DevNavStep =
+    | { type: 'phase'; id: number }
+    | { type: 'plan'; view: 'setup' | 'summary' };
+
+const DEV_NAV_STEPS: DevNavStep[] = [
+    { type: 'phase', id: 0 },
+    { type: 'phase', id: 1 },
+    { type: 'phase', id: 22 },
+    { type: 'phase', id: 24 },
+    { type: 'phase', id: 3 },
+    { type: 'phase', id: 4 },
+    { type: 'phase', id: 23 },
+    { type: 'phase', id: 25 },
+    { type: 'phase', id: 5 },
+    { type: 'phase', id: 6 },
+    { type: 'phase', id: 7 },
+    { type: 'phase', id: 8 },
+    { type: 'phase', id: 26 },
+    { type: 'phase', id: 2 },
+    { type: 'phase', id: 19 },
+    { type: 'phase', id: 20 },
+    { type: 'phase', id: 21 },
+    { type: 'phase', id: 9 },
+    { type: 'phase', id: 12 },
+    { type: 'phase', id: 14 },
+    { type: 'phase', id: 15 },
+    { type: 'phase', id: 17 },
+    { type: 'phase', id: 18 },
+    { type: 'plan', view: 'setup' },
+    { type: 'plan', view: 'summary' },
+    { type: 'phase', id: 10 },
+];
+
+const DEV_LAST_PHASE = DEV_NAV_STEPS[DEV_NAV_STEPS.length - 1].type === 'phase'
+    ? DEV_NAV_STEPS[DEV_NAV_STEPS.length - 1].id
+    : 10;
+const HERO_BACKGROUND_PHASES = new Set([3, 4]);
+const HERO_BACKGROUND_COLOR = '#FF3B3B';
 const DEV_PHASE_FILE_NAMES: Record<number, string> = {
     0: 'Phase0Welcome.tsx',
     1: 'Phase0Auth.tsx',
@@ -81,14 +123,13 @@ const DEV_PHASE_FILE_NAMES: Record<number, string> = {
     6: 'Phase4Complete.tsx',
     7: '6_Weight&Height.tsx',
     8: '7_TargetWeight.tsx',
+    26: '7b_WeightHabitPlan.tsx',
     9: '8_StartingPoint.tsx',
     10: 'Phase19PlanTimeline.tsx',
     11: 'Phase18PlanSetup.tsx',
     12: '10_AvailableDays.tsx',
-    13: '9_PromoCouple.tsx',
     14: '11_PreferredTime.tsx',
     15: '12_PromoHowto.tsx',
-    16: '13_OwnReward.tsx',
     17: 'Phase16Dummy.tsx',
     18: 'Phase17Dummy.tsx',
     19: 'Weight_Branch.tsx',
@@ -97,9 +138,30 @@ const DEV_PHASE_FILE_NAMES: Record<number, string> = {
     22: 'Phase0ManualAuth.tsx',
     23: 'Phase4PartnerCode.tsx',
     24: 'Phase0ManualLogin.tsx',
+    25: 'Phase3ProofChart.tsx',
 };
 const TRAINING_TIME_PREFERENCE_KEY = 'plans_training_time_preference_v1';
 const APPLE_DISPLAY_NAME_KEY = 'apple_display_name_v1';
+
+const ONBOARDING_PROGRESS: Partial<Record<number, number>> = {
+    25: 0.04,
+    5: 0.06,
+    6: 0.12,
+    7: 0.18,
+    8: 0.24,
+    26: 0.28,
+    2: 0.30,
+    19: 0.32,
+    20: 0.40,
+    9: 0.48,
+    12: 0.56,
+    14: 0.72,
+    15: 0.78,
+    17: 0.86,
+    18: 0.91,
+    11: 0.97,
+    10: 1,
+};
 
 function getDeviceTimezone() {
     try {
@@ -113,13 +175,51 @@ function normalizeGenderEnum(value: string | null | undefined) {
     return value?.trim().toLowerCase() ?? '';
 }
 
+function getDevStepLabel(step: DevNavStep) {
+    if (step.type === 'plan') {
+        return step.view === 'setup' ? 'Phase18PlanSetup.tsx' : 'Phase19PlanSummary.tsx';
+    }
+    return DEV_PHASE_FILE_NAMES[step.id] ?? `Phase ${step.id}`;
+}
+
+function resolveDevStepIndex(
+    phase: number,
+    planView: 'setup' | 'summary' | null,
+    hasGeneratedPlan: boolean,
+): number {
+    for (let i = 0; i < DEV_NAV_STEPS.length; i++) {
+        const step = DEV_NAV_STEPS[i];
+        if (step.type === 'plan') {
+            if (phase === 11 && planView === step.view) return i;
+            continue;
+        }
+        if (step.id === phase && phase !== 11) return i;
+    }
+
+    if (phase === 11) {
+        const autoView = planView ?? (hasGeneratedPlan ? 'summary' : 'setup');
+        const planIndex = DEV_NAV_STEPS.findIndex(
+            (step) => step.type === 'plan' && step.view === autoView,
+        );
+        if (planIndex >= 0) return planIndex;
+    }
+
+    for (let i = DEV_NAV_STEPS.length - 1; i >= 0; i--) {
+        const step = DEV_NAV_STEPS[i];
+        const stepPhase = step.type === 'phase' ? step.id : 11;
+        if (phase >= stepPhase) return i;
+    }
+
+    return 0;
+}
+
 export default function OnboardingGreeting() {
     const navigation = useNavigation();
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { setTabBarVisible } = useTabBar();
     const { socialLogin, login, register, authFetch, user, isAuthenticated } = useAuth();
-    const { hasAccess } = useEntitlement();
-    const [currentPhase, setCurrentPhase] = useState(0);
+    const { hasAccess, refreshAccess } = useEntitlement();
     const [userName, setUserName] = useState('');
     const [userGender, setUserGender] = useState('');
     const [availableDays, setAvailableDays] = useState<number[]>([0, 2, 4]);
@@ -141,16 +241,73 @@ export default function OnboardingGreeting() {
     const [generatedWeeklyPlan, setGeneratedWeeklyPlan] = useState<any[]>([]);
     const [savingOnboardingCheckpoint, setSavingOnboardingCheckpoint] = useState(false);
     const [joinedWithCode, setJoinedWithCode] = useState(false);
+    const [partnerEngaged, setPartnerEngaged] = useState(false);
     const [checkpointHydrated, setCheckpointHydrated] = useState(false);
     const deviceTimezone = useRef(getDeviceTimezone()).current;
-    const wasAuthenticatedWhenMountedRef = useRef(isAuthenticated);
     const shouldPersistCheckpointRef = useRef(false);
+    const pendingServerFlushRef = useRef(false);
     const onboardingCompletedRef = useRef(false);
+    const postAuthDestinationRef = useRef<number | null>(null);
+    const preAuthPhaseRef = useRef(0);
+    const proofChartBackPhaseRef = useRef(3);
+    const partnerCodeBackPhaseRef = useRef(0);
+    const pendingPartnerAcceptInviteIdRef = useRef<string | null>(null);
+    const [authIntent, setAuthIntent] = useState<'default' | 'partner' | 'partner_accept'>('default');
+    const [planDevView, setPlanDevView] = useState<'setup' | 'summary' | null>(null);
+    const [devStepIndex, setDevStepIndex] = useState(0);
 
     // Splash Animation Values
     const splashFade = useRef(new Animated.Value(1)).current;
     const textFade = useRef(new Animated.Value(0)).current;
     const textMove = useRef(new Animated.Value(20)).current;
+    const progressAnim = useRef(new Animated.Value(0)).current;
+    const {
+        currentPhase,
+        transitionToPhase,
+        setPhaseInstant,
+    } = useOnboardingCrossDissolve(0);
+
+    const buildCheckpointPayload = useCallback((
+        overrides?: Partial<{
+            currentPhase: number;
+            planData: Record<string, any>;
+        }>,
+    ) => ({
+        currentPhase: overrides?.currentPhase ?? currentPhase,
+        userName,
+        userGender,
+        availableDays,
+        userGoal,
+        userAge,
+        userWeight,
+        userWeightUnit,
+        userHeight,
+        userHeightUnit,
+        userTargetWeight,
+        planData: {
+            ...planData,
+            ...(overrides?.planData ?? {}),
+            partnerEngaged: partnerEngaged || planData.partnerEngaged,
+        },
+        generatedWeeklyPlan,
+        joinedWithCode,
+    }), [
+        availableDays,
+        currentPhase,
+        generatedWeeklyPlan,
+        joinedWithCode,
+        partnerEngaged,
+        planData,
+        userAge,
+        userGender,
+        userGoal,
+        userHeight,
+        userHeightUnit,
+        userName,
+        userTargetWeight,
+        userWeight,
+        userWeightUnit,
+    ]);
 
     useFocusEffect(
         useCallback(() => {
@@ -176,10 +333,39 @@ export default function OnboardingGreeting() {
     }, []);
 
     useEffect(() => {
+        if (!checkpointHydrated) return;
+
+        const { screenName, stepKey, stepOrder } = resolveOnboardingAnalytics(
+            currentPhase,
+            planDevView,
+        );
+        trackOnboardingStep(stepKey, screenName, stepOrder).catch(() => {});
+
         if (currentPhase === 0) {
             trackEvent('onboarding_started').catch(() => {});
         }
-    }, [currentPhase]);
+    }, [checkpointHydrated, currentPhase, planDevView]);
+
+    useEffect(() => {
+        const progress = ONBOARDING_PROGRESS[currentPhase];
+        if (progress === undefined) return;
+
+        Animated.timing(progressAnim, {
+            toValue: progress,
+            duration: 420,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: false,
+        }).start();
+    }, [currentPhase, progressAnim]);
+
+    useEffect(() => {
+        if (!__DEV__) return;
+        setDevStepIndex(resolveDevStepIndex(
+            currentPhase,
+            planDevView,
+            generatedWeeklyPlan.length > 0,
+        ));
+    }, [currentPhase, generatedWeeklyPlan.length, planDevView]);
 
     useEffect(() => {
         let cancelled = false;
@@ -202,16 +388,29 @@ export default function OnboardingGreeting() {
                 setUserHeight(checkpoint.userHeight ?? '');
                 setUserHeightUnit(checkpoint.userHeightUnit ?? 'cm');
                 setUserTargetWeight(checkpoint.userTargetWeight ?? '');
-                setPlanData(checkpoint.planData && typeof checkpoint.planData === 'object'
+                const restoredPlanData = checkpoint.planData && typeof checkpoint.planData === 'object'
                     ? checkpoint.planData
-                    : { intensityLevel: 'ACTIVE', activityPreference: 'WALKING_RUNNING' });
+                    : { intensityLevel: 'ACTIVE', activityPreference: 'WALKING_RUNNING' };
+                setPlanData(restoredPlanData);
+                pendingPartnerAcceptInviteIdRef.current =
+                    typeof restoredPlanData.pendingPartnerAcceptInviteId === 'string'
+                        ? restoredPlanData.pendingPartnerAcceptInviteId
+                        : null;
                 setGeneratedWeeklyPlan(Array.isArray(checkpoint.generatedWeeklyPlan)
                     ? checkpoint.generatedWeeklyPlan
                     : []);
                 setJoinedWithCode(!!checkpoint.joinedWithCode);
-                setCurrentPhase(wasAuthenticatedWhenMountedRef.current && checkpoint.currentPhase > 1
-                    ? Math.min(checkpoint.currentPhase, DEV_LAST_PHASE)
-                    : Math.min(checkpoint.currentPhase, 1));
+                setPartnerEngaged(
+                    !!checkpoint.joinedWithCode || !!restoredPlanData.partnerEngaged,
+                );
+                const restoredPhaseRaw = Math.min(checkpoint.currentPhase, DEV_LAST_PHASE);
+                const restoredPhase = restoredPhaseRaw === 16 ? 17 : restoredPhaseRaw;
+                const restoredHasPlan = Array.isArray(checkpoint.generatedWeeklyPlan)
+                    && checkpoint.generatedWeeklyPlan.length > 0;
+                setPhaseInstant(restoredPhase);
+                if (__DEV__) {
+                    setDevStepIndex(resolveDevStepIndex(restoredPhase, null, restoredHasPlan));
+                }
             })
             .finally(() => {
                 if (!cancelled) setCheckpointHydrated(true);
@@ -225,47 +424,14 @@ export default function OnboardingGreeting() {
     useEffect(() => {
         if (
             !checkpointHydrated ||
-            !isAuthenticated ||
             !shouldPersistCheckpointRef.current ||
             onboardingCompletedRef.current
         ) {
             return;
         }
 
-        saveOnboardingProgress({
-            currentPhase,
-            userName,
-            userGender,
-            availableDays,
-            userGoal,
-            userAge,
-            userWeight,
-            userWeightUnit,
-            userHeight,
-            userHeightUnit,
-            userTargetWeight,
-            planData,
-            generatedWeeklyPlan,
-            joinedWithCode,
-        }).catch(() => {});
-    }, [
-        availableDays,
-        checkpointHydrated,
-        currentPhase,
-        generatedWeeklyPlan,
-        isAuthenticated,
-        joinedWithCode,
-        planData,
-        userAge,
-        userGender,
-        userGoal,
-        userHeight,
-        userHeightUnit,
-        userName,
-        userTargetWeight,
-        userWeight,
-        userWeightUnit,
-    ]);
+        saveOnboardingProgress(buildCheckpointPayload()).catch(() => {});
+    }, [buildCheckpointPayload, checkpointHydrated]);
 
     const hasExistingPlan = useCallback(async () => {
         try {
@@ -298,30 +464,6 @@ export default function OnboardingGreeting() {
             return false;
         }
     }, [authFetch]);
-
-    const continueAfterAuth = useCallback(async (_prefilledName?: string) => {
-        const checkpoint = await loadOnboardingCheckpoint();
-        if (checkpoint && !checkpoint.completed) {
-            shouldPersistCheckpointRef.current = true;
-            setCurrentPhase(checkpoint.currentPhase > 1
-                ? Math.min(checkpoint.currentPhase, DEV_LAST_PHASE)
-                : 2);
-            return;
-        }
-
-        const shouldSkipOnboarding = await hasExistingPlan();
-
-        if (shouldSkipOnboarding) {
-            onboardingCompletedRef.current = true;
-            await markOnboardingComplete();
-            await trackEvent('onboarding_skipped_existing_plan');
-            router.replace('/welcome');
-            return;
-        }
-
-        shouldPersistCheckpointRef.current = true;
-        setCurrentPhase(2);
-    }, [hasExistingPlan, router]);
 
     const handleAppleAuth = async () => {
         if (socialLoading) return;
@@ -383,14 +525,39 @@ export default function OnboardingGreeting() {
         }
     };
 
-    const goToNextPhase = () => {
-        if (isAuthenticated) shouldPersistCheckpointRef.current = true;
+    const applyDevStep = useCallback((step: DevNavStep) => {
+        if (step.type === 'plan') {
+            setPlanDevView(step.view);
+            setPhaseInstant(11);
+            return;
+        }
+        setPlanDevView(null);
+        setPhaseInstant(step.id);
+    }, [setPhaseInstant]);
+
+    const goToDevStepIndex = useCallback((index: number) => {
+        if (index < 0 || index >= DEV_NAV_STEPS.length) return;
+        setDevStepIndex(index);
+        applyDevStep(DEV_NAV_STEPS[index]);
+    }, [applyDevStep]);
+
+    const goToDevPhase = useCallback((direction: -1 | 1) => {
+        const nextIndex = devStepIndex + direction;
+        goToDevStepIndex(nextIndex);
+    }, [devStepIndex, goToDevStepIndex]);
+
+    const goToNextPhase = useCallback(() => {
+        shouldPersistCheckpointRef.current = true;
         if (currentPhase < TOTAL_PHASES - 1) {
-            setCurrentPhase(prev => prev + 1);
+            transitionToPhase(currentPhase + 1);
         } else {
             handleFinalSubmit();
         }
-    };
+    }, [currentPhase, transitionToPhase]);
+
+    const goToPrevPhase = useCallback(() => {
+        if (currentPhase > 0) transitionToPhase(currentPhase - 1, 'back');
+    }, [currentPhase, transitionToPhase]);
 
     const handleFinalSubmit = async () => {
         try {
@@ -534,37 +701,240 @@ export default function OnboardingGreeting() {
         }
     };
 
-    const goToPrevPhase = () => {
-        if (currentPhase > 0) setCurrentPhase(prev => prev - 1);
-    };
-
-    const goToDevPhase = (direction: -1 | 1) => {
-        setCurrentPhase(prev => Math.max(0, Math.min(DEV_LAST_PHASE, prev + direction)));
-    };
-
-    const generateOnboardingWeeklyPlan = useCallback(async () => {
-        if (!isAuthenticated) {
-            throw new Error('Please sign in to generate your plan');
+    const redirectToAuth = useCallback((
+        destinationPhase: number,
+        options?: { intent?: 'default' | 'partner' | 'partner_accept'; returnPhase?: number },
+    ) => {
+        if (isAuthenticated) {
+            transitionToPhase(destinationPhase);
+            return;
         }
 
-        const response = await authFetch(`${API_BASE_URL}/plan/generate-weekly?force=true`, {
+        preAuthPhaseRef.current = options?.returnPhase ?? currentPhase;
+        postAuthDestinationRef.current = destinationPhase;
+        setAuthIntent(
+            options?.intent ?? (destinationPhase === 9 ? 'partner' : 'default'),
+        );
+        transitionToPhase(1);
+    }, [currentPhase, isAuthenticated, transitionToPhase]);
+
+    const requireAuthThen = useCallback((destinationPhase: number) => {
+        redirectToAuth(destinationPhase);
+    }, [redirectToAuth]);
+
+    const handleRequireAuthForPartnerInvite = useCallback((email: string) => {
+        shouldPersistCheckpointRef.current = true;
+        setPlanData((prev: any) => ({
+            ...prev,
+            pendingPartnerInviteEmail: email,
+            pendingPartnerInviteSend: true,
+        }));
+        redirectToAuth(9, { intent: 'partner' });
+    }, [redirectToAuth]);
+
+    const clearPendingPartnerInvite = useCallback(() => {
+        setPlanData((prev: any) => {
+            const next = { ...prev };
+            delete next.pendingPartnerInviteEmail;
+            delete next.pendingPartnerInviteSend;
+            return next;
+        });
+    }, []);
+
+    const clearPendingPartnerAccept = useCallback(() => {
+        pendingPartnerAcceptInviteIdRef.current = null;
+        setPlanData((prev: any) => {
+            const next = { ...prev };
+            delete next.pendingPartnerAcceptInviteId;
+            delete next.pendingPartnerAcceptEmail;
+            delete next.pendingPartnerAcceptInviterName;
+            return next;
+        });
+    }, []);
+
+    const storePartnerAcceptFromInvite = useCallback((invite: PartnerLookupInvite) => {
+        shouldPersistCheckpointRef.current = true;
+        setJoinedWithCode(true);
+        setPartnerEngaged(true);
+        pendingPartnerAcceptInviteIdRef.current = invite.id;
+        setPlanData((prev: any) => ({
+            ...prev,
+            pendingPartnerAcceptInviteId: invite.id,
+            pendingPartnerAcceptEmail: invite.toEmail,
+            pendingPartnerAcceptInviterName: invite.fromUser?.displayName ?? 'Your partner',
+        }));
+    }, []);
+
+    const acceptPendingPartnerInvite = useCallback(async (inviteId: string) => {
+        const res = await authFetch(`${API_BASE_URL}/partner/invites/${inviteId}/accept`, {
             method: 'POST',
         });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data?.error || 'Unable to connect with your partner.');
+        }
+        await refreshAccess().catch(() => {});
+    }, [authFetch, refreshAccess]);
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(errorText || 'Failed to generate weekly plan');
+    const finishPartnerAcceptOnboarding = useCallback(async (resolvedName?: string) => {
+        const nextName = resolvedName?.trim() || user?.displayName?.trim();
+        if (nextName) {
+            setUserName(nextName);
         }
 
-        const data = await response.json();
-        return Array.isArray(data?.['Weekly Plan Table']) ? data['Weekly Plan Table'] : [];
-    }, [authFetch, isAuthenticated]);
+        clearPendingPartnerAccept();
+        setAuthIntent('default');
+        postAuthDestinationRef.current = null;
 
-    const saveOnboardingCheckpoint = useCallback(async () => {
+        const shouldSkipOnboarding = await hasExistingPlan();
+        if (shouldSkipOnboarding) {
+            onboardingCompletedRef.current = true;
+            await markOnboardingComplete();
+            router.replace('/welcome');
+            return;
+        }
+
+        shouldPersistCheckpointRef.current = true;
+        transitionToPhase(3);
+    }, [clearPendingPartnerAccept, hasExistingPlan, router, transitionToPhase, user?.displayName]);
+
+    const completePartnerAcceptFlow = useCallback(async (resolvedName?: string) => {
+        const inviteId =
+            pendingPartnerAcceptInviteIdRef.current
+            || (planData.pendingPartnerAcceptInviteId as string | undefined);
+        if (!inviteId) {
+            throw new Error('Partner invite not found. Please enter your code again.');
+        }
+        await acceptPendingPartnerInvite(inviteId);
+        await finishPartnerAcceptOnboarding(resolvedName);
+    }, [acceptPendingPartnerInvite, finishPartnerAcceptOnboarding, planData.pendingPartnerAcceptInviteId]);
+
+    const beginPartnerAcceptRegistration = useCallback(() => {
+        setAuthIntent('partner_accept');
+        preAuthPhaseRef.current = currentPhase;
+        postAuthDestinationRef.current = null;
+        transitionToPhase(22);
+    }, [currentPhase, transitionToPhase]);
+
+    const beginPartnerAcceptLogin = useCallback(() => {
+        setAuthIntent('partner_accept');
+        preAuthPhaseRef.current = currentPhase;
+        postAuthDestinationRef.current = null;
+        transitionToPhase(24);
+    }, [currentPhase, transitionToPhase]);
+
+    const handlePartnerConnectFromCode = useCallback((invite: PartnerLookupInvite) => {
+        partnerCodeBackPhaseRef.current = currentPhase;
+        storePartnerAcceptFromInvite(invite);
+
+        if (isAuthenticated) {
+            void completePartnerAcceptFlow(user?.displayName ?? undefined).catch((err: any) => {
+                Alert.alert('Unable to Connect', err?.message || 'Please try again.');
+            });
+            return;
+        }
+
+        beginPartnerAcceptRegistration();
+    }, [
+        beginPartnerAcceptRegistration,
+        completePartnerAcceptFlow,
+        currentPhase,
+        isAuthenticated,
+        storePartnerAcceptFromInvite,
+        user?.displayName,
+    ]);
+
+    const handlePartnerLoginFromCode = useCallback((invite: PartnerLookupInvite) => {
+        partnerCodeBackPhaseRef.current = currentPhase;
+        storePartnerAcceptFromInvite(invite);
+        beginPartnerAcceptLogin();
+    }, [beginPartnerAcceptLogin, currentPhase, storePartnerAcceptFromInvite]);
+
+    const continueAfterAuth = useCallback(async (prefilledName?: string) => {
+        if (planData.pendingPartnerAcceptInviteId || pendingPartnerAcceptInviteIdRef.current) {
+            try {
+                await completePartnerAcceptFlow(prefilledName || user?.displayName || undefined);
+                return;
+            } catch (err: any) {
+                Alert.alert('Unable to Connect', err?.message || 'Please try again.');
+                transitionToPhase(23);
+                return;
+            }
+        }
+
+        if (postAuthDestinationRef.current !== null) {
+            const destination = postAuthDestinationRef.current;
+            postAuthDestinationRef.current = null;
+            setAuthIntent('default');
+            shouldPersistCheckpointRef.current = true;
+            pendingServerFlushRef.current = true;
+            transitionToPhase(destination);
+            return;
+        }
+
+        const checkpoint = await loadOnboardingCheckpoint();
+        if (checkpoint && !checkpoint.completed) {
+            shouldPersistCheckpointRef.current = true;
+            transitionToPhase(
+                checkpoint.currentPhase > 1
+                    ? Math.min(checkpoint.currentPhase, DEV_LAST_PHASE)
+                    : 3
+            );
+            return;
+        }
+
+        const shouldSkipOnboarding = await hasExistingPlan();
+
+        if (shouldSkipOnboarding) {
+            onboardingCompletedRef.current = true;
+            await markOnboardingComplete();
+            await trackEvent('onboarding_skipped_existing_plan');
+            router.replace('/welcome');
+            return;
+        }
+
+        shouldPersistCheckpointRef.current = true;
+        transitionToPhase(3);
+    }, [
+        completePartnerAcceptFlow,
+        hasExistingPlan,
+        planData.pendingPartnerAcceptInviteId,
+        router,
+        transitionToPhase,
+        user?.displayName,
+    ]);
+
+    const handleAuthBack = useCallback(() => {
+        if (authIntent === 'partner_accept') {
+            setAuthIntent('default');
+            transitionToPhase(preAuthPhaseRef.current || partnerCodeBackPhaseRef.current || 23, 'back');
+            return;
+        }
+
+        if (postAuthDestinationRef.current !== null) {
+            const returnPhase = preAuthPhaseRef.current;
+            postAuthDestinationRef.current = null;
+            setAuthIntent('default');
+            transitionToPhase(returnPhase, 'back');
+            return;
+        }
+
+        goToPrevPhase();
+    }, [authIntent, currentPhase, transitionToPhase, goToPrevPhase]);
+
+    useEffect(() => {
+        if (!checkpointHydrated || isAuthenticated || currentPhase !== 11) return;
+
+        pendingServerFlushRef.current = true;
+        redirectToAuth(11, { returnPhase: 17 });
+    }, [checkpointHydrated, currentPhase, isAuthenticated, redirectToAuth]);
+
+    const saveOnboardingCheckpoint = useCallback(async (overrides?: { planData?: Record<string, any> }) => {
         if (!isAuthenticated) {
             throw new Error('Please sign in to continue');
         }
 
+        const effectivePlanData = overrides?.planData ?? planData;
         const normalizedGender = normalizeGenderEnum(userGender);
         const profilePayload: any = {
             displayName: userName,
@@ -618,7 +988,7 @@ export default function OnboardingGreeting() {
             goalType: userGoal || 'both',
             targetWeightKg: userTargetWeight ? (userWeightUnit === 'kg' ? Number(userTargetWeight) : Number(userTargetWeight) * 0.453592) : null,
             availableDays,
-            ...planData,
+            ...effectivePlanData,
         };
 
         const planRes = await authFetch(`${API_BASE_URL}/plan`, {
@@ -637,7 +1007,7 @@ export default function OnboardingGreeting() {
             baselinePaceSecPerKm: planPayload.baselinePaceSecPerKm ?? null,
         });
 
-        const phase16Rewards = planData?.phase16Rewards as
+        const phase16Rewards = effectivePlanData?.phase16Rewards as
             | { week1?: string | null; week2?: string | null; week3?: string | null }
             | undefined;
 
@@ -672,6 +1042,7 @@ export default function OnboardingGreeting() {
         }
     }, [
         authFetch,
+        user,
         userName,
         userGender,
         userGoal,
@@ -687,30 +1058,163 @@ export default function OnboardingGreeting() {
         deviceTimezone,
     ]);
 
+    const generateOnboardingWeeklyPlan = useCallback(async () => {
+        if (!isAuthenticated) {
+            throw new Error('Please sign in to generate your plan');
+        }
+
+        await saveOnboardingCheckpoint();
+
+        const requestWeeklyPlan = () =>
+            authFetch(`${API_BASE_URL}/plan/generate-weekly?force=true`, {
+                method: 'POST',
+            });
+
+        let response = await requestWeeklyPlan();
+        if (response.status === 404) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 400));
+            response = await requestWeeklyPlan();
+        }
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            let message = errorText || 'Failed to generate weekly plan';
+            try {
+                const parsed = JSON.parse(errorText);
+                if (typeof parsed?.message === 'string') {
+                    message = parsed.message;
+                }
+            } catch {
+                // Keep raw response text.
+            }
+            throw new Error(message);
+        }
+
+        const data = await response.json();
+        const weeklyPlan = data?.['Weekly Plan Table'];
+        if (!Array.isArray(weeklyPlan) || weeklyPlan.length === 0) {
+            throw new Error('Your plan came back empty. Please try again.');
+        }
+
+        return weeklyPlan;
+    }, [authFetch, isAuthenticated, saveOnboardingCheckpoint]);
+
+    useEffect(() => {
+        if (!isAuthenticated || !pendingServerFlushRef.current) return;
+
+        pendingServerFlushRef.current = false;
+        void saveOnboardingCheckpoint().catch((err) => {
+            console.warn('Failed to flush onboarding to server:', err);
+        });
+    }, [isAuthenticated, saveOnboardingCheckpoint]);
+
+    const finishPenaltyStep = useCallback(async (penalty: string | null) => {
+        if (savingOnboardingCheckpoint) return;
+
+        const nextPlanData = {
+            ...planData,
+            phase17Penalty: penalty,
+        };
+
+        setPlanData(nextPlanData);
+
+        try {
+            setSavingOnboardingCheckpoint(true);
+            shouldPersistCheckpointRef.current = true;
+            await saveOnboardingProgress(buildCheckpointPayload({
+                currentPhase: 11,
+                planData: nextPlanData,
+            }));
+
+            if (!isAuthenticated) {
+                pendingServerFlushRef.current = true;
+                requireAuthThen(11);
+                return;
+            }
+
+            await saveOnboardingCheckpoint({ planData: nextPlanData });
+            transitionToPhase(11);
+        } catch (err: any) {
+            Alert.alert(
+                'Unable to prepare your plan',
+                err?.message || 'Please try again.'
+            );
+        } finally {
+            setSavingOnboardingCheckpoint(false);
+        }
+    }, [
+        buildCheckpointPayload,
+        isAuthenticated,
+        planData,
+        requireAuthThen,
+        saveOnboardingCheckpoint,
+        savingOnboardingCheckpoint,
+        transitionToPhase,
+    ]);
+
+    const advanceAfterRewards = useCallback(async () => {
+        const shouldShowPenaltyStep = joinedWithCode || partnerEngaged;
+        if (!shouldShowPenaltyStep) {
+            await finishPenaltyStep(null);
+            return;
+        }
+
+        if (joinedWithCode && isAuthenticated) {
+            try {
+                const res = await authFetch(`${API_BASE_URL}/wager/overview`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data?.currentWager) {
+                        await finishPenaltyStep(null);
+                        return;
+                    }
+                }
+            } catch (error) {
+                console.warn('Failed to check partner wager during onboarding:', error);
+            }
+        }
+
+        transitionToPhase(18);
+    }, [
+        authFetch,
+        finishPenaltyStep,
+        isAuthenticated,
+        joinedWithCode,
+        partnerEngaged,
+        transitionToPhase,
+    ]);
+
     const handlePhase2Identity = async (name: string, gender: string) => {
         const normalizedGender = normalizeGenderEnum(gender);
         setUserName(name);
         setUserGender(normalizedGender);
+        shouldPersistCheckpointRef.current = true;
 
-        try {
-            const res = await authFetch(`${API_BASE_URL}/profile`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    displayName: name.trim(),
-                    gender: normalizedGender,
-                }),
-            });
+        if (isAuthenticated) {
+            try {
+                const res = await authFetch(`${API_BASE_URL}/profile`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        displayName: name.trim(),
+                        gender: normalizedGender,
+                    }),
+                });
 
-            if (!res.ok) {
-                const errText = await res.text();
-                console.error('Failed saving onboarding identity step:', errText);
+                if (!res.ok) {
+                    const errText = await res.text();
+                    console.error('Failed saving onboarding identity step:', errText);
+                }
+            } catch (error) {
+                console.error('Error saving onboarding identity step:', error);
             }
-        } catch (error) {
-            console.error('Error saving onboarding identity step:', error);
-        } finally {
-            goToNextPhase();
         }
+
+        if (joinedWithCode) {
+            proofChartBackPhaseRef.current = 3;
+        }
+
+        transitionToPhase(joinedWithCode ? 25 : 4);
     };
 
     const renderSplash = () => (
@@ -732,57 +1236,129 @@ export default function OnboardingGreeting() {
         </Animated.View>
     );
 
-    const renderPhaseContent = () => {
-        switch (currentPhase) {
-            case 0: return <Phase0Welcome onNext={goToNextPhase} />;
+    const renderPhaseContent = (phase: number) => {
+        switch (phase) {
+            case 0: return <Phase0Welcome
+                onNext={() => {
+                    shouldPersistCheckpointRef.current = true;
+                    transitionToPhase(3);
+                }}
+                onLogin={() => transitionToPhase(24)}
+                onInviteCode={() => {
+                    setJoinedWithCode(true);
+                    setPartnerEngaged(true);
+                    partnerCodeBackPhaseRef.current = 0;
+                    transitionToPhase(23);
+                }}
+            />;
             case 1: return <Phase0Auth
                 onNext={continueAfterAuth}
-                onBack={goToPrevPhase}
+                onBack={handleAuthBack}
                 onApplePress={handleAppleAuth}
-                onManualPress={() => setCurrentPhase(22)}
-                onLoginPress={() => setCurrentPhase(24)}
+                onManualPress={() => transitionToPhase(22)}
+                onLoginPress={() => transitionToPhase(24)}
                 socialLoading={socialLoading}
                 disabled={!!socialLoading}
                 userName={userName}
+                subtitle={
+                    authIntent === 'partner_accept'
+                        ? `Create your account to connect with ${planData.pendingPartnerAcceptInviterName ?? 'your partner'}.`
+                        : authIntent === 'partner'
+                            ? 'Sign up to invite your partner.'
+                            : undefined
+                }
             />;
             case 22: return <Phase0ManualAuth
-                onBack={() => setCurrentPhase(1)}
-                onRegister={register}
-                onSuccess={() => {
-                    shouldPersistCheckpointRef.current = true;
-                    setCurrentPhase(2);
+                onBack={() => {
+                    if (authIntent === 'partner_accept') {
+                        transitionToPhase(preAuthPhaseRef.current || partnerCodeBackPhaseRef.current || 23, 'back');
+                        return;
+                    }
+                    transitionToPhase(1, 'back');
                 }}
-            />;
-            case 24: return <Phase0ManualLogin
-                onBack={() => setCurrentPhase(1)}
-                onLogin={login}
+                initialEmail={planData.pendingPartnerAcceptEmail ?? ''}
+                subtitle={
+                    authIntent === 'partner_accept'
+                        ? `Create your account to connect with ${planData.pendingPartnerAcceptInviterName ?? 'your partner'}.`
+                        : undefined
+                }
+                onLoginPress={() => beginPartnerAcceptLogin()}
+                onApplePress={handleAppleAuth}
+                socialLoading={socialLoading}
+                userName={userName}
+                onRegister={async (name, email, password) => {
+                    await register(name, email, password);
+                    setUserName(name.trim());
+                }}
                 onSuccess={continueAfterAuth}
             />;
-            case 2: return <Phase1HealthConsent onNext={goToNextPhase} onBack={goToPrevPhase} />;
+            case 24: return <Phase0ManualLogin
+                onBack={() => {
+                    if (authIntent === 'partner_accept') {
+                        transitionToPhase(preAuthPhaseRef.current || partnerCodeBackPhaseRef.current || 23, 'back');
+                        return;
+                    }
+                    transitionToPhase(1, 'back');
+                }}
+                initialEmail={planData.pendingPartnerAcceptEmail ?? ''}
+                subtitle={
+                    authIntent === 'partner_accept'
+                        ? `Log in to connect with ${planData.pendingPartnerAcceptInviterName ?? 'your partner'}.`
+                        : undefined
+                }
+                onRegisterPress={() => beginPartnerAcceptRegistration()}
+                onLogin={login}
+                onSuccess={continueAfterAuth}
+                onApplePress={handleAppleAuth}
+                socialLoading={socialLoading}
+                userName={userName}
+            />;
+            case 2: return <Phase1HealthConsent
+                onNext={() => {
+                    if (userGoal === 'running' || userGoal === 'both') {
+                        transitionToPhase(20);
+                    } else if (userGoal === 'weightloss') {
+                        transitionToPhase(19);
+                    } else {
+                        transitionToPhase(joinedWithCode ? 12 : 9);
+                    }
+                }}
+                onBack={() => transitionToPhase(26, 'back')}
+            />;
             case 3: return <Phase2Goals
                 onNext={handlePhase2Identity}
-                onBack={goToPrevPhase}
+                onBack={() => transitionToPhase(0, 'back')}
                 prefilledName={userName}
             />;
             case 4: return <Phase3Profile
                 userName={userName}
-                onBack={goToPrevPhase}
+                onBack={() => transitionToPhase(3, 'back')}
                 onHaveCode={() => {
                     setJoinedWithCode(true);
-                    setCurrentPhase(23);
+                    setPartnerEngaged(true);
+                    partnerCodeBackPhaseRef.current = 4;
+                    transitionToPhase(23);
                 }}
                 onFirstTime={() => {
                     setJoinedWithCode(false);
-                    goToNextPhase();
+                    proofChartBackPhaseRef.current = 4;
+                    transitionToPhase(25);
+                }}
+                onJoinedPartner={() => {
+                    setJoinedWithCode(true);
+                    setPartnerEngaged(true);
+                    proofChartBackPhaseRef.current = 4;
+                    transitionToPhase(25);
                 }}
             />;
             case 5: return <Phase5Dummy
                 gender={userGender}
+                joinedWithPartner={joinedWithCode}
                 onContinue={(goal: string | null) => {
                     setUserGoal(goal);
-                    goToNextPhase();
+                    transitionToPhase(6);
                 }}
-                onBack={goToPrevPhase}
+                onBack={() => transitionToPhase(25, 'back')}
             />;
             case 6: return <Phase4Complete
                 onComplete={(age: number) => {
@@ -797,14 +1373,12 @@ export default function OnboardingGreeting() {
                     setUserWeightUnit(data.weightUnit);
                     setUserHeight(data.height);
                     setUserHeightUnit(data.heightUnit);
-                    if (userGoal === 'weightloss') {
-                        setCurrentPhase(8);
-                    } else if (userGoal === 'both') {
-                        setCurrentPhase(20);
+                    if (userGoal === 'weightloss' || userGoal === 'both') {
+                        transitionToPhase(8);
                     } else if (userGoal === 'running') {
-                        setCurrentPhase(20);
+                        transitionToPhase(26);
                     } else {
-                        setCurrentPhase(joinedWithCode ? 12 : 9);
+                        transitionToPhase(joinedWithCode ? 12 : 9);
                     }
                 }}
                 onBack={goToPrevPhase}
@@ -814,23 +1388,49 @@ export default function OnboardingGreeting() {
                 unit={userWeightUnit}
                 onContinue={(target: any) => {
                     setUserTargetWeight(target);
-                    // After Target Weight, go to Weight Branch
-                    setCurrentPhase(19);
+                    transitionToPhase(26);
                 }}
-                onBack={() => setCurrentPhase(7)}
+                onBack={() => transitionToPhase(7, 'back')}
+            />;
+            case 26: return <WeightHabitPlan
+                currentWeight={userWeight}
+                targetWeight={userTargetWeight}
+                unit={userWeightUnit}
+                userGoal={userGoal}
+                onContinue={() => {
+                    transitionToPhase(2);
+                }}
+                onBack={() => {
+                    if (userGoal === 'running') {
+                        transitionToPhase(7, 'back');
+                    } else {
+                        transitionToPhase(8, 'back');
+                    }
+                }}
             />;
             case 9: return <JourneyTypeSelection
-                onContinue={() => setCurrentPhase(12)}
+                inviterName={userName}
+                initialPartnerEmail={planData.pendingPartnerInviteEmail ?? ''}
+                shouldSendInviteAfterAuth={!!planData.pendingPartnerInviteSend}
+                onRequireAuthForInvite={handleRequireAuthForPartnerInvite}
+                onInviteSent={clearPendingPartnerInvite}
+                onContinue={(mode) => {
+                    const engaged = mode === 'couple';
+                    setPartnerEngaged(engaged);
+                    setPlanData((prev: any) => ({ ...prev, partnerEngaged: engaged }));
+                    clearPendingPartnerInvite();
+                    transitionToPhase(12);
+                }}
                 onBack={() => {
                     // Back needs to go to the previous branch based on goal
                     if (userGoal === 'both') {
-                        setCurrentPhase(20);
+                        transitionToPhase(20, 'back');
                     } else if (userGoal === 'running') {
-                        setCurrentPhase(20);
+                        transitionToPhase(20, 'back');
                     } else if (userGoal === 'weightloss') {
-                        setCurrentPhase(19);
+                        transitionToPhase(19, 'back');
                     } else {
-                        setCurrentPhase(7);
+                        transitionToPhase(7, 'back');
                     }
                 }}
             />;
@@ -839,24 +1439,23 @@ export default function OnboardingGreeting() {
                 onContinue={(days: number[]) => {
                     setAvailableDays(days);
                     setPlanData((prev: any) => ({ ...prev, availableDays: days }));
-                    goToNextPhase();
+                    transitionToPhase(14);
                 }}
                 onBack={() => {
                     if (!joinedWithCode) {
-                        setCurrentPhase(9);
+                        transitionToPhase(9, 'back');
                         return;
                     }
 
                     if (userGoal === 'weightloss') {
-                        setCurrentPhase(19);
+                        transitionToPhase(19, 'back');
                     } else if (userGoal === 'running' || userGoal === 'both') {
-                        setCurrentPhase(20);
+                        transitionToPhase(20, 'back');
                     } else {
-                        setCurrentPhase(7);
+                        transitionToPhase(7, 'back');
                     }
                 }}
             />;
-            case 13: return <Phase12Promo onContinue={goToNextPhase} />;
             case 14: return <PreferredTime
                 initialValue={(planData.trainingTimePreference as 'morning' | 'afternoon' | 'evening') || 'morning'}
                 onContinue={async (preferredTime: 'morning' | 'afternoon' | 'evening') => {
@@ -871,56 +1470,49 @@ export default function OnboardingGreeting() {
                     }
                     goToNextPhase();
                 }}
-                onBack={() => setCurrentPhase(13)}
+                onBack={() => transitionToPhase(12, 'back')}
             />;
-            case 15: return <MarketplaceHowItWorks onContinue={() => setCurrentPhase(17)} />;
-            case 16: return <MarketplaceMotivation onContinue={goToNextPhase} />;
+            case 15: return <MarketplaceHowItWorks onContinue={() => transitionToPhase(17)} />;
             case 17: return <Phase16Dummy
                 joinedWithCode={joinedWithCode}
+                onBack={() => transitionToPhase(15, 'back')}
                 onContinue={(data: { week1: string | null; week2: string | null; week3: string | null }) => {
                     setPlanData((prev: any) => ({
                         ...prev,
                         phase16Rewards: data,
                     }));
-                    goToNextPhase();
+                    void advanceAfterRewards();
                 }}
             />;
             case 18: return <Phase17Dummy
                 joinedWithCode={joinedWithCode}
-                onContinue={async (penalty: string | null) => {
-                    if (savingOnboardingCheckpoint) return;
-
-                    setPlanData((prev: any) => ({
-                        ...prev,
-                        phase17Penalty: penalty,
-                    }));
-
-                    try {
-                        setSavingOnboardingCheckpoint(true);
-                        await saveOnboardingCheckpoint();
-                        setCurrentPhase(11);
-                    } catch (err: any) {
-                        Alert.alert(
-                            'Unable to prepare your plan',
-                            err?.message || 'Please try again.'
-                        );
-                    } finally {
-                        setSavingOnboardingCheckpoint(false);
-                    }
-                }}
+                onBack={() => transitionToPhase(17, 'back')}
+                onContinue={finishPenaltyStep}
             />;
             case 10: return <Phase19PlanTimeline
                 userName={userName}
                 userGender={userGender}
+                joinedWithCode={joinedWithCode}
                 weeklyPlan={generatedWeeklyPlan}
                 currentWeight={userWeight}
                 weightUnit={userWeightUnit}
                 mainGoal={userGoal}
-                onBack={() => setCurrentPhase(11)}
-                onContinue={async () => {
+                onBack={() => transitionToPhase(11, 'back')}
+                onContinue={async ({ skipPaywall } = {}) => {
                     onboardingCompletedRef.current = true;
                     await markOnboardingComplete();
-                    if (hasAccess) {
+
+                    await refreshAccess();
+                    let billingHasAccess = hasAccess;
+                    try {
+                        const res = await authFetch(`${API_BASE_URL}/billing/access`);
+                        const data = await res.json();
+                        billingHasAccess = !!data?.billing?.hasAccess;
+                    } catch {
+                        // Fall back to the latest entitlement snapshot.
+                    }
+
+                    if (skipPaywall || billingHasAccess) {
                         router.replace('/welcome');
                         return;
                     }
@@ -928,12 +1520,23 @@ export default function OnboardingGreeting() {
                     router.push('/paywall');
                 }}
             />;
-            case 11: return <Phase18PlanSetup
-                onBack={() => setCurrentPhase(17)}
+            case 11: {
+                if (!isAuthenticated) {
+                    return (
+                        <View style={styles.checkpointLoading}>
+                            <ActivityIndicator size="large" color={COLORS.coral} />
+                        </View>
+                    );
+                }
+
+                return <Phase18PlanSetup
+                key={`plan-${planDevView ?? 'auto'}`}
+                onBack={() => transitionToPhase(17, 'back')}
                 onGeneratePlan={generateOnboardingWeeklyPlan}
                 onGenerated={(weeklyPlan) => {
                     setGeneratedWeeklyPlan(weeklyPlan);
-                    setCurrentPhase(10);
+                    setPlanDevView(null);
+                    transitionToPhase(10);
                 }}
                 currentWeight={userWeight}
                 weightUnit={userWeightUnit}
@@ -941,12 +1544,19 @@ export default function OnboardingGreeting() {
                 heightUnit={userHeightUnit}
                 targetWeight={userTargetWeight}
                 gender={userGender}
+                mainGoal={userGoal}
+                planData={planData}
+                availableDays={availableDays}
+                initialWeeklyPlan={generatedWeeklyPlan}
+                devView={planDevView ?? 'auto'}
             />;
+            }
             case 19: return <WeightBranch
                 currentWeight={userWeight}
                 targetWeight={userTargetWeight}
                 unit={userWeightUnit}
                 gender={userGender}
+                onBack={() => transitionToPhase(2, 'back')}
                 onComplete={(data: any) => {
                     // Map WeightBranch data to planData
                     const finalTimeHorizon = data.timeline === 'custom' ? 'SPECIFIC_DATE' : (data.timeline === 'aggressive' ? 'AGGRESSIVE' : 'STANDARD');
@@ -954,16 +1564,23 @@ export default function OnboardingGreeting() {
                     setPlanData((prev: any) => ({
                         ...prev,
                         timeHorizon: finalTimeHorizon,
-                        targetDate: data.targetDate?.toISOString() || null,
+                        targetDate: data.timeline === 'custom' && data.targetDate
+                            ? data.targetDate.toISOString()
+                            : null,
                         trainingStyle: data.trainingStyle,
                         hasRaceGoal: data.raceTraining === 'yes',
                     }));
 
-                    if (userGoal === 'both') setCurrentPhase(20);
-                    else setCurrentPhase(joinedWithCode ? 12 : 9);
+                    if (userGoal === 'both') transitionToPhase(20);
+                    else transitionToPhase(joinedWithCode ? 12 : 9);
                 }}
             />;
-            case 20: return <RunningBranch skipDietStrategy={userGoal === 'both'} gender={userGender} onComplete={(data: any) => {
+            case 20: return <RunningBranch
+                skipDietStrategy={userGoal === 'both'}
+                gender={userGender}
+                initialData={planData.runningBranchDraft}
+                onBack={() => transitionToPhase(2, 'back')}
+                onComplete={(data: any) => {
                 // Map RunningBranch data to planData
                 setPlanData((prev: any) => ({
                     ...prev,
@@ -971,28 +1588,36 @@ export default function OnboardingGreeting() {
                     runExperience: data.isAbsoluteNewToRunning ? 'beginner' : data.experience,
                     runDietFocus: data.dietStrategy,
                     runPriority: data.priority,
-                    hasRaceGoal: prev.hasRaceGoal || data.raceDate === 'yes',
+                    hasRaceGoal: prev.hasRaceGoal || data.raceDateSelection === 'yes',
                     runRaceDate: data.raceDate || null,
                     baselinePaceSecPerKm: data.baselinePaceSecPerKm ?? null,
+                    runningBranchDraft: data,
                 }));
-                setCurrentPhase(joinedWithCode ? 12 : 9);
+                transitionToPhase(joinedWithCode ? 12 : 9);
             }} />;
             case 21: return <Phase20RunningHabits onComplete={goToNextPhase} />;
             case 23: return <Phase4PartnerCode
-                userName={userName}
-                onBack={() => setCurrentPhase(4)}
-                onContinue={() => setCurrentPhase(5)}
+                onBack={() => transitionToPhase(partnerCodeBackPhaseRef.current, 'back')}
+                onConnect={handlePartnerConnectFromCode}
+                onLoginWithInvite={handlePartnerLoginFromCode}
             />;
-            default: return <Phase0Welcome onNext={goToNextPhase} />;
+            case 25: return <Phase3ProofChart
+                userName={userName}
+                onBack={() => transitionToPhase(proofChartBackPhaseRef.current, 'back')}
+                onContinue={() => transitionToPhase(5)}
+            />;
+            default: return null;
         }
     };
 
     const renderDevPhaseControls = () => {
         if (!__DEV__) return null;
 
-        const isFirstPhase = currentPhase <= 0;
-        const isLastPhase = currentPhase >= DEV_LAST_PHASE;
-        const phaseFileName = DEV_PHASE_FILE_NAMES[currentPhase] ?? `Phase ${currentPhase}`;
+        const currentStep = DEV_NAV_STEPS[devStepIndex];
+        const isFirstPhase = devStepIndex <= 0;
+        const isLastPhase = devStepIndex === DEV_NAV_STEPS.length - 1;
+        const phaseFileName = getDevStepLabel(currentStep);
+        const phasePosition = `${devStepIndex + 1}/${DEV_NAV_STEPS.length}`;
 
         return (
             <View style={styles.devControls} pointerEvents="box-none">
@@ -1009,7 +1634,7 @@ export default function OnboardingGreeting() {
 
                 <View style={styles.devPhasePill}>
                     <Text style={styles.devPhaseText} numberOfLines={1}>
-                        {phaseFileName}
+                        {phasePosition} · {phaseFileName}
                     </Text>
                 </View>
 
@@ -1027,14 +1652,43 @@ export default function OnboardingGreeting() {
         );
     };
 
+    const usesHeroBackground = HERO_BACKGROUND_PHASES.has(currentPhase);
+
     return (
         <View style={styles.container}>
             <StatusBar barStyle={isSplashVisible ? "light-content" : "dark-content"} />
 
-            <View style={styles.safeArea}>
-                {checkpointHydrated ? renderPhaseContent() : (
+            <View style={[
+                styles.safeArea,
+                { backgroundColor: usesHeroBackground ? HERO_BACKGROUND_COLOR : COLORS.white },
+            ]}>
+                {checkpointHydrated ? (
+                    <OnboardingPhaseTransition
+                        currentPhase={currentPhase}
+                        renderPhase={renderPhaseContent}
+                    />
+                ) : (
                     <View style={styles.checkpointLoading}>
                         <ActivityIndicator size="large" color={COLORS.coral} />
+                    </View>
+                )}
+
+                {checkpointHydrated && ONBOARDING_PROGRESS[currentPhase] !== undefined && (
+                    <View
+                        pointerEvents="none"
+                        style={[styles.progressTrack, { top: insets.top + 5 }]}
+                    >
+                        <Animated.View
+                            style={[
+                                styles.progressFill,
+                                {
+                                    width: progressAnim.interpolate({
+                                        inputRange: [0, 1],
+                                        outputRange: ['0%', '100%'],
+                                    }),
+                                },
+                            ]}
+                        />
                     </View>
                 )}
             </View>
@@ -1059,10 +1713,29 @@ const styles = StyleSheet.create({
         alignSelf: 'center',
         overflow: 'hidden',
     },
+    phaseContent: {
+        ...StyleSheet.absoluteFillObject,
+    },
     checkpointLoading: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    progressTrack: {
+        position: 'absolute',
+        left: 28,
+        right: 28,
+        height: 3,
+        borderRadius: 2,
+        overflow: 'hidden',
+        backgroundColor: 'rgba(31, 41, 55, 0.08)',
+        zIndex: 850,
+    },
+    progressFill: {
+        height: '100%',
+        borderRadius: 2,
+        backgroundColor: COLORS.coral,
+        opacity: 0.78,
     },
 
     // --- Splash ---

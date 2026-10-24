@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Alert,
     Animated,
     Dimensions,
     SafeAreaView,
@@ -25,8 +24,7 @@ import {
     Target,
     Users,
 } from 'lucide-react-native';
-import { useAuth } from '@/src/auth/authContext';
-import { API_BASE_URL } from '../../config/api';
+import { API_BASE_URL, getDefaultHeaders } from '../../config/api';
 
 // Enable LayoutAnimation for Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -47,29 +45,36 @@ const COLORS = {
     accent: 'rgba(255, 90, 95, 0.08)',
 };
 
-type PendingInvite = {
+export type PartnerLookupInvite = {
     id: string;
     code?: string;
     toEmail: string;
-    status: string;
+    status?: string;
     fromUser?: {
         id: string;
         displayName: string;
-        email: string;
         journey?: {
             currentWeight: number | null;
             targetWeight: number | null;
             weightToLose: number | null;
             unit: string;
             goalType: string | null;
+            primaryGoal?: string | null;
         } | null;
     } | null;
 };
 
 interface Props {
-    userName: string;
     onBack: () => void;
-    onContinue: () => void;
+    onConnect: (invite: PartnerLookupInvite) => void;
+    onLoginWithInvite: (invite: PartnerLookupInvite) => void;
+}
+
+function maskEmail(email: string) {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return email;
+    if (local.length <= 2) return `${local[0] ?? ''}•••@${domain}`;
+    return `${local.slice(0, 2)}•••@${domain}`;
 }
 
 const WatercolourBleed = ({ style, delay = 0, size = 400 }: { style?: any; delay?: number; size?: number }) => {
@@ -125,12 +130,10 @@ const WatercolourBleed = ({ style, delay = 0, size = 400 }: { style?: any; delay
     );
 };
 
-export default function Phase4PartnerCode({ userName, onBack, onContinue }: Props) {
-    const { authFetch } = useAuth();
+export default function Phase4PartnerCode({ onBack, onConnect, onLoginWithInvite }: Props) {
     const [code, setCode] = useState('');
-    const [loading, setLoading] = useState(false);
     const [matchLoading, setMatchLoading] = useState(false);
-    const [matchedInvite, setMatchedInvite] = useState<PendingInvite | null>(null);
+    const [matchedInvite, setMatchedInvite] = useState<PartnerLookupInvite | null>(null);
     const [errorMessage, setErrorMessage] = useState('');
 
     const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -153,9 +156,10 @@ export default function Phase4PartnerCode({ userName, onBack, onContinue }: Prop
     const partnerName = matchedInvite?.fromUser?.displayName || 'Partner';
     const partnerJourney = matchedInvite?.fromUser?.journey;
     const partnerGoal =
-        partnerJourney?.goalType
+        (partnerJourney?.primaryGoal ?? partnerJourney?.goalType)
             ?.replace(/[_-]/g, ' ')
             .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Weight Loss';
+    const invitedEmail = matchedInvite?.toEmail ?? '';
 
     const handleFindCode = async () => {
         if (normalizedCode.length !== 8) {
@@ -167,41 +171,31 @@ export default function Phase4PartnerCode({ userName, onBack, onContinue }: Prop
         setMatchLoading(true);
 
         try {
-            const res = await authFetch(`${API_BASE_URL}/partner/invites/pending`);
+            const res = await fetch(`${API_BASE_URL}/partner/invites/lookup`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getDefaultHeaders(API_BASE_URL),
+                },
+                body: JSON.stringify({ code: normalizedCode }),
+            });
             const data = await res.json();
-            if (!res.ok) throw new Error(data?.error || 'Verification failed.');
+            if (!res.ok) {
+                throw new Error(data?.error || data?.message || 'Verification failed.');
+            }
 
-            const invites: PendingInvite[] = Array.isArray(data?.invites) ? data.invites : [];
-            const invite = invites.find((item) => (item.code || '').toUpperCase() === normalizedCode);
-
-            if (!invite) {
+            const invite = data?.invite as PartnerLookupInvite | undefined;
+            if (!invite?.id) {
                 setErrorMessage('No invite found for this code.');
                 return;
             }
 
-            // Smooth transition to state 2
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
             setMatchedInvite(invite);
         } catch (err: any) {
             setErrorMessage(err?.message || 'Server connection error.');
         } finally {
             setMatchLoading(false);
-        }
-    };
-
-    const handleContinue = async () => {
-        if (!matchedInvite) return;
-        setLoading(true);
-        try {
-            const res = await authFetch(`${API_BASE_URL}/partner/invites/${matchedInvite.id}/accept`, {
-                method: 'POST',
-            });
-            if (!res.ok) throw new Error('Bonding process failed.');
-            onContinue();
-        } catch (err: any) {
-            Alert.alert('Unable to Connect', err?.message || 'Please try again.');
-        } finally {
-            setLoading(false);
         }
     };
 
@@ -247,7 +241,7 @@ export default function Phase4PartnerCode({ userName, onBack, onContinue }: Prop
                             <Users color={COLORS.coral} size={32} strokeWidth={2.5} />
                             <Text style={styles.mainTitle}>Add your partner</Text>
                             <Text style={styles.mainSubtitle}>
-                                Got a code? Pop it in here and link up. More fun stuff is coming next.
+                                Got a code? Pop it in here and link up with the person who invited you.
                             </Text>
                         </View>
                     </Animated.View>
@@ -264,7 +258,7 @@ export default function Phase4PartnerCode({ userName, onBack, onContinue }: Prop
                                         value={normalizedCode}
                                         onChangeText={setCode}
                                         autoCapitalize="characters"
-                                        placeholder="SYNC-123"
+                                        placeholder="ABC12345"
                                         placeholderTextColor="rgba(26, 26, 26, 0.2)"
                                         style={styles.input}
                                         maxLength={8}
@@ -312,19 +306,31 @@ export default function Phase4PartnerCode({ userName, onBack, onContinue }: Prop
                                     </View>
                                 </View>
 
+                                {!!invitedEmail && (
+                                    <Text style={styles.inviteEmailNote}>
+                                        You&apos;ll sign up with {maskEmail(invitedEmail)} to connect.
+                                    </Text>
+                                )}
+
                                 <TouchableOpacity
-                                    style={[styles.confirmBtn, loading && styles.dimmed]}
-                                    onPress={handleContinue}
-                                    disabled={loading}
+                                    style={styles.confirmBtn}
+                                    onPress={() => onConnect(matchedInvite)}
                                     activeOpacity={0.8}
                                 >
                                     <Text style={styles.confirmBtnText}>
-                                        {loading ? 'Connecting...' : `Connect with ${partnerName}`}
+                                        Connect with {partnerName}
                                     </Text>
                                     <ArrowRight color={COLORS.white} size={20} strokeWidth={2.5} />
                                 </TouchableOpacity>
-                                
-                                <TouchableOpacity 
+
+                                <TouchableOpacity
+                                    onPress={() => onLoginWithInvite(matchedInvite)}
+                                    style={styles.secondaryAction}
+                                >
+                                    <Text style={styles.secondaryActionText}>Already have an account? Log in</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
                                     onPress={() => setMatchedInvite(null)}
                                     style={styles.wrongLabel}
                                 >
@@ -508,7 +514,15 @@ const styles = StyleSheet.create({
     metadataGrid: {
         flexDirection: 'row',
         gap: 16,
-        marginBottom: 35,
+        marginBottom: 20,
+    },
+    inviteEmailNote: {
+        fontSize: 14,
+        lineHeight: 20,
+        color: COLORS.inkMuted,
+        textAlign: 'center',
+        marginBottom: 22,
+        fontWeight: '500',
     },
     metaBox: {
         flex: 1,
@@ -553,15 +567,24 @@ const styles = StyleSheet.create({
         fontSize: 18,
         fontWeight: '900',
     },
+    secondaryAction: {
+        marginTop: 18,
+        alignSelf: 'center',
+    },
+    secondaryActionText: {
+        fontSize: 14,
+        color: COLORS.ink,
+        fontWeight: '700',
+        textDecorationLine: 'underline',
+    },
     wrongLabel: {
-        marginTop: 20,
+        marginTop: 14,
         alignSelf: 'center',
     },
     wrongLabelText: {
         fontSize: 13,
         color: COLORS.inkMuted,
         fontWeight: '600',
-        textDecorationLine: 'underline',
     },
     dimmed: {
         opacity: 0.7,

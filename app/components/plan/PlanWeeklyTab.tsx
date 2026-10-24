@@ -3,29 +3,226 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Modal,
   ActivityIndicator,
   StyleSheet,
   ScrollView,
+  Platform,
+  Modal,
+  TextInput,
+  Alert,
+  KeyboardAvoidingView,
+  TouchableWithoutFeedback,
+  Keyboard,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import {
-  Lock,
-  CheckCircle2,
-  X,
-  TrendingUp,
   Flame,
   Calendar,
-  Target,
   ChevronRight,
-  Footprints,
-  Zap,
   Sunrise,
   Sun,
   Sunset,
-  Dumbbell,
   RefreshCw,
+  Pencil,
+  Scale,
+  Plus,
+  Lock,
+  CheckCircle2,
+  X,
 } from 'lucide-react-native';
-import { getMappedDays } from '../../utils/planProjection';
+import { useAuth } from '@/src/auth/authContext';
+import { useWeightLog } from '../../hooks/useWeightLog';
+import { getMappedDays, getWeekLoggedWeightKg } from '../../utils/planProjection';
+import { Fonts } from '../../constants/theme';
+import { getSessionActivityKind, PlanSessionIcon } from './PlanSessionIcon';
+
+type PlanGoalType = 'weightloss' | 'running' | 'both' | string | null;
+
+function formatWeightValue(weightKg: number, usesImperial: boolean) {
+  if (usesImperial) {
+    return `${(weightKg * 2.20462).toFixed(1)} lbs`;
+  }
+  return `${weightKg.toFixed(1)} kg`;
+}
+
+function formatWeightLoss(lossKg: number, usesImperial: boolean) {
+  const amount = usesImperial ? lossKg * 2.20462 : lossKg;
+  const unit = usesImperial ? 'lbs' : 'kg';
+  return `${amount.toFixed(1)} ${unit}`;
+}
+
+const WEIGHT_CHANGE_THRESHOLD_KG = 0.05;
+
+type WeightProjectionDisplay = {
+  action: string;
+  value: string;
+  showExpectedWeightSubtext: boolean;
+};
+
+function getWeightProjectionDisplay(
+  week: WeekPlan,
+  startingWeightKg: number | null | undefined,
+  usesImperial: boolean,
+): WeightProjectionDisplay | null {
+  if (typeof startingWeightKg !== 'number' || !Number.isFinite(startingWeightKg)) return null;
+
+  const expectedWeight = week['Expected weight'];
+  if (typeof expectedWeight !== 'number' || !Number.isFinite(expectedWeight)) return null;
+
+  const changeKg = startingWeightKg - expectedWeight;
+
+  if (changeKg > WEIGHT_CHANGE_THRESHOLD_KG) {
+    return {
+      action: "you'll lose",
+      value: formatWeightLoss(Number(changeKg.toFixed(1)), usesImperial),
+      showExpectedWeightSubtext: true,
+    };
+  }
+
+  if (changeKg < -WEIGHT_CHANGE_THRESHOLD_KG) {
+    return {
+      action: "you'll gain",
+      value: formatWeightLoss(Number(Math.abs(changeKg).toFixed(1)), usesImperial),
+      showExpectedWeightSubtext: true,
+    };
+  }
+
+  return {
+    action: "you'll weigh",
+    value: formatWeightValue(expectedWeight, usesImperial),
+    showExpectedWeightSubtext: false,
+  };
+}
+
+type WeightWeekComparison = {
+  hasLoggedWeight: boolean;
+  expectedLossKg: number;
+  actualLossKg: number;
+  beatTarget: boolean;
+};
+
+function getWeightWeekComparison(
+  startingWeightKg: number | null | undefined,
+  expectedWeight: number,
+  loggedWeightKg: number | null | undefined,
+): WeightWeekComparison | null {
+  if (typeof startingWeightKg !== 'number' || !Number.isFinite(startingWeightKg)) return null;
+  if (typeof expectedWeight !== 'number' || !Number.isFinite(expectedWeight)) return null;
+  if (typeof loggedWeightKg !== 'number' || !Number.isFinite(loggedWeightKg)) return null;
+
+  const expectedLossKg = Number(Math.max(0, startingWeightKg - expectedWeight).toFixed(1));
+  const actualLossKg = Number((startingWeightKg - loggedWeightKg).toFixed(1));
+
+  return {
+    hasLoggedWeight: true,
+    expectedLossKg,
+    actualLossKg,
+    beatTarget: actualLossKg >= expectedLossKg,
+  };
+}
+
+function parseWeightInputToKg(value: string, usesImperial: boolean) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return usesImperial ? parsed / 2.20462 : parsed;
+}
+
+function formatWeightInputValue(weightKg: number | null | undefined, usesImperial: boolean) {
+  if (typeof weightKg !== 'number' || !Number.isFinite(weightKg)) return '';
+  if (usesImperial) {
+    return (weightKg * 2.20462).toFixed(1);
+  }
+  return weightKg.toFixed(1);
+}
+
+type WeightProjectionContentProps = {
+  week: WeekPlan;
+  startingWeightKg?: number | null;
+  usesImperial: boolean;
+  loggedWeightKg?: number | null;
+  compareLoggedWeight: boolean;
+  isLocked: boolean;
+  variant?: 'card' | 'detail';
+};
+
+function WeightProjectionContent({
+  week,
+  startingWeightKg,
+  usesImperial,
+  loggedWeightKg,
+  compareLoggedWeight,
+  isLocked,
+  variant = 'card',
+}: WeightProjectionContentProps) {
+  const expectedWeight = week['Expected weight'];
+  const comparison =
+    compareLoggedWeight &&
+    typeof expectedWeight === 'number' &&
+    Number.isFinite(expectedWeight)
+      ? getWeightWeekComparison(startingWeightKg, expectedWeight, loggedWeightKg)
+      : null;
+  const projection = getWeightProjectionDisplay(week, startingWeightKg, usesImperial);
+  const actionStyle = variant === 'detail' ? styles.detailHeroAction : styles.weightProjectionAction;
+  const valueStyle = variant === 'detail' ? styles.detailHeroValue : styles.weightProjectionValue;
+  const subStyle = variant === 'detail' ? styles.detailHeroSub : styles.weightProjectionSub;
+
+  if (comparison?.hasLoggedWeight && comparison.expectedLossKg > WEIGHT_CHANGE_THRESHOLD_KG) {
+    const actualIsGain = comparison.actualLossKg < -WEIGHT_CHANGE_THRESHOLD_KG;
+    const resultColor = comparison.beatTarget ? COLORS.success : COLORS.danger;
+    const ResultIcon = comparison.beatTarget ? CheckCircle2 : X;
+
+    return (
+      <>
+        <Text style={[actionStyle, isLocked && styles.weightTextMuted]}>expected</Text>
+        <Text
+          style={[
+            valueStyle,
+            styles.weightExpectedStruck,
+            isLocked && styles.weightProjectionValueLocked,
+          ]}
+        >
+          {formatWeightLoss(comparison.expectedLossKg, usesImperial)}
+        </Text>
+        <Text style={[actionStyle, isLocked && styles.weightTextMuted]}>
+          {actualIsGain ? 'gained' : 'lost'}
+        </Text>
+        <View style={styles.weightActualRow}>
+          <ResultIcon size={variant === 'detail' ? 20 : 22} color={resultColor} strokeWidth={2.5} />
+          <Text style={[valueStyle, { color: resultColor }]}>
+            {formatWeightLoss(Math.abs(comparison.actualLossKg), usesImperial)}
+          </Text>
+        </View>
+        <Text style={[subStyle, isLocked && styles.weightTextMuted]}>
+          Weighing {formatWeightValue(loggedWeightKg as number, usesImperial)}
+        </Text>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Text style={[actionStyle, isLocked && styles.weightTextMuted]}>
+        {projection?.action ?? "you'll lose"}
+      </Text>
+      <Text style={[valueStyle, isLocked && styles.weightProjectionValueLocked]}>
+        {projection?.value ?? '—'}
+      </Text>
+      {projection?.showExpectedWeightSubtext &&
+      typeof expectedWeight === 'number' &&
+      Number.isFinite(expectedWeight) ? (
+        <Text style={[subStyle, isLocked && styles.weightTextMuted]}>
+          Weighing about {formatWeightValue(expectedWeight, usesImperial)}
+        </Text>
+      ) : null}
+    </>
+  );
+}
+
+function isWeightFocusedGoal(goalType?: PlanGoalType) {
+  return goalType === 'weightloss' || goalType === 'both';
+}
 
 type WeekDailys = {
   stepDays: number;
@@ -45,27 +242,70 @@ export type WeekPlan = {
   "Week Dailys": WeekDailys;
 };
 
+type TrainingTimePreference = 'morning' | 'afternoon' | 'evening';
+type LegacyTrainingTimePreference = TrainingTimePreference | 'night';
+type ManualAdjustDirection =
+  | 'easier'
+  | 'harder'
+  | 'less_food_less_move'
+  | 'more_food_more_move';
+
+export type { ManualAdjustDirection };
+
 export type PlanWeeklyTabProps = {
   weeklyPlan: WeekPlan[];
-  currentWeek: number;
+  planWeekToday: number;
+  planStartDate?: Date | null;
 
   selectedWeek: WeekPlan | null;
   onSelectWeek: (week: WeekPlan | null) => void;
+
+  goalType?: PlanGoalType;
+  startingWeightKg?: number | null;
+  targetWeightKg?: number | null;
+  usesImperial?: boolean;
 
   loading?: boolean;
   onRegeneratePlan?: () => void;
   devPrompt?: string | null;
   regenerating?: boolean;
   availableDays?: number[];
-  onChangeScheduleDays?: (days: number[]) => void;
+  onChangeScheduleDays?: (days: number[]) => void | Promise<void>;
   scheduleUpdating?: boolean;
   trainingTimePreference?: 'morning' | 'afternoon' | 'evening' | 'night';
   onChangeTrainingTimePreference?: (time: 'morning' | 'afternoon' | 'evening') => void;
+  onAdjustPlanManually?: (direction: ManualAdjustDirection) => Promise<void>;
+  adjusting?: boolean;
   onClose?: () => void;
+  onSelectSessionDay?: (weekNumber: number, dayIdx: number) => void;
 };
 
-type TrainingTimePreference = 'morning' | 'afternoon' | 'evening';
-type LegacyTrainingTimePreference = TrainingTimePreference | 'night';
+const PLAN_FEEL_OPTIONS: Array<{
+  id: ManualAdjustDirection;
+  title: string;
+  description: string;
+}> = [
+  {
+    id: 'easier',
+    title: 'Plan feels too hard',
+    description: 'Lower calories and ease training volume',
+  },
+  {
+    id: 'harder',
+    title: 'I can handle more',
+    description: 'Raise calories and add more activity',
+  },
+  {
+    id: 'less_food_less_move',
+    title: 'Eat less, move less',
+    description: 'Lower calories and steps together — same weight-loss pace',
+  },
+  {
+    id: 'more_food_more_move',
+    title: 'Eat more, move more',
+    description: 'Raise calories and steps together — same weight-loss pace',
+  },
+];
 
 const DAY_OPTIONS = [
   { id: 0, label: 'Mon' },
@@ -78,29 +318,34 @@ const DAY_OPTIONS = [
 ];
 
 const TIME_OPTIONS = [
-  { id: 'morning', label: 'Morning', description: 'Runs and workouts shift to morning.', icon: Sunrise },
-  { id: 'afternoon', label: 'Afternoon', description: 'Runs and workouts shift to afternoon.', icon: Sun },
-  { id: 'evening', label: 'Evening', description: 'Runs and workouts shift to evening.', icon: Sunset },
+  { id: 'morning', label: 'Morning', icon: Sunrise },
+  { id: 'afternoon', label: 'Afternoon', icon: Sun },
+  { id: 'evening', label: 'Evening', icon: Sunset },
 ] as const;
 
 const COLORS = {
   primary: '#FF6B6B',
   primaryFade: 'rgba(255, 107, 107, 0.08)',
-  secondary: '#1F938A',
+  primarySoft: 'rgba(255, 107, 107, 0.14)',
   bg: '#FAFAFA',
   textMain: '#2D3436',
   textSub: '#636E72',
   line: '#E0E0E0',
-  success: '#00B894',
-  successFade: 'rgba(0, 184, 148, 0.08)',
   locked: '#B2BEC3',
+  success: '#16A34A',
+  danger: '#DC2626',
 };
 
 export function PlanWeeklyTab({
   weeklyPlan,
-  currentWeek,
+  planWeekToday,
+  planStartDate = null,
   selectedWeek,
   onSelectWeek,
+  goalType,
+  startingWeightKg,
+  targetWeightKg,
+  usesImperial = false,
   loading,
   onRegeneratePlan,
   devPrompt,
@@ -110,19 +355,47 @@ export function PlanWeeklyTab({
   scheduleUpdating,
   trainingTimePreference = 'morning',
   onChangeTrainingTimePreference,
+  onAdjustPlanManually,
+  adjusting,
   onClose,
+  onSelectSessionDay,
 }: PlanWeeklyTabProps) {
+  const { authFetch, isAuthenticated } = useAuth();
+  const {
+    currentWeightKg,
+    weightHistory,
+    logging: loggingWeight,
+    logWeight,
+  } = useWeightLog({ authFetch, isAuthenticated });
   const normalizeTrainingTimePreference = React.useCallback((time: LegacyTrainingTimePreference): TrainingTimePreference => {
     if (time === 'morning' || time === 'afternoon' || time === 'evening') return time;
     return 'evening';
   }, []);
-  const [showScheduleEditor, setShowScheduleEditor] = React.useState(false);
-  const [showTimeEditor, setShowTimeEditor] = React.useState(false);
+  const [showEditPlanSheet, setShowEditPlanSheet] = React.useState(false);
   const [showDevPrompt, setShowDevPrompt] = React.useState(false);
+  const [selectedAdjustment, setSelectedAdjustment] = React.useState<ManualAdjustDirection | null>(null);
   const [draftAvailableDays, setDraftAvailableDays] = React.useState<number[]>(availableDays);
   const [draftTrainingTimePreference, setDraftTrainingTimePreference] = React.useState<TrainingTimePreference>(
     normalizeTrainingTimePreference(trainingTimePreference)
   );
+  const [weightModalOpen, setWeightModalOpen] = React.useState(false);
+  const [weightInput, setWeightInput] = React.useState('');
+  const pageScrollRef = React.useRef<ScrollView>(null);
+  const weekListTopRef = React.useRef(0);
+  const weekOffsetsRef = React.useRef<Record<number, number>>({});
+
+  const scrollToCurrentWeek = React.useCallback(() => {
+    const offset = weekOffsetsRef.current[planWeekToday];
+    if (offset == null) return;
+    requestAnimationFrame(() => {
+      pageScrollRef.current?.scrollTo({ y: Math.max(0, offset - 16), animated: false });
+    });
+  }, [planWeekToday]);
+
+  React.useEffect(() => {
+    if (weeklyPlan.length === 0) return;
+    scrollToCurrentWeek();
+  }, [weeklyPlan.length, scrollToCurrentWeek]);
 
   React.useEffect(() => {
     setDraftAvailableDays(availableDays);
@@ -132,12 +405,6 @@ export function PlanWeeklyTab({
     setDraftTrainingTimePreference(normalizeTrainingTimePreference(trainingTimePreference));
   }, [trainingTimePreference, normalizeTrainingTimePreference]);
 
-  React.useEffect(() => {
-    if (__DEV__ && devPrompt) {
-      setShowDevPrompt(true);
-    }
-  }, [devPrompt]);
-
   const toggleDay = (day: number) => {
     setDraftAvailableDays((prev) => {
       const exists = prev.includes(day);
@@ -146,15 +413,34 @@ export function PlanWeeklyTab({
     });
   };
 
-  const handleScheduleSave = () => {
-    onChangeScheduleDays?.(draftAvailableDays);
-    setShowScheduleEditor(false);
+  const handleSaveScheduleAndTime = async () => {
+    if (draftAvailableDays.length < 3) return;
+    await onChangeScheduleDays?.(draftAvailableDays);
+    onChangeTrainingTimePreference?.(draftTrainingTimePreference);
+    setShowEditPlanSheet(false);
   };
 
-  const handleTimeSave = () => {
-    onChangeTrainingTimePreference?.(draftTrainingTimePreference);
-    setShowTimeEditor(false);
+  const handleApplyPlanChanges = async () => {
+    if (!selectedAdjustment || !onAdjustPlanManually) return;
+    try {
+      await onAdjustPlanManually(selectedAdjustment);
+      setSelectedAdjustment(null);
+      setShowEditPlanSheet(false);
+    } catch {
+      // Parent shows alert on failure.
+    }
   };
+
+  const openEditPlanSheet = () => {
+    setDraftAvailableDays(availableDays);
+    setDraftTrainingTimePreference(normalizeTrainingTimePreference(trainingTimePreference));
+    setSelectedAdjustment(null);
+    setShowEditPlanSheet(true);
+  };
+
+  const sheetBusy = !!scheduleUpdating || !!adjusting || !!regenerating;
+  const canSaveScheduleAndTime = draftAvailableDays.length >= 3 && !sheetBusy;
+  const canApplyPlanChanges = !!selectedAdjustment && !!onAdjustPlanManually && !sheetBusy;
 
   const getTimeLabel = (time: LegacyTrainingTimePreference) => {
     const normalizedTime = normalizeTrainingTimePreference(time);
@@ -163,504 +449,1148 @@ export function PlanWeeklyTab({
     return 'Morning';
   };
 
-  const getTimeAccent = (time: LegacyTrainingTimePreference) => {
-    const normalizedTime = normalizeTrainingTimePreference(time);
-    if (normalizedTime === 'afternoon') return '#F59E0B';
-    if (normalizedTime === 'evening') return '#6366F1';
-    return COLORS.primary;
-  };
+  const getTimeAccent = (_time: LegacyTrainingTimePreference) => COLORS.primary;
 
   const normalizedTrainingTimePreference = normalizeTrainingTimePreference(trainingTimePreference);
   const TimeIcon = TIME_OPTIONS.find((option) => option.id === normalizedTrainingTimePreference)?.icon ?? Sunrise;
+  const showWeightGoalLayout = isWeightFocusedGoal(goalType);
+  const totalWeeks = weeklyPlan.length;
+  const lastWeek = weeklyPlan[totalWeeks - 1];
+  const journeyEndWeightKg = targetWeightKg ?? lastWeek?.['Expected weight'] ?? null;
 
-  const renderWeeklyItem = (week: WeekPlan, index: number) => {
-    const isLast = index === weeklyPlan.length - 1;
-    const isActive = week.Week === currentWeek;
-    const isCompleted = week.Week < currentWeek;
-    const isLocked = week.Week > currentWeek + 1;
+  const journeyStats = React.useMemo(() => {
+    const totalLossKg =
+      typeof startingWeightKg === 'number' &&
+      typeof journeyEndWeightKg === 'number' &&
+      Number.isFinite(startingWeightKg) &&
+      Number.isFinite(journeyEndWeightKg)
+        ? Math.max(0, Number((startingWeightKg - journeyEndWeightKg).toFixed(1)))
+        : null;
+    const progress =
+      totalWeeks > 1
+        ? Math.min(1, Math.max(0, (planWeekToday - 1) / (totalWeeks - 1)))
+        : totalWeeks === 1
+          ? 1
+          : 0;
+
+    return { totalLossKg, progress };
+  }, [planWeekToday, journeyEndWeightKg, startingWeightKg, totalWeeks]);
+
+  const heroTitle = showWeightGoalLayout
+    ? goalType === 'both'
+      ? 'Train & Transform'
+      : 'Weight Loss Journey'
+    : 'Running Journey';
+
+  const currentWeekPlan = weeklyPlan.find((week) => week.Week === planWeekToday) ?? null;
+
+  const headerCaption = React.useMemo(() => {
+    if (totalWeeks === 0) return 'Generate your plan to see each week ahead.';
+
+    if (showWeightGoalLayout && typeof startingWeightKg === 'number') {
+      const parts = [formatWeightValue(startingWeightKg, usesImperial)];
+      if (typeof journeyEndWeightKg === 'number') {
+        parts.push(formatWeightValue(journeyEndWeightKg, usesImperial));
+      }
+      if (journeyStats.totalLossKg != null && journeyStats.totalLossKg > 0) {
+        return `${parts.join(' → ')} · ${formatWeightLoss(journeyStats.totalLossKg, usesImperial)} total`;
+      }
+      return parts.join(' → ');
+    }
+
+    if (currentWeekPlan) {
+      return `${currentWeekPlan['Week name']} · ${currentWeekPlan['Run km/week']} km this week`;
+    }
+
+    return heroTitle;
+  }, [
+    currentWeekPlan,
+    heroTitle,
+    journeyEndWeightKg,
+    journeyStats.totalLossKg,
+    showWeightGoalLayout,
+    startingWeightKg,
+    totalWeeks,
+    usesImperial,
+  ]);
+
+  const openWeightModal = React.useCallback(() => {
+    setWeightInput(formatWeightInputValue(currentWeightKg, usesImperial));
+    setWeightModalOpen(true);
+  }, [currentWeightKg, usesImperial]);
+
+  const handleLogWeight = React.useCallback(async () => {
+    const weightKg = parseWeightInputToKg(weightInput, usesImperial);
+    if (weightKg == null) {
+      Alert.alert('Invalid weight', 'Enter a valid weight to continue.');
+      return;
+    }
+
+    try {
+      await logWeight(weightKg);
+      setWeightModalOpen(false);
+    } catch {
+      Alert.alert('Error', 'Failed to log weight');
+    }
+  }, [logWeight, usesImperial, weightInput]);
+
+  const renderGlassBackdrop = (isLocked: boolean, isActive: boolean, isCompleted: boolean) => {
+    const accentColors = isLocked
+      ? (['#F4F5F7', '#ECEFF3'] as const)
+      : isActive
+        ? (['rgba(255, 107, 107, 0.18)', 'rgba(255, 107, 107, 0.06)'] as const)
+        : isCompleted
+          ? (['rgba(255, 107, 107, 0.1)', 'rgba(255, 255, 255, 0.72)'] as const)
+          : (['rgba(255, 255, 255, 0.94)', 'rgba(248, 249, 250, 0.9)'] as const);
 
     return (
-      <View key={week.Week} style={styles.timelineRow}>
-        <View style={styles.leftColumn}>
-          {!isLast && (
-            <View
-              style={[
-                styles.verticalLine,
-                (isCompleted || isActive) ? styles.lineActive : styles.lineInactive,
-              ]}
-            />
-          )}
+      <>
+        <LinearGradient
+          colors={accentColors}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        {Platform.OS === 'ios' ? (
+          <BlurView intensity={isLocked ? 12 : 28} tint="light" style={StyleSheet.absoluteFill} />
+        ) : null}
+        <LinearGradient
+          colors={['rgba(255,255,255,0.8)', 'rgba(255,255,255,0.45)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+      </>
+    );
+  };
 
-          <View
-            style={[
-              styles.statusNode,
-              isActive && styles.nodeActive,
-              isCompleted && styles.nodeCompleted,
-              isLocked && styles.nodeLocked,
-            ]}
-          >
-            {isActive ? (
-              <View style={styles.pulsingDot} />
-            ) : isCompleted ? (
-              <CheckCircle2 size={16} color="#FFF" />
-            ) : (
-              <Lock size={14} color="#FFF" />
-            )}
-          </View>
+  const renderWeekStatusChip = (isActive: boolean, isCompleted: boolean, isLocked: boolean) => {
+    if (isActive) {
+      return (
+        <View style={styles.weekStatusChipActive}>
+          <Text style={styles.weekStatusChipActiveText}>Current</Text>
         </View>
+      );
+    }
+    if (isCompleted) {
+      return (
+        <View style={styles.weekStatusChipDone}>
+          <CheckCircle2 size={12} color={COLORS.primary} />
+          <Text style={styles.weekStatusChipDoneText}>Done</Text>
+        </View>
+      );
+    }
+    if (isLocked) {
+      return (
+        <View style={styles.weekStatusChipLocked}>
+          <Lock size={11} color={COLORS.locked} />
+          <Text style={styles.weekStatusChipLockedText}>Locked</Text>
+        </View>
+      );
+    }
+    return null;
+  };
 
-        <View style={styles.rightColumn}>
-          <TouchableOpacity
-            style={[
-              styles.card,
-              isActive ? styles.cardActive : styles.cardDefault,
-              isLocked && styles.cardLocked,
-            ]}
-            onPress={() => !isLocked && onSelectWeek(week)}
-            activeOpacity={isLocked ? 1 : 0.7}
-          >
-            <View style={styles.cardHeader}>
-              <Text style={[styles.weekLabel, isActive && { color: COLORS.primary }]}>
-                WEEK {String(week.Week).padStart(2, '0')}
+  const selectedWeekLoggedWeightKg = React.useMemo(() => {
+    if (!selectedWeek) return null;
+    return getWeekLoggedWeightKg(weightHistory, planStartDate, selectedWeek.Week);
+  }, [selectedWeek, weightHistory, planStartDate]);
+
+  const renderWeekCard = (week: WeekPlan) => {
+    const isActive = week.Week === planWeekToday;
+    const isCompleted = week.Week < planWeekToday;
+    const isLocked = week.Week > planWeekToday + 1;
+    const runs = getMappedDays(week, availableDays).filter((day) => day.type === 'RUN');
+    const recoveryDays = getMappedDays(week, availableDays).filter((day) => day.type === 'RECOVERY');
+    const projectionLead = `By Week ${week.Week},`;
+    const weekLoggedWeightKg = getWeekLoggedWeightKg(weightHistory, planStartDate, week.Week);
+    const compareLoggedWeight = weekLoggedWeightKg !== null;
+
+    return (
+      <TouchableOpacity
+        key={week.Week}
+        style={[
+          styles.weekCardTouchable,
+          isActive && styles.weekCardTouchableActive,
+          isLocked && styles.weekCardTouchableLocked,
+        ]}
+        onPress={() => !isLocked && onSelectWeek(week)}
+        onLayout={(event) => {
+          weekOffsetsRef.current[week.Week] = weekListTopRef.current + event.nativeEvent.layout.y;
+          if (week.Week === planWeekToday) {
+            scrollToCurrentWeek();
+          }
+        }}
+        activeOpacity={isLocked ? 1 : 0.84}
+      >
+        <View style={styles.glassShell}>
+          {renderGlassBackdrop(isLocked, isActive, isCompleted)}
+
+          <View style={styles.glassInner}>
+            <View style={styles.weekCardTitleRow}>
+              <Text style={[styles.weekCardName, isLocked && styles.weightTextMuted]} numberOfLines={1}>
+                {week['Week name']}
               </Text>
-              {isActive && (
-                <View style={styles.activeLabelBadge}>
-                  <Text style={styles.activeLabelText}>CURRENT</Text>
-                </View>
+              {renderWeekStatusChip(isActive, isCompleted, isLocked)}
+            </View>
+
+            <View style={styles.weightProjectionBlock}>
+              <Text style={[styles.weightProjectionLead, isLocked && styles.weightTextMuted]}>
+                {projectionLead}
+              </Text>
+              {showWeightGoalLayout ? (
+                <>
+                  <WeightProjectionContent
+                    week={week}
+                    startingWeightKg={startingWeightKg}
+                    usesImperial={usesImperial}
+                    loggedWeightKg={weekLoggedWeightKg}
+                    compareLoggedWeight={compareLoggedWeight}
+                    isLocked={isLocked}
+                  />
+                  {isActive ? (
+                    <TouchableOpacity
+                      style={styles.weekCardLogWeightBtn}
+                      onPress={openWeightModal}
+                      disabled={loggingWeight}
+                      activeOpacity={0.85}
+                    >
+                      {loggingWeight ? (
+                        <ActivityIndicator size="small" color={COLORS.primary} />
+                      ) : (
+                        <>
+                          <Plus size={14} color={COLORS.primary} strokeWidth={2.5} />
+                          <Text style={styles.weekCardLogWeightBtnText}>Log weight</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.weightProjectionAction, isLocked && styles.weightTextMuted]}>
+                    you&apos;ll run
+                  </Text>
+                  <Text style={[styles.weightProjectionValue, isLocked && styles.weightProjectionValueLocked]}>
+                    {week['Run km/week']} km
+                  </Text>
+                  <Text style={[styles.weightProjectionSub, isLocked && styles.weightTextMuted]}>
+                    {week['Steps/day target'].toLocaleString()} steps/day · {recoveryDays.length} recovery days
+                  </Text>
+                </>
               )}
             </View>
 
-            <Text style={[styles.cardTitle, isLocked && { color: COLORS.locked }]} numberOfLines={1}>
-              {week["Week name"]}
-            </Text>
-
-            <View style={styles.optimizedStatsRow}>
-              <View style={styles.optStatItem}>
-                <Zap
-                  size={16}
-                  color={isLocked ? COLORS.locked : COLORS.primary}
-                  fill={isLocked ? 'transparent' : COLORS.primary}
-                />
-                <Text style={styles.optStatText}>{week["Run km/week"]}km</Text>
-              </View>
-
-              <View style={styles.optStatDivider} />
-
-              <View style={styles.optStatItem}>
-                <Flame
-                  size={16}
-                  color={isLocked ? COLORS.locked : COLORS.secondary}
-                  fill={isLocked ? 'transparent' : COLORS.secondary}
-                />
-                <Text style={styles.optStatText}>{week["Calories/day"]} kcal</Text>
-              </View>
-            </View>
-
-            {/* Active Runs Summary */}
-            <View style={styles.runsSummary}>
-              {getMappedDays(week, availableDays)
-                .filter(d => d.type === 'RUN')
-                .map((run, i) => (
-                  <View key={i} style={styles.runSummaryLine}>
-                    <Text style={styles.runSummaryName} numberOfLines={1}>{run.runType}</Text>
-                    <Text style={styles.runSummaryKm}>{run.targetKm}km</Text>
+            {runs.length > 0 ? (
+              <View style={styles.weightRunsSection}>
+                <Text style={styles.weightRunsSectionLabel}>This week&apos;s runs</Text>
+                {runs.map((run, runIndex) => (
+                  <View
+                    key={`${week.Week}-${run.dayIdx}-${run.runType ?? 'run'}-${runIndex}`}
+                    style={styles.weightRunRow}
+                  >
+                    <View style={styles.weightRunIconWrap}>
+                      <PlanSessionIcon
+                        kind={getSessionActivityKind(run.runType, 'RUN')}
+                        size={17}
+                        color={isLocked ? COLORS.locked : COLORS.primary}
+                      />
+                    </View>
+                    <View style={styles.weightRunCopy}>
+                      <Text style={[styles.weightRunName, isLocked && styles.weightTextMuted]} numberOfLines={1}>
+                        {run.runType}
+                      </Text>
+                      <Text style={[styles.weightRunDay, isLocked && styles.weightTextMuted]}>
+                        {run.name}
+                      </Text>
+                    </View>
+                    <Text style={[styles.weightRunKm, isLocked && styles.weightTextMuted]}>
+                      {run.targetKm} km
+                    </Text>
                   </View>
                 ))}
-            </View>
-
-            {/* Daily Schedule Mini-Map - Sleek Horizontal Strip */}
-            <View style={styles.miniMapContainer}>
-              {getMappedDays(week, availableDays).map((day) => (
-                <View
-                  key={day.dayIdx}
-                  style={[
-                    styles.miniMapDay,
-                    day.type === 'RUN' ? styles.miniMapRun : (day.type === 'RECOVERY' ? styles.miniMapRec : styles.miniMapRest)
-                  ]}
-                >
-                  <Text style={styles.miniMapDayText}>{day.name.charAt(0)}</Text>
-                  {day.type === 'RUN' && <View style={styles.miniMapDot} />}
-                </View>
-              ))}
-            </View>
-
-            <View style={styles.cardFooter}>
-              <View style={styles.footerTarget}>
-                <Target size={14} color={COLORS.success} />
-                <Text style={styles.footerTargetText}>{week["Expected weight"]}kg Target</Text>
               </View>
-              <View style={[styles.timePrefPill, { backgroundColor: `${getTimeAccent(trainingTimePreference)}14` }]}>
-                <TimeIcon size={12} color={getTimeAccent(trainingTimePreference)} />
-                <Text style={[styles.timePrefText, { color: getTimeAccent(trainingTimePreference) }]}>
-                  {getTimeLabel(trainingTimePreference)}
-                </Text>
+            ) : null}
+
+            <View style={styles.weightCardFooter}>
+              <View style={styles.weekMetaGroup}>
+                <View style={styles.weekMetaPill}>
+                  <Flame size={12} color={isLocked ? COLORS.locked : COLORS.primary} />
+                  <Text style={[styles.weekMetaText, isLocked && styles.weightTextMuted]}>
+                    {week['Calories/day']} kcal
+                  </Text>
+                </View>
+                <View style={styles.weekMetaPill}>
+                  <Ionicons
+                    name="trail-sign-outline"
+                    size={13}
+                    color={isLocked ? COLORS.locked : COLORS.primary}
+                  />
+                  <Text style={[styles.weekMetaText, isLocked && styles.weightTextMuted]}>
+                    {week['Run km/week']} km/wk
+                  </Text>
+                </View>
               </View>
               <ChevronRight size={16} color={COLORS.locked} />
             </View>
-          </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
   return (
-    <View>
-      {onClose && (
-        <View style={styles.headerCloseRow}>
-          <TouchableOpacity onPress={onClose} style={styles.headerCloseBtn}>
-            <X size={20} color={COLORS.textMain} />
-          </TouchableOpacity>
-        </View>
-      )}
-      {loading ? (
-        <ActivityIndicator size="small" color={COLORS.primary} />
-      ) : (
-        <>
-          <View style={styles.topActionsRow}>
-            <TouchableOpacity
-              style={styles.topActionBtn}
-              onPress={() => setShowScheduleEditor(true)}
-              disabled={scheduleUpdating || regenerating}
-            >
-              {scheduleUpdating ? (
-                <ActivityIndicator size="small" color={COLORS.primary} />
-              ) : (
-                <>
-                  <Calendar size={18} color={COLORS.primary} />
-                  <Text style={styles.topActionText} numberOfLines={1} adjustsFontSizeToFit>Schedule Days</Text>
-                </>
-              )}
+    <View style={styles.pageRoot}>
+      <View style={styles.pageHeader}>
+        <View style={styles.pageHeaderRow}>
+          {onClose ? (
+            <TouchableOpacity onPress={onClose} style={styles.pageHeaderIconBtn} activeOpacity={0.85}>
+              <X size={20} color={COLORS.textMain} />
             </TouchableOpacity>
+          ) : (
+            <View style={styles.pageHeaderIconSpacer} />
+          )}
 
-            <TouchableOpacity
-              style={styles.topActionBtn}
-              onPress={() => setShowTimeEditor(true)}
-              disabled={regenerating}
-            >
-              <TimeIcon size={18} color={getTimeAccent(trainingTimePreference)} />
-              <Text style={styles.topActionText} numberOfLines={1} adjustsFontSizeToFit>Edit Time</Text>
-            </TouchableOpacity>
+          <View style={styles.pageHeaderTitleWrap}>
+            <Text style={styles.pageHeaderTitle}>Weekly Plan</Text>
+            {totalWeeks > 0 ? (
+              <Text style={styles.pageHeaderSubtitle}>
+                Week {planWeekToday} of {totalWeeks}
+              </Text>
+            ) : null}
           </View>
 
-          {weeklyPlan.length === 0 ? (
-            <View style={styles.emptyPlanCard}>
-              <View style={styles.emptyPlanIcon}>
-                <Calendar size={24} color={COLORS.primary} />
-              </View>
-              <Text style={styles.emptyPlanTitle}>No weekly plan yet</Text>
-              <Text style={styles.emptyPlanText}>
-                Generate your training plan to see each week, run days, recovery sessions, and targets.
+          {weeklyPlan.length > 0 ? (
+            <TouchableOpacity
+              onPress={openEditPlanSheet}
+              style={styles.pageHeaderIconBtn}
+              disabled={sheetBusy}
+              activeOpacity={0.85}
+            >
+              <Pencil size={18} color={COLORS.primary} />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.pageHeaderIconSpacer} />
+          )}
+        </View>
+
+        {totalWeeks > 0 ? (
+          <View style={styles.pageHeaderSummary}>
+            <View style={styles.pageHeaderMetaRow}>
+              <Text style={styles.pageHeaderCaption} numberOfLines={2}>
+                {headerCaption}
               </Text>
-              {onRegeneratePlan ? (
-                <TouchableOpacity
-                  style={styles.emptyPlanButton}
-                  onPress={onRegeneratePlan}
-                  disabled={regenerating || scheduleUpdating}
-                  activeOpacity={0.85}
-                >
-                  {regenerating ? (
-                    <ActivityIndicator size="small" color="#FFF" />
-                  ) : (
-                    <>
-                      <RefreshCw size={16} color="#FFF" />
-                      <Text style={styles.emptyPlanButtonText}>Generate Weekly Plan</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              ) : null}
+              <Text style={styles.pageHeaderPercent}>{Math.round(journeyStats.progress * 100)}%</Text>
             </View>
-          ) : null}
-
-          {__DEV__ && onRegeneratePlan ? (
-            <View style={styles.devActionRow}>
-              <View style={styles.devActionStack}>
-                <TouchableOpacity
-                  style={styles.devRegenBtn}
-                  onPress={onRegeneratePlan}
-                  disabled={regenerating || scheduleUpdating}
-                  activeOpacity={0.8}
-                >
-                  {regenerating ? (
-                    <ActivityIndicator size="small" color={COLORS.primary} />
-                  ) : (
-                    <>
-                      <RefreshCw size={12} color={COLORS.primary} />
-                      <Text style={styles.devRegenText}>Dev: Regenerate Plan</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-
-                {devPrompt ? (
-                  <TouchableOpacity
-                    style={styles.devPromptToggle}
-                    onPress={() => setShowDevPrompt((prev) => !prev)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.devPromptToggleText}>
-                      {showDevPrompt ? 'Hide Prompt' : 'Show Prompt'}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-
-                {showDevPrompt && devPrompt ? (
-                  <View style={styles.devPromptCard}>
-                    <Text style={styles.devPromptLabel}>Latest Plan Prompt</Text>
-                    <ScrollView
-                      style={styles.devPromptScroll}
-                      contentContainerStyle={styles.devPromptScrollContent}
-                      nestedScrollEnabled
-                    >
-                      <Text style={styles.devPromptText}>{devPrompt}</Text>
-                    </ScrollView>
-                  </View>
-                ) : null}
-              </View>
+            <View style={styles.pageHeaderProgressTrack}>
+              <View
+                style={[
+                  styles.pageHeaderProgressFill,
+                  { width: `${Math.max(4, journeyStats.progress * 100)}%` },
+                ]}
+              />
             </View>
-          ) : null}
+          </View>
+        ) : null}
+      </View>
 
-
-
-          {weeklyPlan.map((week, index) => renderWeeklyItem(week, index))}
-        </>
-      )}
-
-      <Modal
-        visible={selectedWeek !== null}
-        animationType="fade"
-        transparent={true}
-        onRequestClose={() => onSelectWeek(null)}
+      <ScrollView
+        ref={pageScrollRef}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.pageScrollContent}
       >
-        <View style={styles.modalBackdrop}>
+        <View style={styles.pageBody}>
+          {loading ? (
+            <View style={styles.loadingBlock}>
+              <ActivityIndicator size="small" color={COLORS.primary} />
+              <Text style={styles.loadingText}>Loading your plan...</Text>
+            </View>
+          ) : (
+            <>
+              {weeklyPlan.length === 0 ? (
+                <View style={styles.emptyPlanCard}>
+                  <View style={styles.emptyPlanIcon}>
+                    <Calendar size={24} color={COLORS.primary} />
+                  </View>
+                  <Text style={styles.emptyPlanTitle}>No weekly plan yet</Text>
+                  <Text style={styles.emptyPlanText}>
+                    Generate your plan to see each week, projected progress, and every run laid out ahead.
+                  </Text>
+                  {onRegeneratePlan ? (
+                    <TouchableOpacity
+                      style={styles.emptyPlanButton}
+                      onPress={onRegeneratePlan}
+                      disabled={regenerating || scheduleUpdating}
+                      activeOpacity={0.85}
+                    >
+                      {regenerating ? (
+                        <ActivityIndicator size="small" color="#FFF" />
+                      ) : (
+                        <>
+                          <RefreshCw size={16} color="#FFF" />
+                          <Text style={styles.emptyPlanButtonText}>Generate Weekly Plan</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : (
+                <>
+                  <View style={styles.sectionHeadingRow}>
+                    <Text style={styles.sectionHeading}>Your weeks</Text>
+                    <Text style={styles.sectionHeadingMeta}>{totalWeeks} total</Text>
+                  </View>
+                  <View
+                    style={styles.weekList}
+                    onLayout={(event) => {
+                      weekListTopRef.current = event.nativeEvent.layout.y;
+                      scrollToCurrentWeek();
+                    }}
+                  >
+                    {weeklyPlan.map((week) => renderWeekCard(week))}
+                  </View>
+                </>
+              )}
+
+              {__DEV__ && onRegeneratePlan ? (
+                <View style={styles.devActionRow}>
+                  <View style={styles.devActionStack}>
+                    <TouchableOpacity
+                      style={styles.devRegenBtn}
+                      onPress={onRegeneratePlan}
+                      disabled={regenerating || scheduleUpdating}
+                      activeOpacity={0.8}
+                    >
+                      {regenerating ? (
+                        <ActivityIndicator size="small" color={COLORS.primary} />
+                      ) : (
+                        <>
+                          <RefreshCw size={12} color={COLORS.primary} />
+                          <Text style={styles.devRegenText}>Dev: Regenerate Plan</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+
+                    {devPrompt ? (
+                      <TouchableOpacity
+                        style={styles.devPromptToggle}
+                        onPress={() => setShowDevPrompt((prev) => !prev)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.devPromptToggleText}>
+                          {showDevPrompt ? 'Hide Prompt' : 'Show Prompt'}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+
+                    {showDevPrompt && devPrompt ? (
+                      <View style={styles.devPromptCard}>
+                        <Text style={styles.devPromptLabel}>Latest Plan Prompt</Text>
+                        <ScrollView
+                          style={styles.devPromptScroll}
+                          contentContainerStyle={styles.devPromptScrollContent}
+                          nestedScrollEnabled
+                        >
+                          <Text style={styles.devPromptText}>{devPrompt}</Text>
+                        </ScrollView>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+            </>
+          )}
+        </View>
+      </ScrollView>
+
+      {selectedWeek ? (
+        <View style={styles.sheetOverlay}>
           <TouchableOpacity
             style={StyleSheet.absoluteFill}
             activeOpacity={1}
             onPress={() => onSelectWeek(null)}
           />
-          <View style={styles.modalCard}>
-            {selectedWeek && (
-              <>
-                <View style={styles.modalDragHandle} />
-                <View style={styles.modalContentHeader}>
-                  <Text style={styles.modalWeek}>WEEK {selectedWeek.Week}</Text>
-                  <TouchableOpacity onPress={() => onSelectWeek(null)}>
-                    <X size={20} color={COLORS.textSub} />
+          <View style={styles.detailSheet}>
+            <View style={styles.modalDragHandle} />
+            <View style={styles.detailHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.detailEyebrow}>WEEK {selectedWeek.Week}</Text>
+                <Text style={styles.detailTitle}>{selectedWeek['Week name']}</Text>
+              </View>
+              <TouchableOpacity onPress={() => onSelectWeek(null)} style={styles.detailCloseBtn}>
+                <X size={18} color={COLORS.textSub} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.detailHeroGlass}>
+              {renderGlassBackdrop(false, true, false)}
+              <View style={styles.detailHeroInner}>
+                {showWeightGoalLayout ? (
+                  <>
+                    <Text style={styles.detailHeroLead}>By Week {selectedWeek.Week},</Text>
+                    <WeightProjectionContent
+                      week={selectedWeek}
+                      startingWeightKg={startingWeightKg}
+                      usesImperial={usesImperial}
+                      loggedWeightKg={selectedWeekLoggedWeightKg}
+                      compareLoggedWeight={selectedWeekLoggedWeightKg !== null}
+                      isLocked={false}
+                      variant="detail"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.detailHeroLead}>By Week {selectedWeek.Week},</Text>
+                    <Text style={styles.detailHeroAction}>you&apos;ll run</Text>
+                    <Text style={styles.detailHeroValue}>{selectedWeek['Run km/week']} km</Text>
+                  </>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.detailStatsRow}>
+              <View style={styles.detailStatCard}>
+                <Flame size={15} color={COLORS.primary} />
+                <Text style={styles.detailStatLabel}>Calories</Text>
+                <Text style={styles.detailStatValue}>{selectedWeek['Calories/day']}</Text>
+              </View>
+              <View style={styles.detailStatCard}>
+                <Ionicons name="nutrition-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.detailStatLabel}>Protein</Text>
+                <Text style={styles.detailStatValue}>{selectedWeek['Protein/day']}g</Text>
+              </View>
+              <View style={styles.detailStatCard}>
+                <Ionicons name="trail-sign-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.detailStatLabel}>Run vol</Text>
+                <Text style={styles.detailStatValue}>{selectedWeek['Run km/week']}k</Text>
+              </View>
+            </View>
+
+            <Text style={styles.sessionHeader}>Schedule</Text>
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.detailScheduleScroll}>
+              {getMappedDays(selectedWeek, availableDays)
+                .filter((day) => day.type !== 'STEP')
+                .map((day) => (
+                  <TouchableOpacity
+                    key={day.dayIdx}
+                    style={[
+                      styles.sessionCard,
+                      day.type === 'RUN' ? styles.sessionRunCard : styles.sessionRecCard,
+                    ]}
+                    onPress={() => {
+                      if (day.type === 'RUN') {
+                        onSelectSessionDay?.(selectedWeek.Week, day.dayIdx);
+                      }
+                    }}
+                    activeOpacity={day.type === 'RUN' && onSelectSessionDay ? 0.75 : 1}
+                    disabled={day.type !== 'RUN' || !onSelectSessionDay}
+                  >
+                    <View style={styles.sessionCardIconWrap}>
+                      <PlanSessionIcon
+                        kind={getSessionActivityKind(day.runType, day.type)}
+                        size={18}
+                        color={COLORS.primary}
+                      />
+                    </View>
+                    <View style={styles.sessionCardHeader}>
+                      <Text style={styles.sessionDay}>{day.name.toUpperCase()}</Text>
+                      <Text style={styles.sessionType}>
+                        {day.runType || (day.type === 'RECOVERY' ? 'Recovery' : 'Active')}
+                      </Text>
+                    </View>
+                    <View style={[styles.sessionTimePill, { backgroundColor: `${getTimeAccent(trainingTimePreference)}14` }]}>
+                      <TimeIcon size={12} color={getTimeAccent(trainingTimePreference)} />
+                      <Text style={[styles.sessionTimeText, { color: getTimeAccent(trainingTimePreference) }]}>
+                        {getTimeLabel(trainingTimePreference)}
+                      </Text>
+                    </View>
+                    {day.type === 'RUN' ? (
+                      <Text style={styles.sessionKm}>{day.targetKm} km</Text>
+                    ) : null}
                   </TouchableOpacity>
-                </View>
+                ))}
+            </ScrollView>
 
-                <Text style={styles.modalTitle}>{selectedWeek["Week name"]}</Text>
-
-                <View style={styles.modalStatsGrid}>
-                  <View style={styles.statItem}>
-                    <Zap size={16} color={COLORS.primary} />
-                    <View>
-                      <Text style={styles.statLabel}>GOAL VOL</Text>
-                      <Text style={styles.statValue}>{selectedWeek["Run km/week"]}KM</Text>
-                    </View>
-                  </View>
-                  <View style={styles.statItem}>
-                    <Flame size={16} color={COLORS.secondary} />
-                    <View>
-                      <Text style={styles.statLabel}>EST BURN</Text>
-                      <Text style={styles.statValue}>{selectedWeek["Calories/day"] * 7}K</Text>
-                    </View>
-                  </View>
-                </View>
-
-                <Text style={styles.sessionHeader}>SESSIONS BREAKDOWN</Text>
-                <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 400 }}>
-                  {getMappedDays(selectedWeek, availableDays)
-                    .filter(d => d.type !== 'STEP')
-                    .map((day) => (
-                      <View
-                        key={day.dayIdx}
-                        style={[
-                          styles.sessionCard,
-                          day.type === 'RUN' ? styles.sessionRunCard : styles.sessionRecCard
-                        ]}
-                      >
-                        <View style={styles.sessionCardHeader}>
-                          <Text style={styles.sessionDay}>{day.name.toUpperCase()}</Text>
-                          <Text style={styles.sessionType}>
-                            {day.runType || (day.type === 'RECOVERY' ? 'Recovery' : 'Active')}
-                          </Text>
-                        </View>
-                        <View style={[styles.sessionTimePill, { backgroundColor: `${getTimeAccent(trainingTimePreference)}14` }]}>
-                          <TimeIcon size={12} color={getTimeAccent(trainingTimePreference)} />
-                          <Text style={[styles.sessionTimeText, { color: getTimeAccent(trainingTimePreference) }]}>
-                            {getTimeLabel(trainingTimePreference)}
-                          </Text>
-                        </View>
-                        {day.type === 'RUN' && (
-                          <Text style={styles.sessionKm}>{day.targetKm}k</Text>
-                        )}
-                      </View>
-                    ))}
-                </ScrollView>
-
+            {showWeightGoalLayout ? (
+              <>
+                {selectedWeek.Week === planWeekToday ? (
+                  <TouchableOpacity
+                    style={styles.detailLogWeightBtn}
+                    onPress={openWeightModal}
+                    disabled={loggingWeight}
+                    activeOpacity={0.85}
+                  >
+                    {loggingWeight ? (
+                      <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                      <>
+                        <Plus size={16} color="#FFF" strokeWidth={2.5} />
+                        <Text style={styles.detailLogWeightBtnText}>Log weight</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                ) : null}
                 <View style={styles.expectedWeightCard}>
-                  <TrendingUp size={24} color={COLORS.success} />
-                  <View style={{ marginLeft: 12 }}>
-                    <Text style={styles.expectedWeightLabel}>ESTIMATED END WEIGHT</Text>
-                    <Text style={styles.expectedWeightValue}>{selectedWeek["Expected weight"]} kg</Text>
+                  <Scale size={22} color={COLORS.primary} />
+                  <View style={{ marginLeft: 12, flex: 1 }}>
+                    <Text style={styles.expectedWeightLabel}>Estimated end weight</Text>
+                    <Text style={styles.expectedWeightValue}>
+                      {formatWeightValue(selectedWeek['Expected weight'], usesImperial)}
+                    </Text>
                   </View>
                 </View>
               </>
-            )}
+            ) : null}
           </View>
         </View>
-      </Modal>
+      ) : null}
 
-      <Modal
-        visible={showScheduleEditor}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowScheduleEditor(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.scheduleModalCard}>
+      {showEditPlanSheet ? (
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => !sheetBusy && setShowEditPlanSheet(false)}
+          />
+          <View style={styles.editPlanModalCard}>
             <View style={styles.modalDragHandle} />
             <View style={styles.modalContentHeader}>
-              <Text style={styles.modalWeek}>TRAINING SCHEDULE</Text>
-              <TouchableOpacity onPress={() => setShowScheduleEditor(false)}>
+              <Text style={styles.modalWeek}>EDIT PLAN</Text>
+              <TouchableOpacity onPress={() => setShowEditPlanSheet(false)}>
                 <X size={20} color={COLORS.textSub} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.modalTitle}>Choose your run days</Text>
-            <Text style={styles.scheduleHelperText}>
-              Pick at least 3 days. Saving will update your preference and remap your scheduled days without regenerating the plan.
-            </Text>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.editPlanScrollContent}>
+              <Text style={styles.editPlanIntro}>
+                Change when you train, or adjust how hard the plan feels.
+              </Text>
 
-            <View style={styles.scheduleGrid}>
-              {DAY_OPTIONS.map((day) => {
-                const selected = draftAvailableDays.includes(day.id);
-                return (
-                  <TouchableOpacity
-                    key={day.id}
-                    style={[styles.scheduleDayChip, selected && styles.scheduleDayChipActive]}
-                    onPress={() => toggleDay(day.id)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.scheduleDayChipText, selected && styles.scheduleDayChipTextActive]}>
-                      {day.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+              <Text style={styles.editPlanSectionTitle}>Run days</Text>
+              <Text style={styles.editPlanSectionHint}>Pick at least 3 days you can train.</Text>
+              <View style={styles.scheduleGrid}>
+                {DAY_OPTIONS.map((day) => {
+                  const selected = draftAvailableDays.includes(day.id);
+                  return (
+                    <TouchableOpacity
+                      key={day.id}
+                      style={[styles.scheduleDayChip, selected && styles.scheduleDayChipActive]}
+                      onPress={() => toggleDay(day.id)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.scheduleDayChipText, selected && styles.scheduleDayChipTextActive]}>
+                        {day.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-            <TouchableOpacity
-              style={[styles.regenerateBtn, draftAvailableDays.length < 3 && styles.disabledPrimaryBtn]}
-              onPress={handleScheduleSave}
-              disabled={draftAvailableDays.length < 3 || scheduleUpdating}
-            >
-              {scheduleUpdating ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <>
-                  <Calendar size={18} color="#FFF" />
-                  <Text style={styles.regenerateBtnText}>Save Schedule Days</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+              <Text style={[styles.editPlanSectionTitle, styles.editPlanSectionTitleSpaced]}>Training time</Text>
+              <Text style={styles.editPlanSectionHint}>When you prefer runs and workouts.</Text>
+              <View style={styles.timeOptionStack}>
+                {TIME_OPTIONS.map((option) => {
+                  const selected = option.id === draftTrainingTimePreference;
+                  const Icon = option.icon;
+                  return (
+                    <TouchableOpacity
+                      key={option.id}
+                      style={[styles.timeOptionCard, selected && styles.timeOptionCardActive]}
+                      onPress={() => setDraftTrainingTimePreference(option.id)}
+                      activeOpacity={0.85}
+                    >
+                      <View style={[styles.timeOptionIconWrap, selected && styles.timeOptionIconWrapActive]}>
+                        <Icon size={18} color={selected ? '#FFF' : getTimeAccent(option.id)} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.timeOptionTitle}>{option.label}</Text>
+                      </View>
+                      {selected ? <CheckCircle2 size={18} color={COLORS.primary} /> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-      <Modal
-        visible={showTimeEditor}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowTimeEditor(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.scheduleModalCard}>
-            <View style={styles.modalDragHandle} />
-            <View style={styles.modalContentHeader}>
-              <Text style={styles.modalWeek}>TRAINING TIME</Text>
-              <TouchableOpacity onPress={() => setShowTimeEditor(false)}>
-                <X size={20} color={COLORS.textSub} />
+              <TouchableOpacity
+                style={[styles.secondaryActionBtn, !canSaveScheduleAndTime && styles.disabledPrimaryBtn]}
+                onPress={handleSaveScheduleAndTime}
+                disabled={!canSaveScheduleAndTime}
+              >
+                {scheduleUpdating ? (
+                  <ActivityIndicator size="small" color={COLORS.primary} />
+                ) : (
+                  <Text style={styles.secondaryActionBtnText}>Save days & time</Text>
+                )}
               </TouchableOpacity>
-            </View>
 
-            <Text style={styles.modalTitle}>Choose your preferred time</Text>
-            <Text style={styles.scheduleHelperText}>
-              This sets the same preference for both runs and workouts. Morning shifts both to morning, afternoon shifts both to afternoon, and evening shifts both to evening.
-            </Text>
+              <View style={styles.editPlanDivider} />
 
-            <View style={styles.preferenceSummaryCard}>
-              <View style={styles.preferenceSummaryRow}>
-                <Text style={styles.preferenceSummaryLabel}>Run preference</Text>
-                <Text style={styles.preferenceSummaryValue}>{getTimeLabel(draftTrainingTimePreference)}</Text>
+              <Text style={[styles.editPlanSectionTitle, styles.editPlanSectionTitleSpaced]}>Plan intensity</Text>
+              <Text style={styles.editPlanSectionHint}>
+                Updates calories and training from this week onward.
+              </Text>
+              <View style={styles.feelOptionStack}>
+                {PLAN_FEEL_OPTIONS.map((option) => {
+                  const selected = selectedAdjustment === option.id;
+                  return (
+                    <TouchableOpacity
+                      key={option.id}
+                      style={[styles.feelOptionCard, selected && styles.feelOptionCardActive]}
+                      onPress={() => setSelectedAdjustment(option.id)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.feelOptionTitle, selected && styles.feelOptionTitleActive]}>
+                        {option.title}
+                      </Text>
+                      <Text style={[styles.feelOptionDescription, selected && styles.feelOptionDescriptionActive]}>
+                        {option.description}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-              <View style={styles.preferenceSummaryDivider} />
-              <View style={styles.preferenceSummaryRow}>
-                <Text style={styles.preferenceSummaryLabel}>Workout preference</Text>
-                <Text style={styles.preferenceSummaryValue}>{getTimeLabel(draftTrainingTimePreference)}</Text>
-              </View>
-            </View>
 
-            <View style={styles.timeOptionStack}>
-              {TIME_OPTIONS.map((option) => {
-                const selected = option.id === draftTrainingTimePreference;
-                const Icon = option.icon;
-                return (
-                  <TouchableOpacity
-                    key={option.id}
-                    style={[styles.timeOptionCard, selected && styles.timeOptionCardActive]}
-                    onPress={() => setDraftTrainingTimePreference(option.id)}
-                    activeOpacity={0.85}
-                  >
-                    <View style={[styles.timeOptionIconWrap, selected && styles.timeOptionIconWrapActive]}>
-                      <Icon size={18} color={selected ? '#FFF' : getTimeAccent(option.id)} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.timeOptionTitle}>{option.label}</Text>
-                      <Text style={styles.timeOptionDescription}>{option.description}</Text>
-                    </View>
-                    {selected ? <CheckCircle2 size={18} color={COLORS.primary} /> : null}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+              <TouchableOpacity
+                style={[styles.regenerateBtn, !canApplyPlanChanges && styles.disabledPrimaryBtn]}
+                onPress={handleApplyPlanChanges}
+                disabled={!canApplyPlanChanges}
+              >
+                {adjusting ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.regenerateBtnText}>Update plan</Text>
+                )}
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.regenerateBtn}
-              onPress={handleTimeSave}
-            >
-              <TimeIcon size={18} color="#FFF" />
-              <Text style={styles.regenerateBtnText}>Save Time Preference</Text>
-            </TouchableOpacity>
+              {!selectedAdjustment ? (
+                <Text style={styles.applyHelperText}>Choose an intensity option above first.</Text>
+              ) : null}
+            </ScrollView>
           </View>
         </View>
+      ) : null}
+
+      <Modal visible={weightModalOpen} animationType="fade" transparent onRequestClose={() => setWeightModalOpen(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+          style={styles.weightModalRoot}
+        >
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View style={styles.weightModalBackdrop}>
+              <View style={styles.weightModalCard}>
+                <View style={styles.modalDragHandle} />
+                <View style={styles.weightModalHeader}>
+                  <View>
+                    <Text style={styles.weightModalEyebrow}>VITALS</Text>
+                    <Text style={styles.weightModalTitle}>Log weight</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setWeightModalOpen(false)}
+                    style={styles.detailCloseBtn}
+                  >
+                    <X size={18} color={COLORS.textSub} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.weightEntryArea}>
+                  <TextInput
+                    style={styles.bigWeightInput}
+                    value={weightInput}
+                    onChangeText={setWeightInput}
+                    keyboardType="decimal-pad"
+                    autoFocus
+                  />
+                  <Text style={styles.weightUnitLabel}>
+                    {usesImperial ? 'Pounds' : 'Kilograms'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.weightSaveBtn}
+                  onPress={handleLogWeight}
+                  disabled={loggingWeight}
+                  activeOpacity={0.85}
+                >
+                  {loggingWeight ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Text style={styles.weightSaveBtnText}>Save weight</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // Weekly timeline list
-  timelineRow: { flexDirection: 'row', minHeight: 120 },
-  leftColumn: { width: 32, alignItems: 'center', marginRight: 16 },
-  verticalLine: { position: 'absolute', top: 24, bottom: -24, width: 2, backgroundColor: COLORS.line },
-  lineActive: { backgroundColor: COLORS.secondary },
-  lineInactive: { backgroundColor: COLORS.line },
-  statusNode: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#FFF',
-    borderWidth: 2,
-    borderColor: COLORS.line,
-    zIndex: 1,
+  pageRoot: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  sheetOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  pageHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 2,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F3F5',
+  },
+  pageHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    minHeight: 40,
+  },
+  pageHeaderIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#F5F6F8',
   },
-  nodeActive: { borderColor: COLORS.primary },
-  nodeCompleted: { backgroundColor: COLORS.secondary, borderColor: COLORS.secondary },
-  nodeLocked: { backgroundColor: COLORS.locked, borderColor: COLORS.locked },
-  pulsingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.primary },
-  rightColumn: { flex: 1, paddingBottom: 20 },
+  pageHeaderIconSpacer: {
+    width: 40,
+    height: 40,
+  },
+  weekCardLogWeightBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: COLORS.primaryFade,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 107, 107, 0.18)',
+  },
+  weekCardLogWeightBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primary,
+  },
+  pageHeaderTitleWrap: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  pageHeaderTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.textMain,
+    letterSpacing: -0.2,
+  },
+  pageHeaderSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textSub,
+  },
+  pageHeaderSummary: {
+    marginTop: 10,
+    gap: 8,
+  },
+  pageHeaderMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  pageHeaderCaption: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: COLORS.textSub,
+  },
+  pageHeaderPercent: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: COLORS.primary,
+    fontVariant: ['tabular-nums'],
+  },
+  pageHeaderProgressTrack: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#EEF1F4',
+    overflow: 'hidden',
+  },
+  pageHeaderProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: COLORS.primary,
+  },
+  pageScrollContent: {
+    paddingBottom: 40,
+  },
+  loadingBlock: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textSub,
+  },
+  pageBody: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+  sectionHeadingRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  sectionHeading: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: COLORS.textMain,
+    letterSpacing: -0.3,
+  },
+  sectionHeadingMeta: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textSub,
+  },
+  weekList: {
+    gap: 12,
+  },
+
+  weekCardTouchable: {
+    borderRadius: 24,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.72)',
+    boxShadow: '0 10px 28px rgba(45, 52, 54, 0.08)',
+  },
+  weekCardTouchableActive: {
+    borderColor: 'rgba(255, 107, 107, 0.45)',
+    boxShadow: '0 14px 34px rgba(255, 107, 107, 0.18)',
+  },
+  weekCardTouchableLocked: {
+    opacity: 0.72,
+    boxShadow: '0 6px 16px rgba(45, 52, 54, 0.05)',
+  },
+  glassShell: {
+    overflow: 'hidden',
+    borderRadius: 24,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
+  },
+  glassInner: {
+    padding: 14,
+  },
+  weekCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  weekStatusChipActive: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: COLORS.primaryFade,
+  },
+  weekStatusChipActiveText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: COLORS.primary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  weekStatusChipDone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: COLORS.primaryFade,
+  },
+  weekStatusChipDoneText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: COLORS.primary,
+    textTransform: 'uppercase',
+  },
+  weekStatusChipLocked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(178, 190, 195, 0.16)',
+  },
+  weekStatusChipLockedText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: COLORS.locked,
+    textTransform: 'uppercase',
+  },
+  weekCardName: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.textSub,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  weightProjectionBlock: {
+    marginBottom: 12,
+    gap: 0,
+  },
+  weightProjectionLead: {
+    fontFamily: Fonts.serif,
+    fontSize: 20,
+    lineHeight: 26,
+    color: COLORS.textMain,
+    letterSpacing: -0.3,
+  },
+  weightProjectionAction: {
+    fontFamily: Fonts.serif,
+    fontSize: 24,
+    lineHeight: 30,
+    color: COLORS.textSub,
+    fontStyle: 'italic',
+    letterSpacing: -0.4,
+  },
+  weightProjectionValue: {
+    fontFamily: Fonts.serif,
+    fontSize: 38,
+    lineHeight: 40,
+    fontWeight: '700',
+    color: COLORS.primary,
+    letterSpacing: -1.2,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  weightProjectionValueLocked: {
+    color: COLORS.locked,
+  },
+  weightExpectedStruck: {
+    color: COLORS.textSub,
+    textDecorationLine: 'line-through',
+    textDecorationColor: COLORS.textSub,
+  },
+  weightActualRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  weightProjectionSub: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: COLORS.textSub,
+    marginTop: 4,
+  },
+  weightTextMuted: {
+    color: COLORS.locked,
+  },
+  weightRunsSection: {
+    gap: 8,
+    paddingTop: 10,
+    marginBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(45, 52, 54, 0.08)',
+  },
+  weightRunsSectionLabel: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: COLORS.textSub,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  weightRunRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(255, 255, 255, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.8)',
+  },
+  weightRunIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+  },
+  weightRunCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  weightRunName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.textMain,
+  },
+  weightRunDay: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.textSub,
+  },
+  weightRunKm: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: COLORS.primary,
+    fontVariant: ['tabular-nums'],
+  },
+  weightCardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(45, 52, 54, 0.08)',
+  },
+  weekMetaGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    flex: 1,
+  },
+  weekMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.62)',
+  },
+  weekMetaText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.textSub,
+  },
 
   card: {
     backgroundColor: '#FFF',
@@ -699,7 +1629,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#F0F0F0',
   },
   footerTarget: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  footerTargetText: { fontSize: 12, fontWeight: '700', color: COLORS.success },
+  footerTargetText: { fontSize: 12, fontWeight: '700', color: COLORS.primary },
   timePrefPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -758,7 +1688,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   miniMapRun: { backgroundColor: '#FFF5F5', borderColor: '#FFE3E3', borderWidth: 1 },
-  miniMapRec: { backgroundColor: '#F0FFF4', borderColor: '#DCFCE7', borderWidth: 1 },
+  miniMapRec: { backgroundColor: '#FFF5F5', borderColor: '#FFE3E3', borderWidth: 1 },
   miniMapRest: { backgroundColor: '#F8F9FA' },
   miniMapDayText: { fontSize: 10, fontWeight: '700', color: COLORS.textSub },
   miniMapDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: COLORS.primary },
@@ -766,8 +1696,116 @@ const styles = StyleSheet.create({
   // Card Modal Styles
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-end',
+  },
+  detailSheet: {
+    backgroundColor: '#FFF',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    borderCurve: 'continuous',
+    paddingHorizontal: 22,
+    paddingTop: 12,
+    paddingBottom: 28,
+    maxHeight: '88%',
+    boxShadow: '0 -12px 40px rgba(15, 23, 42, 0.18)',
+  },
+  detailHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 16,
+  },
+  detailEyebrow: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: COLORS.primary,
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  detailTitle: {
+    fontSize: 26,
+    fontWeight: '900',
+    color: COLORS.textMain,
+    letterSpacing: -0.5,
+  },
+  detailCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4F6F8',
+  },
+  detailHeroGlass: {
+    borderRadius: 22,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 107, 107, 0.16)',
+  },
+  detailHeroInner: {
+    padding: 18,
+  },
+  detailHeroLead: {
+    fontFamily: Fonts.serif,
+    fontSize: 18,
+    color: COLORS.textMain,
+  },
+  detailHeroAction: {
+    fontFamily: Fonts.serif,
+    fontSize: 22,
+    color: COLORS.textSub,
+    fontStyle: 'italic',
+  },
+  detailHeroValue: {
+    fontFamily: Fonts.serif,
+    fontSize: 34,
+    fontWeight: '700',
+    color: COLORS.primary,
+    marginTop: 4,
+    letterSpacing: -1,
+  },
+  detailHeroSub: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: COLORS.textSub,
+    marginTop: 6,
+  },
+  detailStatsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+  },
+  detailStatCard: {
+    flex: 1,
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    backgroundColor: '#F8FAFB',
+    borderWidth: 1,
+    borderColor: '#EEF2F6',
+    padding: 12,
+    gap: 4,
+  },
+  detailStatLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.textSub,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  detailStatValue: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: COLORS.textMain,
+    fontVariant: ['tabular-nums'],
+  },
+  detailScheduleScroll: {
+    maxHeight: 260,
+    marginBottom: 12,
   },
   modalCard: {
     backgroundColor: '#FFF',
@@ -822,7 +1860,17 @@ const styles = StyleSheet.create({
     borderColor: '#F1F3F5',
   },
   sessionRunCard: { backgroundColor: '#FFFAFA', borderColor: '#FFE5E5' },
-  sessionRecCard: { backgroundColor: '#F9FFFA', borderColor: '#E5FFE5' },
+  sessionRecCard: { backgroundColor: '#FFFAFA', borderColor: '#FFE5E5' },
+  sessionCardIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primaryFade,
+    marginRight: 10,
+  },
   sessionCardHeader: { flex: 1 },
   sessionDay: { fontSize: 9, fontWeight: '800', color: COLORS.textSub, marginBottom: 2 },
   sessionType: { fontSize: 15, fontWeight: '800', color: COLORS.textMain },
@@ -850,7 +1898,87 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   expectedWeightLabel: { fontSize: 10, fontWeight: '800', color: COLORS.textSub },
-  expectedWeightValue: { fontSize: 22, fontWeight: '900', color: COLORS.success },
+  expectedWeightValue: { fontSize: 22, fontWeight: '900', color: COLORS.primary },
+  detailLogWeightBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: COLORS.primary,
+    borderRadius: 18,
+    paddingVertical: 14,
+    marginBottom: 10,
+  },
+  detailLogWeightBtnText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  weightModalRoot: {
+    flex: 1,
+  },
+  weightModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  weightModalCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 28,
+    paddingHorizontal: 22,
+    paddingTop: 12,
+    paddingBottom: 22,
+  },
+  weightModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  weightModalEyebrow: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: COLORS.primary,
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  weightModalTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: COLORS.textMain,
+  },
+  weightEntryArea: {
+    alignItems: 'center',
+    paddingVertical: 28,
+  },
+  bigWeightInput: {
+    fontSize: 56,
+    fontWeight: '900',
+    color: COLORS.textMain,
+    minWidth: 120,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  weightUnitLabel: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.textSub,
+    marginTop: 4,
+  },
+  weightSaveBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    borderRadius: 18,
+    paddingVertical: 16,
+    minHeight: 52,
+  },
+  weightSaveBtnText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
 
   regenerateBtn: {
     flexDirection: 'row',
@@ -884,10 +2012,9 @@ const styles = StyleSheet.create({
   },
   topActionsRow: {
     flexDirection: 'row',
-    gap: 10,
     marginBottom: 14,
   },
-  topActionBtn: {
+  editPlanBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -896,7 +2023,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#F1F3F5',
     paddingVertical: 14,
-    paddingHorizontal: 8,
+    paddingHorizontal: 16,
     borderRadius: 20,
     gap: 8,
     shadowColor: '#000',
@@ -905,8 +2032,8 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 3,
   },
-  topActionText: {
-    fontSize: 13,
+  editPlanBtnText: {
+    fontSize: 14,
     fontWeight: '800',
     color: COLORS.textMain,
     letterSpacing: 0.2,
@@ -1054,23 +2181,109 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   secondaryActionBtn: {
-    flexDirection: 'row',
+    backgroundColor: '#FFF',
+    borderWidth: 1.5,
+    borderColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFF5F5',
-    borderWidth: 1,
-    borderColor: '#FFD9D9',
-    paddingVertical: 16,
-    borderRadius: 18,
-    gap: 10,
+    marginBottom: 10,
   },
-  secondaryActionText: {
+  secondaryActionBtnText: {
     color: COLORS.primary,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
   },
   disabledPrimaryBtn: {
-    opacity: 0.5,
+    opacity: 0.45,
+  },
+  editPlanModalCard: {
+    backgroundColor: '#FFF',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 24,
+    maxHeight: '92%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  editPlanScrollContent: {
+    paddingBottom: 12,
+  },
+  editPlanIntro: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: COLORS.textSub,
+    marginBottom: 16,
+  },
+  editPlanSectionTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: COLORS.textMain,
+    marginBottom: 4,
+  },
+  editPlanSectionHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    color: COLORS.textSub,
+    marginBottom: 12,
+  },
+  editPlanSectionTitleSpaced: {
+    marginTop: 4,
+  },
+  editPlanDivider: {
+    height: 1,
+    backgroundColor: '#ECECEC',
+    marginVertical: 20,
+  },
+  feelOptionStack: {
+    gap: 10,
+    marginBottom: 20,
+  },
+  feelOptionCard: {
+    borderWidth: 1.5,
+    borderColor: '#EAEAEA',
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: '#FAFAFA',
+  },
+  feelOptionCardActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primaryFade,
+  },
+  feelOptionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.textMain,
+    marginBottom: 4,
+  },
+  feelOptionTitleActive: {
+    color: COLORS.primary,
+  },
+  feelOptionDescription: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: COLORS.textSub,
+  },
+  feelOptionDescriptionActive: {
+    color: COLORS.textMain,
+  },
+  applyHelperText: {
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: COLORS.textSub,
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 8,
   },
   scheduleModalCard: {
     backgroundColor: '#FFF',
@@ -1094,7 +2307,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginBottom: 24,
+    marginBottom: 8,
   },
   scheduleDayChip: {
     width: '22%',

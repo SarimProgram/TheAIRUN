@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import prisma from '../db/prisma';
 import { tokenService } from '../lib/tokens';
+import { linkPendingPartnerInvitesForUser } from '../services/partnerInvites';
 import { env } from '../config/env';
 import { presentUser } from './presenters';
 
@@ -175,6 +176,8 @@ router.post('/register', async (req, res, next) => {
       },
     });
 
+    await linkPendingPartnerInvitesForUser(user.id, user.email);
+
     const accessToken = tokenService.signAccessToken(user);
     const refreshToken = tokenService.signRefreshToken(user);
 
@@ -203,6 +206,8 @@ router.post('/login', async (req, res, next) => {
     if (!valid) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+
+    await linkPendingPartnerInvitesForUser(user.id, user.email);
 
     const accessToken = tokenService.signAccessToken(user);
     const refreshToken = tokenService.signRefreshToken(user);
@@ -275,6 +280,8 @@ router.post('/social', async (req, res, next) => {
         });
       }
     }
+
+    await linkPendingPartnerInvitesForUser(user.id, user.email);
 
     const accessToken = tokenService.signAccessToken(user);
     const refreshToken = tokenService.signRefreshToken(user);

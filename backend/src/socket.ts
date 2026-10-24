@@ -26,6 +26,23 @@ function getRacePairKey(a: string, b: string): string {
     return [a, b].sort().join(':');
 }
 
+async function emitPendingRaceInvite(socket: Socket, userId: string): Promise<void> {
+    const invite = await prisma.raceInvite.findFirst({
+        where: { toUserId: userId, status: 'PENDING' },
+        orderBy: { createdAt: 'desc' },
+        include: { fromUser: { select: { displayName: true } } },
+    });
+
+    if (invite) {
+        socket.emit('race:invited', {
+            inviteId: invite.id,
+            fromUserId: invite.fromUserId,
+            fromName: invite.fromUser.displayName,
+            distance: invite.distanceM,
+        });
+    }
+}
+
 async function hasBlockRelationship(userId: string, otherUserId: string): Promise<boolean> {
     const block = await prisma.userBlock.findFirst({
         where: {
@@ -165,6 +182,9 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                     console.log(`[Socket] Sent partnerInfo: ${user.partner.displayName} has ${partnerSteps?.steps ?? 0} steps`);
                 }
             }
+
+            // Re-deliver a pending challenge after an offline app open/reconnect.
+            await emitPendingRaceInvite(socket, userId);
         } catch (err) {
             console.error(`[Socket] Error setting up user ${userId}:`, err);
         }
@@ -182,6 +202,14 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
         // ============================================
         // RACE EVENTS
         // ============================================
+
+        socket.on('race:getPendingInvite', async () => {
+            try {
+                await emitPendingRaceInvite(socket, userId);
+            } catch (err) {
+                console.error('[Race] Pending invite lookup error:', err);
+            }
+        });
 
         /**
          * race:invite - User invites partner to race
@@ -206,23 +234,49 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                     return;
                 }
 
+                const distance = Math.round(Number(data.distance));
+                if (!Number.isFinite(distance) || distance < 100 || distance > 100000) {
+                    socket.emit('race:error', { message: 'Invalid race distance' });
+                    return;
+                }
+
+                // Supersede older unanswered challenges between this pair.
+                await prisma.raceInvite.updateMany({
+                    where: {
+                        status: 'PENDING',
+                        OR: [
+                            { fromUserId: userId, toUserId: user.partnerId },
+                            { fromUserId: user.partnerId, toUserId: userId },
+                        ],
+                    },
+                    data: { status: 'CANCELLED' },
+                });
+                const invite = await prisma.raceInvite.create({
+                    data: {
+                        fromUserId: userId,
+                        toUserId: user.partnerId,
+                        distanceM: distance,
+                    },
+                });
+
                 // Send invite to partner with proposed distance
                 io.to(`user:${user.partnerId}`).emit('race:invited', {
+                    inviteId: invite.id,
                     fromUserId: userId,
                     fromName: user.displayName,
-                    distance: data.distance
+                    distance
                 });
 
                 sendRaceInvitePush({
                     toUserId: user.partnerId,
                     fromUserId: userId,
                     fromName: user.displayName,
-                    distance: data.distance,
+                    distance,
                 }).catch((pushErr) => {
                     console.error('[Race] Invite push error:', pushErr);
                 });
 
-                console.log(`[Race] ${userId} invited partner ${user.partnerId} for ${data.distance}m`);
+                console.log(`[Race] ${userId} invited partner ${user.partnerId} for ${distance}m`);
             } catch (err) {
                 console.error('[Race] Invite error:', err);
                 socket.emit('race:error', { message: 'Failed to send invite' });
@@ -233,7 +287,7 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
          * race:accept - Partner accepts the race invite
          * This triggers the countdown and race start
          */
-        socket.on('race:accept', async (data: { initiatorId: string; distance: number }) => {
+        socket.on('race:accept', async (data: { inviteId?: string; initiatorId: string; distance: number }) => {
             try {
                 const user = await prisma.user.findUnique({
                     where: { id: userId },
@@ -248,7 +302,25 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                     }
                 });
 
-                if (!user?.partnerId) return;
+                if (!user?.partnerId || user.partnerId !== data.initiatorId) return;
+
+                const pendingInvite = await prisma.raceInvite.findFirst({
+                    where: {
+                        ...(data.inviteId ? { id: data.inviteId } : {}),
+                        fromUserId: data.initiatorId,
+                        toUserId: userId,
+                        status: 'PENDING',
+                    },
+                    orderBy: { createdAt: 'desc' },
+                });
+                if (!pendingInvite) {
+                    socket.emit('race:error', { message: 'This race invite is no longer available' });
+                    return;
+                }
+                await prisma.raceInvite.update({
+                    where: { id: pendingInvite.id },
+                    data: { status: 'ACCEPTED' },
+                });
 
                 // Notify both users that invite was accepted
                 io.to(`user:${data.initiatorId}`).emit('race:accepted', {
@@ -264,15 +336,15 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                     toUserId: data.initiatorId,
                     actorName: user.displayName,
                     updateType: 'accepted',
-                    distance: data.distance,
+                    distance: pendingInvite.distanceM,
                 }).catch((pushErr) => {
                     console.error('[Race] Accept push error:', pushErr);
                 });
 
-                console.log(`[Race] ${userId} accepted race from ${data.initiatorId} - starting countdown for ${data.distance}m`);
+                console.log(`[Race] ${userId} accepted race from ${data.initiatorId} - starting countdown for ${pendingInvite.distanceM}m`);
 
                 // Start countdown immediately after acceptance
-                const distance = data.distance;
+                const distance = pendingInvite.distanceM;
                 const pairKey = getRacePairKey(userId, data.initiatorId);
                 activeRaceSessions.set(pairKey, {
                     userAId: pairKey.split(':')[0],
@@ -318,7 +390,16 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
         /**
          * race:decline - Partner declines the race invite
          */
-        socket.on('race:decline', async (data: { initiatorId: string }) => {
+        socket.on('race:decline', async (data: { inviteId?: string; initiatorId: string }) => {
+            await prisma.raceInvite.updateMany({
+                where: {
+                    ...(data.inviteId ? { id: data.inviteId } : {}),
+                    fromUserId: data.initiatorId,
+                    toUserId: userId,
+                    status: 'PENDING',
+                },
+                data: { status: 'DECLINED' },
+            });
             io.to(`user:${data.initiatorId}`).emit('race:declined', {
                 declinedBy: userId
             });
@@ -478,6 +559,14 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                 });
 
                 if (!user?.partnerId) return;
+                await prisma.raceInvite.updateMany({
+                    where: {
+                        fromUserId: userId,
+                        toUserId: user.partnerId,
+                        status: 'PENDING',
+                    },
+                    data: { status: 'CANCELLED' },
+                });
                 activeRaceSessions.delete(getRacePairKey(userId, user.partnerId));
 
                 io.to(`user:${userId}`).emit('race:cancelled', { cancelledBy: userId });
@@ -543,6 +632,7 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                     toUserId: user.partnerId,
                     content: message.content,
                     createdAt: message.createdAt.toISOString(),
+                    viewedAt: message.viewedAt?.toISOString(),
                 };
 
                 // Send to partner in real-time
@@ -575,6 +665,42 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
             }
         });
 
+        socket.on('chat:viewed', async (data: { messageIds?: string[] }) => {
+            try {
+                const messageIds = Array.from(new Set(data.messageIds || [])).slice(0, 50);
+                if (messageIds.length === 0) return;
+
+                const viewedAt = new Date();
+                await prisma.chatMessage.updateMany({
+                    where: {
+                        id: { in: messageIds },
+                        toUserId: userId,
+                        viewedAt: null,
+                    },
+                    data: { viewedAt },
+                });
+
+                const viewedMessages = await prisma.chatMessage.findMany({
+                    where: { id: { in: messageIds }, toUserId: userId, viewedAt: { not: null } },
+                    select: { id: true, fromUserId: true, viewedAt: true },
+                });
+
+                const receipt = {
+                    messages: viewedMessages.map((message) => ({
+                        id: message.id,
+                        viewedAt: message.viewedAt!.toISOString(),
+                    })),
+                };
+
+                io.to(`user:${userId}`).emit('chat:viewed', receipt);
+                for (const senderId of new Set(viewedMessages.map((message) => message.fromUserId))) {
+                    io.to(`user:${senderId}`).emit('chat:viewed', receipt);
+                }
+            } catch (err) {
+                console.error('[Chat] Viewed receipt error:', err);
+            }
+        });
+
         /**
          * chat:history - Load recent chat messages between user and partner
          * Returns messages from the last 60 seconds
@@ -600,7 +726,14 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
 
                 const messages = await prisma.chatMessage.findMany({
                     where: {
-                        createdAt: { gte: sixtySecondsAgo },
+                        AND: [
+                            {
+                                OR: [
+                                    { viewedAt: null },
+                                    { viewedAt: { gte: sixtySecondsAgo } },
+                                ],
+                            },
+                        ],
                         OR: [
                             { fromUserId: userId, toUserId: user.partnerId },
                             { fromUserId: user.partnerId, toUserId: userId },
@@ -621,6 +754,7 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
                         toUserId: m.toUserId,
                         content: m.content,
                         createdAt: m.createdAt.toISOString(),
+                        viewedAt: m.viewedAt?.toISOString(),
                     }))
                 });
 
