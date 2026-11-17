@@ -8,6 +8,10 @@ export type PlanDurationInput = {
     weightKg: number;
     targetWeightKg?: number | null;
     weightToLoseKg?: number | null;
+    heightCm?: number | null;
+    ageYears?: number | null;
+    gender?: string | null;
+    dailyCalorieTarget?: number | null;
 };
 
 export type PlanDurationResult = {
@@ -21,6 +25,13 @@ export const MAX_SAFE_WEEKLY_LOSS_KG = 1.5;
 export const MIN_DAILY_FOOD_CALORIES = 1400;
 export const MAX_DAILY_CALORIE_DEFICIT = 1000;
 export const KCAL_PER_KG_FAT = 7700;
+// Baseline maintenance, without a training/activity-level multiplier.
+// Tracked steps and workouts are credited separately by the daily energy balance.
+export const BASE_MAINTENANCE_MULTIPLIER = 1.2;
+
+export function estimateBaseMaintenanceKcal(input: Parameters<typeof estimateBmrKcal>[0]): number {
+    return Math.max(MIN_DAILY_FOOD_CALORIES, Math.round(estimateBmrKcal(input) * BASE_MAINTENANCE_MULTIPLIER));
+}
 
 function roundToOneDecimal(value: number): number {
     return Number(value.toFixed(1));
@@ -101,33 +112,32 @@ export function computeDailyFoodCalorieTarget(input: {
         input.dailyCalorieTarget > 0 &&
         (!input.heightCm || !input.ageYears)
     ) {
-        return Math.round(input.dailyCalorieTarget);
+        return Math.max(MIN_DAILY_FOOD_CALORIES, Math.round(input.dailyCalorieTarget));
     }
 
     if (!input.heightCm || !input.ageYears) {
         return Math.max(MIN_DAILY_FOOD_CALORIES, Math.round(input.dailyCalorieTarget ?? 2000));
     }
 
-    const tdee = estimateTdeeKcal({
+    const maintenance = estimateBaseMaintenanceKcal({
         weightKg: input.weightKg,
         heightCm: input.heightCm,
         ageYears: input.ageYears,
         gender: input.gender,
-        intensityLevel: input.intensityLevel,
     });
     const weeklyLossKg = input.targetWeeklyLossKg ?? 0.5;
     const dailyDeficit = Math.min(
         MAX_DAILY_CALORIE_DEFICIT,
-        (weeklyLossKg * KCAL_PER_KG_FAT) / 7
+        (Math.max(0, weeklyLossKg) * KCAL_PER_KG_FAT) / 7
     );
 
-    const paceBasedTarget = Math.max(MIN_DAILY_FOOD_CALORIES, Math.round(tdee - dailyDeficit));
+    const paceBasedTarget = Math.max(MIN_DAILY_FOOD_CALORIES, Math.round(maintenance - dailyDeficit));
     if (
         input.dailyCalorieTarget !== null &&
         input.dailyCalorieTarget !== undefined &&
         input.dailyCalorieTarget > 0
     ) {
-        return Math.min(Math.round(input.dailyCalorieTarget), paceBasedTarget);
+        return Math.max(MIN_DAILY_FOOD_CALORIES, Math.min(Math.round(input.dailyCalorieTarget), paceBasedTarget));
     }
 
     return paceBasedTarget;
@@ -150,28 +160,68 @@ export function computeDailyFoodCaloriesByWeek(input: {
     }
 
     const lossWeeks = Math.max(1, Math.min(input.targetDeadlineWeeks ?? input.numberOfWeeks, input.numberOfWeeks));
-    const lossPhaseCalories = computeDailyFoodCalorieTarget({
-        weightKg: input.startWeightKg,
-        heightCm: input.heightCm,
-        ageYears: input.ageYears,
-        gender: input.gender,
-        intensityLevel: input.intensityLevel,
-        dailyCalorieTarget: input.dailyCalorieTarget,
-        targetWeeklyLossKg: input.targetWeeklyLossKg,
-    });
-    const maintenanceWeightKg = input.targetWeightKg ?? input.startWeightKg;
-    const maintenanceCalories = estimateTdeeKcal({
-        weightKg: maintenanceWeightKg,
-        heightCm: input.heightCm,
-        ageYears: input.ageYears,
-        gender: input.gender,
-        intensityLevel: input.intensityLevel,
-    });
-
+    let projectedWeightKg = input.startWeightKg;
     return Array.from({ length: input.numberOfWeeks }, (_, index) => {
-        const week = index + 1;
-        return week > lossWeeks ? maintenanceCalories : lossPhaseCalories;
+        const week = computeBaseFoodWeek({
+            weightKg: projectedWeightKg,
+            targetWeightKg: input.targetWeightKg,
+            heightCm: input.heightCm!,
+            ageYears: input.ageYears,
+            gender: input.gender,
+            dailyCalorieTarget: input.dailyCalorieTarget,
+            targetWeeklyLossKg: input.targetWeeklyLossKg ?? 0.5,
+            maintenance: index >= lossWeeks,
+        });
+        projectedWeightKg = week.endWeightKg;
+        return week.calories;
     });
+}
+
+// Duration and weekly generation must use the same changing weight, rounding,
+// calorie floor, and deficit cap, otherwise their forecasts can disagree.
+function computeBaseFoodWeek(input: {
+    weightKg: number;
+    targetWeightKg: number | null;
+    heightCm: number;
+    ageYears: number;
+    gender?: string | null;
+    dailyCalorieTarget?: number | null;
+    targetWeeklyLossKg: number;
+    maintenance?: boolean;
+}) {
+    const remainingLossKg = input.targetWeightKg == null ? Infinity : Math.max(0, input.weightKg - input.targetWeightKg);
+    const isMaintenance = input.maintenance || remainingLossKg === 0;
+    const maintenanceCalories = estimateBaseMaintenanceKcal(input);
+    const calories = isMaintenance ? maintenanceCalories : computeDailyFoodCalorieTarget({
+        ...input,
+        targetWeeklyLossKg: Math.min(input.targetWeeklyLossKg, remainingLossKg),
+    });
+    const lossKg = Math.max(0, (maintenanceCalories - calories) * 7 / KCAL_PER_KG_FAT);
+    return {
+        calories,
+        endWeightKg: Math.max(Math.min(input.targetWeightKg ?? 0, input.weightKg), input.weightKg - lossKg),
+    };
+}
+
+function estimateAchievableLossWeeks(input: PlanDurationInput, targetWeightKg: number, weeklyLossKg: number): number {
+    let weightKg = input.weightKg;
+    // Bound the calculation so an unreachable target cannot cause an endless loop.
+    for (let week = 1; week <= 520; week++) {
+        const next = computeBaseFoodWeek({
+            weightKg,
+            targetWeightKg,
+            heightCm: input.heightCm!,
+            ageYears: input.ageYears!,
+            gender: input.gender,
+            dailyCalorieTarget: input.dailyCalorieTarget,
+            targetWeeklyLossKg: weeklyLossKg,
+        });
+        // Forecasts and target weights are displayed to one decimal place.
+        if (roundToOneDecimal(next.endWeightKg) <= roundToOneDecimal(targetWeightKg)) return week;
+        if (next.endWeightKg >= weightKg) break;
+        weightKg = next.endWeightKg;
+    }
+    throw Object.assign(new Error('This goal cannot be reached within the supported timeline while keeping the calorie safeguards. Please choose a different target.'), { status: 400 });
 }
 
 export function usesSpecificTargetDate(input: {
@@ -247,7 +297,10 @@ export function resolvePlanDuration(input: PlanDurationInput, now = new Date()):
             SPECIFIC_DATE: 0.5,
         };
         plannedWeeklyLossKg = weeklyLossByHorizon[input.timeHorizon || "STANDARD"] ?? 0.5;
-        numberOfWeeks = Math.max(minWeeks, Math.ceil(derivedWeightToLoseKg / plannedWeeklyLossKg));
+        const achievableWeeks = input.heightCm && input.ageYears
+            ? estimateAchievableLossWeeks(input, input.targetWeightKg ?? input.weightKg - derivedWeightToLoseKg, plannedWeeklyLossKg)
+            : Math.ceil(derivedWeightToLoseKg / plannedWeeklyLossKg);
+        numberOfWeeks = Math.max(minWeeks, achievableWeeks);
     } else if (input.timeHorizon) {
         const horizonWeeks: Record<string, number> = {
             RELAXED: isRunningOnlyPlan ? minWeeks + 4 : 12,
@@ -255,6 +308,20 @@ export function resolvePlanDuration(input: PlanDurationInput, now = new Date()):
             AGGRESSIVE: isRunningOnlyPlan ? minWeeks : 6,
         };
         numberOfWeeks = Math.max(minWeeks, horizonWeeks[input.timeHorizon] || minWeeks);
+    }
+
+    // A chosen calendar deadline must not silently promise an infeasible result.
+    // Flexible pace goals extend automatically; explicit dates need a later date.
+    if (!isRunningOnlyPlan && targetDeadlineWeeks !== null && derivedWeightToLoseKg !== null &&
+        derivedWeightToLoseKg > 0 && input.heightCm && input.ageYears) {
+        const achievableWeeks = estimateAchievableLossWeeks(
+            input,
+            input.targetWeightKg ?? input.weightKg - derivedWeightToLoseKg,
+            derivedWeightToLoseKg / targetDeadlineWeeks,
+        );
+        if (achievableWeeks > targetDeadlineWeeks) {
+            throw Object.assign(new Error(`The selected target date is too soon for the calorie safeguards. Allow at least ${achievableWeeks} weeks or choose a closer target weight.`), { status: 400 });
+        }
     }
 
     return { numberOfWeeks, targetDeadlineWeeks, derivedWeightToLoseKg, plannedWeeklyLossKg };

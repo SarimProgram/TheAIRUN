@@ -1,42 +1,28 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Animated,
-  Dimensions,
-  Platform,
-  SafeAreaView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-  ScrollView,
-} from 'react-native';
-import { Image } from 'expo-image';
-import {
-  ChevronLeft,
-  ChevronRight,
-  Check,
-  Scale,
-  Activity,
-  Target,
-  ClipboardList,
-} from 'lucide-react-native';
+import { StyleSheet, View } from 'react-native';
+import Animated, {
+  Easing,
+  Extrapolation,
+  FadeIn,
+  FadeOut,
+  cancelAnimation,
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming,
+  type SharedValue,
+} from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
+import { Image, type ImageSource } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { getGenderMascotSource } from '../../utils/genderMascot';
+import { Check } from 'lucide-react-native';
+import { C, EASE_OUT, OnboardingScreen, ScreenTitle, pop, rise, useCompact } from './OnboardingKit';
 import Phase19PlanSummary from './Phase19PlanSummary';
-
-const { height: windowHeight } = Dimensions.get('window');
-const screenHeight = Math.min(windowHeight, 800);
-
-const COLORS = {
-  coral: '#FF6B6B',
-  coralDark: '#EE5253',
-  coralLight: '#FFF5F5',
-  white: '#FFFFFF',
-  black: '#1F2937',
-  muted: '#6B7280',
-};
 
 type WeeklyPlanRow = {
   Week?: number;
@@ -48,8 +34,17 @@ type Insight = {
   id: string;
   label: string;
   value: string;
-  icon: typeof Scale;
+  art: ImageSource;
 };
+
+const ART = {
+  weight: require('../../assets/plan/plan-weight.png'),
+  bmi: require('../../assets/plan/plan-bmi.png'),
+  goal: require('../../assets/plan/plan-goal.png'),
+  plan: require('../../assets/plan/plan-calendar.png'),
+};
+
+type StepState = 'done' | 'active' | 'pending';
 
 type Props = {
   onGeneratePlan: () => Promise<WeeklyPlanRow[]>;
@@ -68,9 +63,18 @@ type Props = {
   devView?: 'setup' | 'summary' | 'auto';
 };
 
-const MANDATORY_STEP_MS = 1600;
-const HOLDING_PROGRESS_PERCENT = 99;
-const COMPLETION_PROGRESS_PERCENT = 100;
+const STEP_MS = 1600;
+const FILL_EASING = Easing.bezier(0.45, 0, 0.25, 1);
+const HOLD_FRACTION = 0.9;
+const CREEP_FRACTION = 0.97;
+const CREEP_MS = 9000;
+const FINISH_MS = 320;
+const REVEAL_PAUSE_MS = 520;
+const SLIDE_SPRING = { duration: 720, dampingRatio: 0.82 };
+const CARD_GRADIENT = ['#FFFFFF', '#FFF8F7', '#FFEDEC'] as const;
+const CARD_RADIUS = 30;
+const VEIL = '#FFF9F8';
+const SUBTLE_INK = 'rgba(8, 36, 55, 0.5)';
 
 const waitMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -118,7 +122,6 @@ export default function Phase18PlanSetup({
   height: userHeight,
   heightUnit,
   targetWeight,
-  gender,
   mainGoal,
   planData,
   availableDays,
@@ -130,20 +133,20 @@ export default function Phase18PlanSetup({
   const hasInitialPlan =
     !forceSetup &&
     (forceSummary || (devView === 'auto' && Array.isArray(initialWeeklyPlan) && initialWeeklyPlan.length > 0));
-  const isCompact = screenHeight < 820;
+  const compact = useCompact();
+  const reduced = useReducedMotion();
   const [activeStep, setActiveStep] = useState(0);
-  const [isDone, setIsDone] = useState(hasInitialPlan);
   const [awaitingPlan, setAwaitingPlan] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progressPercent, setProgressPercent] = useState(hasInitialPlan ? 100 : 0);
   const [generatedPlan, setGeneratedPlan] = useState<WeeklyPlanRow[] | null>(
     hasInitialPlan ? (initialWeeklyPlan ?? []) : null,
   );
   const [showSummary, setShowSummary] = useState(hasInitialPlan || forceSummary);
 
-  const mascotScale = useRef(new Animated.Value(1)).current;
-  const progressWidth = useRef(new Animated.Value(0)).current;
+  const progress = useSharedValue(0);
+  const slide = useSharedValue(0);
   const hasStartedRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const insights = useMemo<Insight[]>(() => {
     const weightVal = `${currentWeight} ${weightUnit}`;
@@ -154,105 +157,90 @@ export default function Phase18PlanSetup({
       weightKg !== null && heightMeters !== null
         ? weightKg / (heightMeters * heightMeters)
         : null;
-    const bmiVal = bmi ? `${bmi.toFixed(1)} · ${classifyBmi(bmi)}` : 'Not enough info';
 
     return [
-      { id: '1', label: 'Your weight', value: weightVal, icon: Scale },
-      { id: '2', label: 'Your BMI', value: bmiVal, icon: Activity },
-      { id: '3', label: 'Your goal', value: targetVal, icon: Target },
-      { id: '4', label: 'Your plan', value: 'Ready to go', icon: ClipboardList },
+      { id: '1', label: 'Your weight', value: weightVal, art: ART.weight },
+      {
+        id: '2',
+        label: 'Your BMI',
+        value: bmi ? `${bmi.toFixed(1)} · ${classifyBmi(bmi)}` : 'Not enough info',
+        art: ART.bmi,
+      },
+      { id: '3', label: 'Your goal', value: targetVal, art: ART.goal },
+      { id: '4', label: 'Your plan', value: 'Ready to go', art: ART.plan },
     ];
   }, [currentWeight, weightUnit, targetWeight, userHeight, heightUnit]);
 
-  const mascotSource = useMemo(() => getGenderMascotSource(gender), [gender]);
+  const lastIndex = insights.length - 1;
+  const isReady = activeStep > lastIndex;
 
   useEffect(() => {
-    if (hasInitialPlan || forceSummary || hasStartedRef.current) return;
-    hasStartedRef.current = true;
-
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(mascotScale, { toValue: 1.04, duration: 1600, useNativeDriver: true }),
-        Animated.timing(mascotScale, { toValue: 1, duration: 1600, useNativeDriver: true }),
-      ]),
-    ).start();
-
-    startProcess();
+    mountedRef.current = true;
+    if (!hasInitialPlan && !forceSummary && !hasStartedRef.current) {
+      hasStartedRef.current = true;
+      startProcess();
+    }
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
-    const listenerId = progressWidth.addListener(({ value }) => {
-      setProgressPercent(Math.round(value));
-    });
+    const target = Math.min(activeStep, lastIndex);
+    slide.set(reduced ? withTiming(target, { duration: 200, easing: EASE_OUT }) : withSpring(target, SLIDE_SPRING));
+  }, [activeStep, lastIndex, reduced, slide]);
 
-    return () => {
-      progressWidth.removeListener(listenerId);
-    };
-  }, [progressWidth]);
-
-  const animateProgressTo = (value: number, duration: number) =>
-    new Promise<void>((resolve) => {
-      Animated.timing(progressWidth, {
-        toValue: value,
-        duration,
-        useNativeDriver: false,
-      }).start(() => resolve());
-    });
+  const fillTo = (value: number, duration: number, easing = FILL_EASING) => {
+    progress.set(withTiming(value, { duration, easing }));
+    return waitMs(duration);
+  };
 
   const startProcess = async () => {
     setError(null);
-    setIsDone(false);
     setAwaitingPlan(false);
     setActiveStep(0);
-    progressWidth.setValue(0);
+    cancelAnimation(progress);
+    progress.set(0);
 
     try {
       const planPromise = onGeneratePlan();
-      const perStepProgress = HOLDING_PROGRESS_PERCENT / insights.length;
+      planPromise.catch(() => undefined);
 
-      for (let i = 0; i < insights.length; i++) {
-        setActiveStep(i);
-        const targetProgress =
-          i === insights.length - 1
-            ? HOLDING_PROGRESS_PERCENT
-            : Math.round((i + 1) * perStepProgress);
-        await Promise.all([
-          animateProgressTo(targetProgress, MANDATORY_STEP_MS),
-          waitMs(MANDATORY_STEP_MS),
-        ]);
+      for (let i = 0; i < lastIndex; i++) {
+        await fillTo(i + 1, STEP_MS);
+        if (!mountedRef.current) return;
+        Haptics.selectionAsync().catch(() => {});
+        setActiveStep(i + 1);
       }
 
+      await fillTo(lastIndex + HOLD_FRACTION, STEP_MS);
+      if (!mountedRef.current) return;
       setAwaitingPlan(true);
+      progress.set(withTiming(lastIndex + CREEP_FRACTION, { duration: CREEP_MS, easing: EASE_OUT }));
+
       const plan = await planPromise;
+      if (!mountedRef.current) return;
       if (!Array.isArray(plan) || plan.length === 0) {
         throw new Error('Your plan came back empty. Please try again.');
       }
+
       setAwaitingPlan(false);
-      await animateProgressTo(COMPLETION_PROGRESS_PERCENT, 300);
+      await fillTo(insights.length, FINISH_MS, EASE_OUT);
+      if (!mountedRef.current) return;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setActiveStep(insights.length);
-      setIsDone(true);
+
+      await waitMs(REVEAL_PAUSE_MS);
+      if (!mountedRef.current) return;
       setGeneratedPlan(plan);
       setShowSummary(true);
     } catch (err: any) {
+      if (!mountedRef.current) return;
+      cancelAnimation(progress);
       setAwaitingPlan(false);
       setError(err?.message || 'Something went wrong. Please try again.');
     }
   };
-
-  const title = error
-    ? 'That didn\'t work'
-    : isDone
-      ? 'Your plan is ready'
-      : awaitingPlan
-        ? 'Almost there'
-        : 'Building your plan';
-  const subtitle = error
-    ? 'Tap below to try again.'
-    : isDone
-      ? 'Here is your personalized roadmap.'
-      : awaitingPlan
-        ? 'Finishing up your plan.'
-        : 'This only takes a moment.';
 
   if (showSummary && generatedPlan) {
     return (
@@ -270,380 +258,316 @@ export default function Phase18PlanSetup({
     );
   }
 
+  const [lead, accent, trail] = error
+    ? ['Something went ', 'wrong', '']
+    : isReady
+      ? ['Your plan is ', 'ready', '']
+      : awaitingPlan
+        ? ['Almost ', 'there', '']
+        : ['Building your ', 'plan', '…'];
+
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-      <LinearGradient
-        colors={['#FFFFFF', '#FDFCFB', '#FEF9F9']}
-        style={StyleSheet.absoluteFill}
-      />
+    <OnboardingScreen onBack={onBack} scrollable ctaLabel={error ? 'Try again' : undefined} onCta={startProcess}>
+      <Animated.Text entering={rise(40)} style={[styles.eyebrow, { marginTop: compact ? 8 : 20 }]}>
+        YOUR PLAN
+      </Animated.Text>
 
-      <SafeAreaView style={styles.flex}>
-        <View style={styles.content}>
-          <View style={styles.topNav}>
-            <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
-              <ChevronLeft color={COLORS.black} size={22} />
-            </TouchableOpacity>
+      <View style={[styles.titleSlot, { height: compact ? 46 : 54 }]}>
+        <Animated.View key={lead + accent} exiting={FadeOut.duration(160)} style={StyleSheet.absoluteFill}>
+          <ScreenTitle lead={lead} accent={accent} trail={trail} delay={80} style={styles.title} />
+        </Animated.View>
+      </View>
+
+      {error && (
+        <Animated.Text entering={rise(0)} style={styles.error}>
+          {error}
+        </Animated.Text>
+      )}
+
+      <CardDeck insights={insights} slide={slide} compact={compact} reduced={reduced} />
+
+      <View style={[styles.timeline, { marginTop: compact ? 8 : 20 }]}>
+        {insights.map((item, index) => (
+          <TimelineRow
+            key={item.id}
+            item={item}
+            index={index}
+            state={activeStep > index ? 'done' : activeStep === index ? 'active' : 'pending'}
+            last={index === lastIndex}
+            progress={progress}
+            halted={!!error || reduced}
+            compact={compact}
+          />
+        ))}
+      </View>
+    </OnboardingScreen>
+  );
+}
+
+function CardDeck({ insights, slide, compact, reduced }: {
+  insights: Insight[];
+  slide: SharedValue<number>;
+  compact: boolean;
+  reduced: boolean;
+}) {
+  const cardWidth = compact ? 128 : 150;
+  const cardHeight = Math.round(cardWidth * 1.26);
+  const pedestalWidth = cardWidth * 2.1;
+  const float = useSharedValue(0);
+
+  useEffect(() => {
+    if (reduced) return;
+    const easing = Easing.inOut(Easing.sin);
+    float.set(withRepeat(withSequence(
+      withTiming(1, { duration: 1800, easing }),
+      withTiming(0, { duration: 1800, easing }),
+    ), -1));
+    return () => cancelAnimation(float);
+  }, [reduced, float]);
+
+  const floatStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -8 * float.get() }] }));
+  const pedestalStyle = useAnimatedStyle(() => ({
+    opacity: 0.8 + 0.2 * (1 - float.get()),
+    transform: [{ scaleX: 1 - 0.03 * float.get() }],
+  }));
+
+  return (
+    <Animated.View
+      entering={rise(160)}
+      style={[styles.stage, { height: cardHeight + (compact ? 70 : 86), marginTop: compact ? 4 : 16 }]}
+      accessible={false}
+      importantForAccessibility="no-hide-descendants"
+    >
+      <View style={[styles.glow, { width: cardWidth * 1.6, height: cardWidth * 1.6, borderRadius: cardWidth }]} />
+      <Animated.View style={[styles.pedestal, { width: pedestalWidth, height: compact ? 38 : 44 }, pedestalStyle]}>
+        <View style={styles.pedestalRing} />
+      </Animated.View>
+      <Animated.View style={[styles.deck, { width: cardWidth, height: cardHeight, bottom: compact ? 30 : 34 }, floatStyle]}>
+        {insights.map((item, index) => (
+          <PlanCard key={item.id} item={item} index={index} slide={slide} width={cardWidth} />
+        ))}
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+function PlanCard({ item, index, slide, width }: {
+  item: Insight;
+  index: number;
+  slide: SharedValue<number>;
+  width: number;
+}) {
+  const cardStyle = useAnimatedStyle(() => {
+    const offset = index - slide.get();
+    const distance = Math.abs(offset);
+    return {
+      opacity: interpolate(offset, [-2, -1, 0, 1, 2], [0, 1, 1, 1, 0], Extrapolation.CLAMP),
+      zIndex: Math.round(10 - distance * 3),
+      transform: [
+        { translateX: interpolate(offset, [-2, -1, 0, 1, 2], [-width * 1.05, -width * 0.56, 0, width * 0.56, width * 1.05], Extrapolation.CLAMP) },
+        { translateY: interpolate(distance, [0, 1, 2], [0, 14, 26], Extrapolation.CLAMP) },
+        { rotate: `${interpolate(offset, [-2, -1, 0, 1, 2], [-18, -11, 0, 11, 18], Extrapolation.CLAMP)}deg` },
+        { scale: interpolate(distance, [0, 1, 2], [1, 0.82, 0.68], Extrapolation.CLAMP) },
+      ],
+    };
+  });
+
+  const artStyle = useAnimatedStyle(() => {
+    const distance = Math.abs(index - slide.get());
+    return {
+      transform: [
+        { translateY: interpolate(distance, [0, 1], [-4, 4], Extrapolation.CLAMP) },
+        { scale: interpolate(distance, [0, 1], [1, 0.86], Extrapolation.CLAMP) },
+      ],
+    };
+  });
+
+  const veilStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(Math.abs(index - slide.get()), [0, 1], [0, 0.55], Extrapolation.CLAMP),
+  }));
+
+  const artSize = Math.round(width * 0.66);
+
+  return (
+    <Animated.View style={[styles.card, cardStyle]}>
+      <LinearGradient colors={CARD_GRADIENT} start={{ x: 0.2, y: 0 }} end={{ x: 0.8, y: 1 }} style={styles.cardFace} />
+      <Animated.View style={artStyle}>
+        <Image source={item.art} style={{ width: artSize, height: artSize }} contentFit="contain" />
+      </Animated.View>
+      <Animated.View pointerEvents="none" style={[styles.veil, veilStyle]} />
+    </Animated.View>
+  );
+}
+
+function TimelineRow({ item, index, state, last, progress, halted, compact }: {
+  item: Insight;
+  index: number;
+  state: StepState;
+  last: boolean;
+  progress: SharedValue<number>;
+  halted: boolean;
+  compact: boolean;
+}) {
+  const labelStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(progress.get(), [index - 0.12, index], [C.muted, C.ink]),
+  }));
+  const barStyle = useAnimatedStyle(() => ({
+    width: `${interpolate(progress.get() - index, [0, 1], [0, 100], Extrapolation.CLAMP)}%`,
+  }));
+  const connectorStyle = useAnimatedStyle(() => ({
+    height: `${interpolate(progress.get(), [index + 0.8, index + 1], [0, 100], Extrapolation.CLAMP)}%`,
+  }));
+
+  const status = state === 'done' ? item.value : state === 'active' ? 'in progress' : 'pending';
+
+  return (
+    <Animated.View
+      entering={rise(300 + index * 70)}
+      style={[styles.row, { height: compact ? 56 : 64 }]}
+      accessible
+      accessibilityLabel={`${item.label}, ${status}`}
+    >
+      <View style={styles.rail}>
+        <StepNode state={state} halted={halted} />
+        {!last && (
+          <View style={styles.connector}>
+            <Animated.View style={[styles.connectorFill, connectorStyle]} />
           </View>
+        )}
+      </View>
 
-          <ScrollView
-            contentContainerStyle={[
-              styles.scrollContent,
-              isCompact && styles.scrollContentCompact,
-            ]}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={[styles.hero, isCompact && styles.heroCompact]}>
-              <Animated.View
-                style={[
-                  styles.mascotWrap,
-                  isCompact && styles.mascotWrapCompact,
-                  { transform: [{ scale: mascotScale }] },
-                ]}
-              >
-                <View style={[styles.mascotGlow, isCompact && styles.mascotGlowCompact]} />
-                <Image
-                  source={mascotSource}
-                  style={[styles.mascot, isCompact && styles.mascotCompact]}
-                  contentFit="contain"
-                />
-              </Animated.View>
-
-              <View style={styles.miniTag}>
-                <ClipboardList size={13} color={COLORS.coral} />
-                <Text style={styles.miniTagText}>YOUR PLAN</Text>
+      <View style={styles.rowCopy}>
+        <Animated.Text style={[styles.rowLabel, labelStyle]} numberOfLines={1}>{item.label}</Animated.Text>
+        <View style={styles.subline}>
+          {state === 'active' && (
+            <Animated.View
+              key="bar"
+              entering={FadeIn.duration(220)}
+              exiting={FadeOut.duration(140)}
+              style={styles.sublineFill}
+              accessibilityRole="progressbar"
+            >
+              <View style={styles.barTrack}>
+                <Animated.View style={[styles.barFill, barStyle]} />
               </View>
-              <Text style={[styles.title, isCompact && styles.titleCompact]}>{title}</Text>
-              <Text style={[styles.subtitle, isCompact && styles.subtitleCompact]}>{subtitle}</Text>
-            </View>
-
-            <View style={styles.stepList}>
-              {insights.map((step, index) => {
-                const isPending = activeStep < index;
-                const isActive = activeStep === index;
-                const isCompleted = activeStep > index;
-                const Icon = step.icon;
-
-                return (
-                  <View
-                    key={step.id}
-                    style={[
-                      styles.stepRow,
-                      isActive && styles.stepRowActive,
-                      isCompleted && styles.stepRowDone,
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.iconTile,
-                        isActive && styles.iconTileActive,
-                        isCompleted && styles.iconTileDone,
-                      ]}
-                    >
-                      {isCompleted ? (
-                        <Check color={COLORS.white} size={18} strokeWidth={3} />
-                      ) : isActive ? (
-                        <ActivityIndicator size="small" color={COLORS.coral} />
-                      ) : (
-                        <Icon color={COLORS.muted} size={20} strokeWidth={2.4} />
-                      )}
-                    </View>
-
-                    <View style={styles.stepCopy}>
-                      <Text
-                        style={[
-                          styles.stepLabel,
-                          (isActive || isCompleted) && styles.stepLabelActive,
-                        ]}
-                      >
-                        {step.label}
-                      </Text>
-                      {!isPending && <Text style={styles.stepValue}>{step.value}</Text>}
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-
-            {error && (
-              <TouchableOpacity
-                style={styles.retryBtn}
-                activeOpacity={0.85}
-                onPress={startProcess}
-              >
-                <LinearGradient
-                  colors={[COLORS.coral, COLORS.coralDark]}
-                  style={styles.retryGradient}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                >
-                  <Text style={styles.retryText}>Try again</Text>
-                  <View style={styles.retryArrow}>
-                    <ChevronRight color={COLORS.coral} size={18} strokeWidth={3} />
-                  </View>
-                </LinearGradient>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
-
-          <View style={styles.footer}>
-            <View style={styles.progressRow}>
-              <Text style={styles.progressLabel}>
-                {error ? 'Stopped' : isDone ? 'Done' : awaitingPlan ? 'Almost done' : 'Working on it'}
-              </Text>
-              <Text style={styles.progressPercent}>{progressPercent}%</Text>
-            </View>
-            <View style={styles.progressTrack}>
-              <Animated.View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: progressWidth.interpolate({
-                      inputRange: [0, 100],
-                      outputRange: ['0%', '100%'],
-                    }),
-                  },
-                ]}
-              />
-            </View>
-          </View>
+            </Animated.View>
+          )}
+          {state === 'done' && (
+            <Animated.Text key="value" entering={FadeIn.duration(260).delay(100)} style={styles.rowValue} numberOfLines={1}>
+              {item.value}
+            </Animated.Text>
+          )}
         </View>
-      </SafeAreaView>
+      </View>
+    </Animated.View>
+  );
+}
+
+function StepNode({ state, halted }: { state: StepState; halted: boolean }) {
+  return (
+    <View style={styles.node}>
+      {state === 'done' && (
+        <Animated.View key="done" entering={pop(0)} style={[styles.nodeLayer, styles.nodeDone]}>
+          <Check color={C.white} size={16} strokeWidth={3.4} />
+        </Animated.View>
+      )}
+      {state === 'active' && (
+        <Animated.View key="active" entering={FadeIn.duration(200)} exiting={FadeOut.duration(140)} style={styles.nodeLayer}>
+          <Pulse paused={halted} />
+          <View style={styles.nodeActive}>
+            <View style={styles.nodeDot} />
+          </View>
+        </Animated.View>
+      )}
+      {state === 'pending' && (
+        <Animated.View key="pending" exiting={FadeOut.duration(140)} style={styles.nodeLayer}>
+          <View style={styles.nodePending} />
+        </Animated.View>
+      )}
     </View>
   );
 }
 
+function Pulse({ paused }: { paused: boolean }) {
+  const t = useSharedValue(0);
+
+  useEffect(() => {
+    if (paused) {
+      cancelAnimation(t);
+      t.set(withTiming(0, { duration: 200, easing: EASE_OUT }));
+      return;
+    }
+    t.set(withRepeat(withTiming(1, { duration: 1400, easing: Easing.out(Easing.quad) }), -1, false));
+    return () => cancelAnimation(t);
+  }, [paused, t]);
+
+  const style = useAnimatedStyle(() => ({
+    opacity: 0.35 * (1 - t.get()),
+    transform: [{ scale: 1 + 0.75 * t.get() }],
+  }));
+
+  return <Animated.View style={[styles.pulse, style]} />;
+}
+
+const NODE = 28;
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.white },
-  flex: { flex: 1 },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'android' ? 12 : 4,
-    paddingBottom: Platform.OS === 'ios' ? 8 : 16,
-  },
+  eyebrow: { color: C.coral, fontSize: 14, fontWeight: '900', letterSpacing: 2.4, textAlign: 'center' },
+  titleSlot: { marginTop: 6 },
+  title: { marginTop: 0 },
+  error: { color: SUBTLE_INK, fontSize: 15, fontWeight: '600', textAlign: 'center', marginTop: 8, paddingHorizontal: 16 },
 
-  topNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#F1F5F9',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  scrollContent: {
-    flexGrow: 1,
-    paddingBottom: 24,
-  },
-  scrollContentCompact: {
-    paddingBottom: 16,
-  },
-
-  hero: {
-    alignItems: 'flex-start',
-    marginBottom: 28,
-  },
-  heroCompact: {
-    marginBottom: 20,
-  },
-  mascotWrap: {
-    alignSelf: 'center',
-    width: 148,
-    height: 148,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-  },
-  mascotWrapCompact: {
-    width: 120,
-    height: 120,
-    marginBottom: 14,
-  },
-  mascotGlow: {
+  stage: { alignSelf: 'stretch', alignItems: 'center', justifyContent: 'flex-end' },
+  glow: { position: 'absolute', top: '18%', backgroundColor: 'rgba(255, 69, 72, 0.06)', boxShadow: '0 0 80px 40px rgba(255, 69, 72, 0.08)' },
+  pedestal: {
     position: 'absolute',
-    width: 132,
-    height: 132,
-    borderRadius: 66,
-    backgroundColor: 'rgba(255, 107, 107, 0.1)',
-  },
-  mascotGlowCompact: {
-    width: 108,
-    height: 108,
-    borderRadius: 54,
-  },
-  mascot: {
-    width: 112,
-    height: 112,
-  },
-  mascotCompact: {
-    width: 92,
-    height: 92,
-  },
-  miniTag: {
-    flexDirection: 'row',
+    bottom: 8,
+    borderRadius: 999,
+    backgroundColor: C.white,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 69, 72, 0.14)',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 10,
-  },
-  miniTagText: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: COLORS.coral,
-    letterSpacing: 1.2,
-  },
-  title: {
-    fontSize: 30,
-    fontWeight: '900',
-    color: COLORS.black,
-    lineHeight: 34,
-    letterSpacing: -1,
-  },
-  titleCompact: {
-    fontSize: 26,
-    lineHeight: 30,
-  },
-  subtitle: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: COLORS.muted,
-    lineHeight: 22,
-    marginTop: 8,
-    maxWidth: 320,
-  },
-  subtitleCompact: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 6,
-  },
-
-  stepList: {
-    gap: 12,
-  },
-  stepRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    gap: 14,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 1,
-  },
-  stepRowActive: {
-    backgroundColor: COLORS.coralLight,
-    shadowColor: COLORS.coral,
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  stepRowDone: {
-    opacity: 0.92,
-  },
-  iconTile: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: '#F8FAFC',
     justifyContent: 'center',
+    boxShadow: '0 14px 30px rgba(255, 69, 72, 0.22), inset 0 -6px 12px rgba(255, 69, 72, 0.10)',
+  },
+  pedestalRing: { width: '72%', height: '52%', borderRadius: 999, borderWidth: 2, borderColor: 'rgba(255, 69, 72, 0.16)' },
+  deck: { position: 'absolute' },
+  card: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: CARD_RADIUS,
+    borderCurve: 'continuous',
     alignItems: 'center',
-  },
-  iconTileActive: {
-    backgroundColor: COLORS.white,
-  },
-  iconTileDone: {
-    backgroundColor: COLORS.coral,
-  },
-  stepCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  stepLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.muted,
-  },
-  stepLabelActive: {
-    color: COLORS.black,
-    fontWeight: '800',
-  },
-  stepValue: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.coral,
-  },
-
-  retryBtn: {
-    height: 60,
-    borderRadius: 30,
-    overflow: 'hidden',
-    marginTop: 24,
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.28,
-    shadowRadius: 14,
-    elevation: 6,
-  },
-  retryGradient: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingLeft: 26,
-    paddingRight: 8,
-  },
-  retryText: {
-    color: COLORS.white,
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  retryArrow: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.white,
     justifyContent: 'center',
-    alignItems: 'center',
+    boxShadow: '0 22px 44px rgba(255, 69, 72, 0.16), 0 3px 8px rgba(255, 69, 72, 0.08)',
   },
+  cardFace: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: CARD_RADIUS,
+    borderCurve: 'continuous',
+    borderWidth: 1.5,
+    borderColor: C.white,
+    boxShadow: 'inset 0 -10px 24px rgba(255, 69, 72, 0.06)',
+  },
+  veil: { ...StyleSheet.absoluteFillObject, borderRadius: CARD_RADIUS, borderCurve: 'continuous', backgroundColor: VEIL },
 
-  footer: {
-    paddingTop: 16,
-    gap: 10,
-  },
-  progressRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  progressLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
-  progressPercent: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.coral,
-  },
-  progressTrack: {
-    height: 6,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: COLORS.coral,
-    borderRadius: 3,
-  },
+  timeline: { alignSelf: 'center', width: '100%', maxWidth: 320, paddingHorizontal: 24 },
+  row: { flexDirection: 'row', gap: 16 },
+  rail: { width: NODE, alignItems: 'center' },
+  connector: { flex: 1, width: 2, marginVertical: 4, borderRadius: 1, backgroundColor: C.track, overflow: 'hidden' },
+  connectorFill: { width: '100%', backgroundColor: C.coral },
+  rowCopy: { flex: 1, paddingTop: 2 },
+  rowLabel: { fontSize: 18, fontWeight: '800', letterSpacing: -0.4 },
+  subline: { height: 22, marginTop: 2 },
+  sublineFill: { ...StyleSheet.absoluteFillObject, justifyContent: 'center' },
+  barTrack: { height: 6, maxWidth: 200, borderRadius: 3, backgroundColor: C.track, overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: 3, backgroundColor: C.coral },
+  rowValue: { position: 'absolute', left: 0, right: 0, color: SUBTLE_INK, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
+
+  node: { width: NODE, height: NODE },
+  nodeLayer: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  nodeDone: { borderRadius: NODE / 2, backgroundColor: C.coral, boxShadow: '0 4px 10px rgba(255, 69, 72, 0.3)' },
+  nodeActive: { width: NODE, height: NODE, borderRadius: NODE / 2, backgroundColor: 'rgba(255, 69, 72, 0.16)', alignItems: 'center', justifyContent: 'center' },
+  nodeDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: C.coral },
+  nodePending: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: C.border, backgroundColor: C.white },
+  pulse: { position: 'absolute', width: NODE, height: NODE, borderRadius: NODE / 2, backgroundColor: C.coral },
 });

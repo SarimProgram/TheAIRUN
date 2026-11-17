@@ -5,6 +5,8 @@ import { saveTokens, clearTokens as clearStorageTokens, getAccessToken, getRefre
 import { API_BASE_URL, getDefaultHeaders } from '@/config/api';
 import { setAnalyticsUserId, setAnalyticsUserProperties, trackEvent } from '@/src/analytics/analytics';
 import { clearOnboardingCheckpoint } from '@/src/onboarding/checkpoint';
+import { clearWorkoutPhotoCache } from '@/utils/workoutPhotoCache';
+import { claimStoredGuestPartnerInvite } from '@/utils/guestPartnerInvite';
 
 interface AuthContextType {
     user: any;
@@ -33,14 +35,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const applyAuthResponse = useCallback(async (data: any, fallbackUser?: any) => {
         if (data?.accessToken) {
             await saveTokens(data.accessToken, data.refreshToken);
+            // Registration, social sign-in and refresh all preserve the shared guest code.
+            // A temporary failure is retried on the next session refresh.
+            void claimStoredGuestPartnerInvite(data.accessToken).catch(() => {});
             setAccessToken(data.accessToken);
             const resolvedUser = data.user || fallbackUser || null;
             setUser(resolvedUser);
 
-            await setAnalyticsUserId(
+            void setAnalyticsUserId(
                 resolvedUser?.id ? String(resolvedUser.id) : resolvedUser?.email ?? null
             );
-            await setAnalyticsUserProperties({
+            void setAnalyticsUserProperties({
                 auth_provider: resolvedUser?.provider ?? null,
                 has_partner: resolvedUser?.partnerId ? 'true' : 'false',
             });
@@ -65,6 +70,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     const clearSession = useCallback(async () => {
         await clearStorageTokens();
+        await clearWorkoutPhotoCache().catch(() => {});
         await clearBillingArtifacts();
         setAccessToken(null);
         setUser(null);
@@ -117,6 +123,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         try {
             const token = await getAccessToken();
             if (token) {
+                await claimStoredGuestPartnerInvite(token).catch(() => {});
                 // Optionally fetch user profile if you have an endpoint
                 // const res = await fetch(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
                 // const data = await res.json();
@@ -232,7 +239,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         await applyAuthResponse(data, { email });
-        await trackEvent('login_success', { method: 'email' });
+        void trackEvent('login_success', { method: 'email' });
     };
 
     const register = async (name: string, email: string, password: string) => {
@@ -259,7 +266,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         await applyAuthResponse(data, { name, email });
-        await trackEvent('register_success', { method: 'email' });
+        void trackEvent('register_success', { method: 'email' });
     };
 
     const socialLogin = async (provider: 'google' | 'apple', idToken: string, name?: string) => {
@@ -286,21 +293,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         await applyAuthResponse(data);
-        await trackEvent('login_success', { method: provider });
+        void trackEvent('login_success', { method: provider });
     };
 
     const logout = async () => {
-        try {
-            await authFetch(`${API_BASE_URL}/profile/push-token`, {
-                method: 'DELETE',
-            });
-            await authFetch(`${API_BASE_URL}/profile/device-push-token`, {
-                method: 'DELETE',
-            });
-            await authFetch(`${API_BASE_URL}/profile/live-activity-token`, {
-                method: 'DELETE',
-            });
-        } catch {}
+        // One failed request must not prevent the other token cleanups.
+        await Promise.allSettled([
+            'push-token', 'device-push-token', 'live-activity-token', 'live-activity-start-token', 'widget-push-token',
+        ].map((endpoint) => authFetch(`${API_BASE_URL}/profile/${endpoint}`, { method: 'DELETE' })));
+        await import('@/lib/partner-food-widget').then((widget) => widget.clearPartnerFoodWidgetPush()).catch(() => {});
 
         await clearSession();
         await clearOnboardingCheckpoint();

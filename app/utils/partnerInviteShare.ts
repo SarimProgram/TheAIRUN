@@ -5,7 +5,7 @@ import { APP_NAME } from '@/constants/branding';
 export type PartnerInviteShareDetails = {
     inviterName: string;
     inviteCode: string;
-    toEmail?: string;
+    toEmail?: string | null;
 };
 
 export function buildPartnerInviteShareMessage({
@@ -42,6 +42,10 @@ async function openExternalUrl(primaryUrl: string, fallbackUrl?: string) {
 
 export async function sharePartnerInviteNative(message: string) {
     await Share.share({ message });
+}
+
+export async function sharePartnerInviteEmail(email: string, message: string) {
+    await Linking.openURL(`mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`Join me on ${APP_NAME}`)}&body=${encodeURIComponent(message)}`);
 }
 
 export async function sharePartnerInviteWhatsApp(message: string) {
@@ -94,10 +98,13 @@ export async function sharePartnerInviteTelegram(message: string) {
     await openExternalUrl(appUrl, webUrl);
 }
 
-export type PartnerInviteShareChannel = 'whatsapp' | 'sms' | 'telegram' | 'native';
+export type PartnerInviteShareChannel = 'whatsapp' | 'sms' | 'telegram' | 'email' | 'native';
 
 export async function sharePartnerInviteVia(channel: PartnerInviteShareChannel, message: string) {
     switch (channel) {
+        case 'email':
+            await openExternalUrl(`mailto:?subject=${encodeURIComponent(`Join me on ${APP_NAME}`)}&body=${encodeURIComponent(message)}`);
+            break;
         case 'whatsapp':
             await sharePartnerInviteWhatsApp(message);
             break;

@@ -1,12 +1,14 @@
 /* eslint-disable react/no-unescaped-entities */
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ActivityIndicator, ScrollView } from 'react-native';
+import { Image, View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ActivityIndicator, ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, interpolate, Easing, withRepeat, withSequence } from 'react-native-reanimated';
-import { Users, Play, Zap, Clock, Calendar, Check, X, Trophy, Home, ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { Play, Zap, Clock, Calendar, Check, X, Trophy, Home, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/auth/authContext';
 import { API_BASE_URL } from '@/config/api';
+import { useScheduledRuns, type ScheduledRun } from '@/hooks/useScheduledRuns';
+import { getImageChatAvatarSource, getOppositeGender } from '../../utils/genderMascot';
 
 const THEME = {
   bg: '#F8F9FA',
@@ -20,16 +22,9 @@ const THEME = {
   border: 'rgba(0, 0, 0, 0.06)',
 };
 
-type ScheduledRun = {
-  id: string;
-  partnerName: string;
-  scheduledTime: string;
-  distanceKm: number;
-  status: 'PENDING' | 'ACCEPTED' | 'DECLINED';
-  isSender: boolean;
-};
-
 type Props = {
+  onDistanceChange?: (metres: number) => void;
+  showHandle?: boolean;
   isConnected: boolean;
   onConfirmRunNow: (km: number) => void;
   onConfirmSchedule: (dateTimeLabel: string, km: number) => void;
@@ -44,33 +39,24 @@ const getNextFutureSlot = () => {
   return next;
 };
 
-export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfirmSchedule }: Props) {
+export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfirmSchedule, onDistanceChange, showHandle = true }: Props) {
   const router = useRouter();
-  const { authFetch } = useAuth();
-  const [scheduledRuns, setScheduledRuns] = useState<{ sent: ScheduledRun[], received: ScheduledRun[] }>({ sent: [], received: [] });
+  const { authFetch, user } = useAuth();
+  const { scheduledRuns, fetchScheduledRuns } = useScheduledRuns();
   const [partnerTimezone, setPartnerTimezone] = useState<string | null>(null);
   const [partnerName, setPartnerName] = useState<string>('Partner');
   const [isLoading, setIsLoading] = useState(false);
   const [uiStage, setUiStage] = useState<'idle' | 'choice' | 'details'>('idle');
   const [isScheduleMode, setIsScheduleMode] = useState(false);
   const [tempKm, setTempKm] = useState('1.0');
+  useEffect(() => {
+    const km = Number.parseFloat(tempKm);
+    if (Number.isFinite(km) && km > 0) onDistanceChange?.(km * 1000);
+  }, [tempKm, onDistanceChange]);
   const [scheduleDateTime, setScheduleDateTime] = useState(() => getNextFutureSlot());
   const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
   const dashboardExpansion = useSharedValue(0);
-
-  // Fetch scheduled runs on mount and after actions
-  const fetchScheduledRuns = useCallback(async () => {
-    try {
-      const response = await authFetch(`${API_BASE_URL}/runtogether/active`);
-      if (response.ok) {
-        const data = await response.json();
-        setScheduledRuns(data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch scheduled runs:', error);
-    }
-  }, [authFetch]);
 
   const fetchPartnerInfo = useCallback(async () => {
     try {
@@ -85,12 +71,8 @@ export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfi
   }, [authFetch]);
 
   useEffect(() => {
-    fetchScheduledRuns();
     fetchPartnerInfo();
-    // Poll every 30 seconds for updates
-    const interval = setInterval(fetchScheduledRuns, 30000);
-    return () => clearInterval(interval);
-  }, [fetchScheduledRuns, fetchPartnerInfo]);
+  }, [fetchPartnerInfo]);
 
   const pendingReceivedRuns = scheduledRuns.received.filter((r) => r.status === 'PENDING');
   const activeRuns = [
@@ -334,7 +316,7 @@ export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfi
   };
 
   return (
-    <Animated.View style={[styles.bottomDashboard, animatedDashboardStyle]}>
+    <Animated.View style={[styles.bottomDashboard, { backgroundColor: THEME.surface }, animatedDashboardStyle]}>
       <View style={uiStage === 'idle' && hasAnyRuns ? undefined : { flex: 1 }}>
         {uiStage === 'idle' ? (
           <>
@@ -418,12 +400,12 @@ export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfi
 
             {!hasAnyRuns && (
               <>
-                <View style={styles.sheetHandle} />
+                {showHandle && <View style={styles.sheetHandle} />}
                 
                 <View style={styles.compactVersusSection}>
                   <View style={styles.compactMainRow}>
                     <View style={[styles.avatarCircle, { width: 56, height: 56 }]}>
-                      <Users size={18} color={THEME.primary} />
+                      <Image source={getImageChatAvatarSource(user?.gender)} style={{ width: 48, height: 48, borderRadius: 24 }} />
                     </View>
 
                     <View style={styles.vsBadgeSmall}>
@@ -431,7 +413,7 @@ export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfi
                     </View>
 
                     <View style={[styles.avatarCircle, { width: 56, height: 56, borderColor: THEME.secondary }]}>
-                      <Users size={18} color={THEME.secondary} />
+                      <Image source={getImageChatAvatarSource(getOppositeGender(user?.gender))} style={{ width: 48, height: 48, borderRadius: 24 }} />
                       <Animated.View style={[styles.liveIndicatorDot, onlineIndicatorStyle]} />
                     </View>
 
@@ -489,7 +471,7 @@ export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfi
               <Clock size={22} color={THEME.textMain} />
               <View>
                 <Text style={[styles.choiceBtnTitle, { color: THEME.textMain }]}>Schedule Later</Text>
-                <Text style={styles.choiceBtnSub}>Pick a time that works</Text>
+                <Text style={[styles.choiceBtnSub, { color: '#66758A' }]}>Pick a time that works</Text>
               </View>
             </TouchableOpacity>
 
@@ -589,9 +571,12 @@ export default function PreRaceDashboard({ isConnected, onConfirmRunNow, onConfi
       </View>
 
       <View style={styles.footerLinks}>
-        <TouchableOpacity style={styles.hubLink} onPress={() => router.navigate('/')}>
+        <TouchableOpacity
+          style={styles.hubLink}
+          onPress={() => (router.canGoBack() ? router.back() : router.replace('/Race'))}
+        >
           <X size={14} color={THEME.textLight} />
-          <Text style={styles.hubLinkText}>Back to Hub</Text>
+          <Text style={styles.hubLinkText}>Competitions</Text>
         </TouchableOpacity>
 
         <View style={styles.footerDivider} />

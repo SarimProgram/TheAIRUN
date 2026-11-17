@@ -5,6 +5,8 @@ import { AlertTriangle, Droplets, Heart, Swords } from 'lucide-react-native';
 import { COLORS as NOTE_COLORS, mono } from '@/components/chat/partnerNoteShared';
 import type { PartnerReminderOption } from '@/components/partner/ReminderPartner';
 import { AnimatedBeggingCat } from '@/components/partner/AnimatedBeggingCat';
+import { WaterBottle } from '@/components/partner/WaterBottle';
+import TugReminderCardPreview from '@/components/partner/TugReminderCardPreview';
 
 type ReminderPartnerCardPreviewProps = {
     option: PartnerReminderOption;
@@ -165,6 +167,37 @@ function NotificationCardMiniPreview({
     );
 }
 
+function ThrowMiniPreview({ large = false, fillFrame = false }: { large?: boolean; fillFrame?: boolean }) {
+    return (
+        <View style={[styles.fullscreenFrame, fillFrame && styles.fullscreenFrameFill]}>
+            <LinearGradient
+                colors={['#082F49', '#0C4A6E', '#0369A1']}
+                style={[
+                    styles.fullscreenGradient,
+                    large && styles.fullscreenGradientLarge,
+                    fillFrame && styles.fullscreenGradientFill,
+                ]}
+            >
+                <View style={styles.fullscreenBody}>
+                    <View style={[styles.throwBottle, large && styles.throwBottleLarge]}>
+                        <WaterBottle width={large ? 64 : 26} />
+                    </View>
+                    <Text style={[styles.fullscreenEyebrow, large && styles.fullscreenEyebrowLarge]}>HYDRATION</Text>
+                    <Text style={[styles.fullscreenTitle, large && styles.fullscreenTitleLarge]}>Catch!</Text>
+                    <Text style={[styles.fullscreenFrom, large && styles.fullscreenFromLarge]}>
+                        Flick it onto their screen
+                    </Text>
+                </View>
+            </LinearGradient>
+            {!large && !fillFrame ? (
+                <View style={styles.fullscreenBadge}>
+                    <Text style={styles.fullscreenBadgeText}>Live</Text>
+                </View>
+            ) : null}
+        </View>
+    );
+}
+
 function ChatMiniPreview({
     text,
     tag,
@@ -215,6 +248,12 @@ export function ReminderPartnerCardPreview({
     fillFrame = false,
 }: ReminderPartnerCardPreviewProps) {
     const large = variant === 'large' || fillFrame;
+
+    if (option.delivery === 'tug') return <TugReminderCardPreview large={large} />;
+
+    if (option.delivery === 'throw') {
+        return <ThrowMiniPreview large={large} fillFrame={fillFrame} />;
+    }
 
     if (option.delivery === 'notification-card') {
         return (
@@ -273,6 +312,13 @@ const styles = StyleSheet.create({
     },
     heroEmoji: {
         fontSize: 20,
+    },
+    throwBottle: {
+        marginBottom: 4,
+        transform: [{ rotate: '-14deg' }],
+    },
+    throwBottleLarge: {
+        marginBottom: 14,
     },
     heroEmojiLarge: {
         fontSize: 48,

@@ -1,18 +1,16 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from "react";
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet,
   View,
   Text,
   TouchableOpacity,
-  StatusBar,
-  Dimensions,
   ScrollView,
-  SafeAreaView,
   Animated,
   Easing,
   LayoutAnimation,
   Platform,
+  Pressable,
+  Image,
   UIManager,
   Alert,
 } from "react-native";
@@ -21,16 +19,19 @@ import {
   Pause,
   Square,
   Heart,
-  Award,
-  Clock,
   ChevronRight,
-  Trash2,
-  Flame,
+  Flag,
   MapPin,
-  Watch,
-  Droplets,
+  Timer,
+  CalendarDays,
+  Check,
+  Route,
+  Trophy,
 } from 'lucide-react-native';
 import { router, useFocusEffect } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import * as Haptics from 'expo-haptics';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import RunMap from "@/components/RunMap";
 import { getMappedDays, dayNames } from "@/utils/planProjection";
@@ -46,13 +47,14 @@ import { useTabBar } from "@/contexts/TabBarContext";
 import { useDailySummary } from '@/hooks/useDailySummary';
 import { getRunMeta } from '@/constants/runDetails';
 import { getIntervalWorkoutRouteFromTemplateId } from '@/lib/interval-workout';
+import { usePoints } from '@/hooks/usePoints';
+import { COMPETITIONS, type Competition } from '@/constants/competitions';
+import { ui as planUI } from '@/components/plan/PlanVisuals';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-const { width, height } = Dimensions.get('window');
-const REDEEMED_WEEK_PREFIX = 'weekly_quest_redeemed_v1';
 const GOAL_PRACTICE_RUN_TYPE = 'Goal Practice Run';
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -88,24 +90,28 @@ const stripEmojis = (value: string): string =>
   value.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
 
 const THEME = {
-  primary: '#FF4757',
+  primary: '#FF6069',
   secondary: '#1A1C1E', 
-  accent: '#70A1FF',
-  bg: '#F8FAFC',
+  teal: '#099D9B',
+  tealTint: '#E4F8F7',
+  bg: '#FFF8F9',
   surface: '#FFFFFF',
-  text: '#1A1C1E',
-  textMuted: '#64748B',
+  text: '#18202F',
+  textMuted: '#7C8191',
   white: '#FFFFFF',
   glass: 'rgba(255, 255, 255, 0.9)',
-  primaryTint: 'rgba(255, 71, 87, 0.1)',
-  primaryMuted: 'rgba(255, 71, 87, 0.6)',
+  primaryTint: '#FFF0F2',
+  primaryMuted: 'rgba(255, 107, 107, 0.6)',
   border: 'rgba(0, 0, 0, 0.05)',
+  divider: 'rgba(15, 23, 42, 0.07)',
 };
 
 export default function RunScreen() {
+  const insets = useSafeAreaInsets();
   const { accessToken, authFetch, isAuthenticated } = useAuth();
   const { setTabBarVisible } = useTabBar();
   const { summary, recalculate } = useDailySummary({ accessToken });
+  const { balance: points, refetch: refetchPoints } = usePoints({ accessToken });
   const isFocused = useIsFocused();
 
   const {
@@ -124,45 +130,21 @@ export default function RunScreen() {
     paceSecPerKm
   } = useRunTracker();
 
-  const [historyRuns, setHistoryRuns] = useState<Run[]>([]);
   const [allRuns, setAllRuns] = useState<Run[]>([]);
   const [weeklyPlan, setWeeklyPlan] = useState<any[]>([]);
   const [trainingPlanWeekSessions, setTrainingPlanWeekSessions] = useState<any[]>([]);
   const [availableDays, setAvailableDays] = useState<number[]>([0, 2, 4]);
   const [currentWeek, setCurrentWeek] = useState(1);
   const [isSaving, setIsSaving] = useState(false);
-  const [liveQuestRedeemed, setLiveQuestRedeemed] = useState(false);
-  const [liveQuestLoading, setLiveQuestLoading] = useState(true);
   const [runStatuses, setRunStatuses] = useState<RunStatusMap>({});
   const [showRunDetails, setShowRunDetails] = useState(false);
   const [selectedScheduleRun, setSelectedScheduleRun] = useState<ScheduleRunItem | null>(null);
-  
-  const mapHeight = useRef(new Animated.Value(height * 0.28)).current;
+
   const hudAnim = useRef(new Animated.Value(0)).current;
 
   const fetchHistory = useCallback(async () => {
     const saved = await loadRuns();
     setAllRuns(saved);
-    setHistoryRuns(saved.slice(0, 3)); 
-  }, []);
-
-  const fetchLiveQuestState = useCallback(async () => {
-    try {
-      setLiveQuestLoading(true);
-      const now = new Date();
-      const weekStart = new Date(now);
-      const day = (weekStart.getDay() + 6) % 7;
-      weekStart.setDate(weekStart.getDate() - day);
-      weekStart.setHours(0, 0, 0, 0);
-      const redeemedKey = `${REDEEMED_WEEK_PREFIX}:${weekStart.toISOString().slice(0, 10)}`;
-      const redeemedRaw = await AsyncStorage.getItem(redeemedKey);
-      setLiveQuestRedeemed(redeemedRaw === 'true');
-    } catch (error) {
-      console.error('Failed to load live quest state:', error);
-      setLiveQuestRedeemed(false);
-    } finally {
-      setLiveQuestLoading(false);
-    }
   }, []);
 
   const calculateWeekNum = useCallback((date: Date, start: Date) => {
@@ -282,13 +264,15 @@ export default function RunScreen() {
     fetchPlanSettings();
     fetchTrainingPlan();
     fetchRunStatuses();
-    fetchLiveQuestState();
-    if (isAuthenticated) recalculate();
+    if (isAuthenticated) {
+      recalculate();
+      refetchPoints();
+    }
     // Restore tab bar when leaving the Run screen
     return () => {
       setTabBarVisible(true);
     };
-  }, [fetchHistory, fetchPlanSettings, fetchTrainingPlan, fetchRunStatuses, fetchLiveQuestState, setTabBarVisible, isAuthenticated, recalculate]));
+  }, [fetchHistory, fetchPlanSettings, fetchTrainingPlan, fetchRunStatuses, setTabBarVisible, isAuthenticated, recalculate, refetchPoints]));
 
   useEffect(() => {
     if (!isFocused) {
@@ -297,22 +281,14 @@ export default function RunScreen() {
 
     const isImmersive = state === 'running' || state === 'paused' || state === 'finished';
     setTabBarVisible(!isImmersive);
-    Animated.parallel([
-      Animated.timing(mapHeight, {
-        toValue: isImmersive ? height : height * 0.28,
-        duration: 500,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: false,
-      }),
-      Animated.timing(hudAnim, {
-        toValue: isImmersive ? 1 : 0,
-        duration: 500,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      })
-    ]).start();
+    Animated.timing(hudAnim, {
+      toValue: isImmersive ? 1 : 0,
+      duration: 300,
+      easing: Easing.bezier(0.23, 1, 0.32, 1),
+      useNativeDriver: true,
+    }).start();
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-  }, [isFocused, setTabBarVisible, state]);
+  }, [isFocused, setTabBarVisible, state, hudAnim]);
 
   const formatDuration = (s: number) => {
     const m = Math.floor(s / 60);
@@ -428,9 +404,21 @@ export default function RunScreen() {
       });
   }, [projectedDays, sessionMapByDay, runStatuses, todayIdx]);
 
-  const weekPlannedKm = useMemo(() => {
-    return weekSchedule.reduce((sum, day) => sum + day.targetKm, 0);
-  }, [weekSchedule]);
+  const visibleSchedule = useMemo(() => {
+    const nextIdx = weekSchedule.findIndex((item) => item.dayIdx >= todayIdx);
+    const start = nextIdx === -1 ? Math.max(0, weekSchedule.length - 2) : Math.max(0, nextIdx - 1);
+    return weekSchedule.slice(start, start + 2);
+  }, [weekSchedule, todayIdx]);
+
+  const weekStats = useMemo(() => {
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - todayIdx);
+    weekStart.setHours(0, 0, 0, 0);
+    const runs = allRuns.filter((run) => new Date(run.startedAt).getTime() >= weekStart.getTime());
+    return {
+      count: runs.length,
+    };
+  }, [allRuns, todayIdx]);
 
   const startScheduleRun = useCallback((item: Pick<ScheduleRunItem, 'runType' | 'targetKm' | 'sessionId'>) => {
     setShowRunDetails(false);
@@ -519,40 +507,6 @@ export default function RunScreen() {
     startQuickFreeRun();
   };
 
-  const liveQuest = useMemo(() => {
-    const longestPlannedKm = projectedDays.reduce((max: number, day: any) => {
-      if (day?.type !== 'RUN') return max;
-      const targetKm = typeof day?.targetKm === 'number' ? day.targetKm : 0;
-      return Math.max(max, targetKm);
-    }, 0);
-
-    if (longestPlannedKm <= 0) return null;
-
-    const requiredKm = Number((longestPlannedKm * 2).toFixed(1));
-    const weekStart = new Date();
-    const day = (weekStart.getDay() + 6) % 7;
-    weekStart.setDate(weekStart.getDate() - day);
-    weekStart.setHours(0, 0, 0, 0);
-
-    const completed = allRuns.some((run) => {
-      const startedAt = new Date(run.startedAt).getTime();
-      const runKm = (run.totalDistanceMeters || 0) / 1000;
-      return startedAt >= weekStart.getTime() && runKm >= requiredKm;
-    });
-
-    return {
-      id: weekStart.toISOString().slice(0, 10),
-      title: `Run ${requiredKm}km this week`,
-      description: liveQuestRedeemed
-        ? 'Complete more quests to earn additional points.'
-        : completed
-          ? 'Complete this quest to earn additional points.'
-          : 'Complete this quest to earn additional points.',
-      pointsReward: 100,
-    };
-  }, [projectedDays, allRuns, liveQuestRedeemed]);
-
-
   const runSummary = useMemo(() => {
     if (state !== 'finished' || !startTime || !endTime) return null;
 
@@ -586,10 +540,6 @@ export default function RunScreen() {
     }
   }, [runSummary, isSaving, authFetch, fetchHistory, isAuthenticated, recalculate, resetRun]);
 
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  };
-
   const getDateForDayIdx = useCallback((dayIdx: number) => {
     const today = new Date();
     const todayIdx = (today.getDay() + 6) % 7;
@@ -600,291 +550,234 @@ export default function RunScreen() {
 
   const isImmersive = state === 'running' || state === 'paused' || state === 'finished';
 
+  const nextRun = useMemo(() => {
+    if (runInfo.type === 'RECOVERY') {
+      return { title: 'Free Run', sub: 'Rest day · run your way' };
+    }
+    const date = runInfo.dayIdx == null ? new Date() : getDateForDayIdx(runInfo.dayIdx);
+    const when = runInfo.type === 'TODAY'
+      ? 'Today'
+      : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const km = runInfo.target > 0 ? `${Number(runInfo.target.toFixed(1))} km · ` : '';
+    return { title: stripEmojis(runInfo.runType || 'Run'), sub: `${km}${when}` };
+  }, [runInfo, getDateForDayIdx]);
+
+  const openCompetition = useCallback((competition: Competition) => {
+    if (process.env.EXPO_OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+    if (competition.route) {
+      router.push(competition.route);
+      return;
+    }
+    Alert.alert(competition.title, `${competition.title} is coming soon. We'll let you know when it's ready.`);
+  }, []);
+
   return (
     <View style={styles.container}>
-      <StatusBar barStyle={isImmersive ? "light-content" : "dark-content"} />
+      {isFocused && <StatusBar style="dark" />}
 
-      {!isImmersive && (
-        <SafeAreaView style={styles.floatingHeader}>
-          <View style={styles.glassHeader}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.headerLabel}>
-                {runInfo.type === 'TODAY' ? "TODAY'S RUN" : runInfo.title}
-                {' • '}
-                {runInfo.dayIdx == null ? formatDate(new Date()) : formatDate(getDateForDayIdx(runInfo.dayIdx))}
-              </Text>
-              <View style={styles.headerTitleRow}>
-                <Text style={styles.headerValue} numberOfLines={1}>
-                  {runInfo.type === 'RECOVERY' ? runInfo.label : runInfo.label.replace(' •', ' ·')}
-                </Text>
-                {runInfo.type === 'TODAY' && (
-                  <View style={styles.headerTodayBadge}>
-                    <Text style={styles.headerTodayBadgeText}>TODAY</Text>
-                  </View>
-                )}
-              </View>
-            </View>
-            <TouchableOpacity style={styles.allRunsBtn} onPress={() => router.push('/runs/allruns')}>
-              <Text style={styles.allRunsBtnText}>ALL RUNS</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      )}
-
-      <ScrollView 
-        showsVerticalScrollIndicator={false} 
-        scrollEnabled={!isImmersive}
-        contentContainerStyle={{ flexGrow: 1 }}
-      >
-        {/* ANIMATED MAP VIEWPORT */}
-        <Animated.View style={[styles.mapViewport, { height: mapHeight }]}>
+      {isImmersive ? (
+        <View style={StyleSheet.absoluteFill}>
           <RunMap
             path={route.map(p => ({ latitude: p.lat, longitude: p.lon }))}
             currentLocation={smoothedLocation ? { latitude: smoothedLocation.lat, longitude: smoothedLocation.lon } : undefined}
             isRunning={state === 'running'}
           />
 
-          {/* ACTIVE HUB COVER (Only when running) */}
-          {isImmersive && (
-            <Animated.View style={[styles.activeHud, { opacity: hudAnim, transform: [{ translateY: hudAnim.interpolate({ inputRange: [0, 1], outputRange: [100, 0] }) }] }]}>
-              <View style={styles.hudStatsRow}>
-                <View style={styles.hudStat}>
-                  <Text style={styles.hudStatVal}>
-                    {(distanceM / 1000).toFixed(2)}
-                    {runInfo.target > 0 && <Text style={styles.hudStatTarget}> / {runInfo.target}</Text>}
-                  </Text>
-                  <Text style={styles.hudStatLab}>KM</Text>
-                </View>
-                <View style={styles.hudStat}>
-                  <Text style={styles.hudStatVal}>{formatDuration(elapsedSec)}</Text>
-                  <Text style={styles.hudStatLab}>TIME</Text>
-                </View>
-                <View style={styles.hudStat}>
-                  <Text style={styles.hudStatVal}>{formatPace(paceSecPerKm)}</Text>
-                  <Text style={styles.hudStatLab}>PACE</Text>
-                </View>
+          <Animated.View style={[styles.activeHud, { bottom: insets.bottom + 16, opacity: hudAnim, transform: [{ translateY: hudAnim.interpolate({ inputRange: [0, 1], outputRange: [100, 0] }) }] }]}>
+            <View style={styles.hudStatsRow}>
+              <View style={styles.hudStat}>
+                <Text style={styles.hudStatVal}>
+                  {(distanceM / 1000).toFixed(2)}
+                  {runInfo.target > 0 && <Text style={styles.hudStatTarget}> / {runInfo.target}</Text>}
+                </Text>
+                <Text style={styles.hudStatLab}>KM</Text>
               </View>
-              
-              <View style={styles.hudActions}>
-                {state === 'running' ? (
-                  <TouchableOpacity style={styles.hudPauseBtn} onPress={pauseRun}>
-                    <Pause size={28} color={THEME.white} fill={THEME.white} />
-                  </TouchableOpacity>
-                ) : (
-                  <View style={styles.pausedGrid}>
-                    <TouchableOpacity style={styles.hudFinishBtn} onPress={finishRun}>
-                      <Square size={20} color={THEME.primary} fill={THEME.primary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.hudResumeBtn} onPress={resumeRun}>
-                      <Play size={28} color={THEME.white} fill={THEME.white} />
-                    </TouchableOpacity>
-                  </View>
-                )}
+              <View style={styles.hudStat}>
+                <Text style={styles.hudStatVal}>{formatDuration(elapsedSec)}</Text>
+                <Text style={styles.hudStatLab}>TIME</Text>
               </View>
-            </Animated.View>
-          )}
-        </Animated.View>
+              <View style={styles.hudStat}>
+                <Text style={styles.hudStatVal}>{formatPace(paceSecPerKm)}</Text>
+                <Text style={styles.hudStatLab}>PACE</Text>
+              </View>
+            </View>
 
-        {!isImmersive && (
-          <View style={styles.dashboardContainer}>
-            {/* OVERLAPPING INVITE BUTTON */}
-            <View style={styles.overlapSection}>
-              <TouchableOpacity style={styles.mainStartBtn} onPress={startRun} activeOpacity={0.9}>
-                <View style={styles.startBtnContent}>
-                  <Play size={16} color={THEME.primary} fill={THEME.primary} />
-                  <Text style={styles.startBtnText}>
-                    {runInfo.type === 'TODAY' 
-                      ? `START ${runInfo.label.replace(' •', '').toUpperCase()}` 
-                      : 'START RUN'
-                    }
-                  </Text>
+            <View style={styles.hudActions}>
+              {state === 'running' ? (
+                <TouchableOpacity style={styles.hudPauseBtn} onPress={pauseRun}>
+                  <Pause size={28} color={THEME.white} fill={THEME.white} />
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.pausedGrid}>
+                  <TouchableOpacity style={styles.hudFinishBtn} onPress={finishRun}>
+                    <Square size={20} color={THEME.primary} fill={THEME.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.hudResumeBtn} onPress={resumeRun}>
+                    <Play size={28} color={THEME.white} fill={THEME.white} />
+                  </TouchableOpacity>
                 </View>
+              )}
+            </View>
+          </Animated.View>
+        </View>
+      ) : (
+        <ScrollView
+          style={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[styles.content, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 120 }]}
+        >
+          {/* HEADER */}
+          <View style={planUI.row}>
+            <View style={styles.headerIcon}><Route size={28} color={THEME.primary} /></View>
+            <Text accessibilityRole="header" style={styles.headerTitle}>Run</Text>
+            <View style={styles.pointsPill} accessibilityLabel={`${points} points`}>
+              <Heart size={15} color={THEME.primary} fill={THEME.primary} />
+              <Text style={styles.pointsText}>
+                {new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(points)} <Text style={styles.pointsUnit}>pts</Text>
+              </Text>
+            </View>
+          </View>
+
+          {/* MAP PREVIEW */}
+          <View style={[planUI.card, styles.mapBlock]}>
+            <Pressable
+              style={({ pressed }) => [styles.mapCard, pressed && styles.pressed]}
+              onPress={() => router.push('/runs/allruns')}
+              accessibilityRole="button"
+              accessibilityLabel="View all runs"
+            >
+              <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <RunMap
+                  path={route.map(p => ({ latitude: p.lat, longitude: p.lon }))}
+                  currentLocation={smoothedLocation ? { latitude: smoothedLocation.lat, longitude: smoothedLocation.lon } : undefined}
+                  isRunning={false}
+                />
+              </View>
+
+              <View style={styles.mapChevron}>
+                <Text style={styles.mapHistoryText}>Run history</Text>
+                <ChevronRight size={18} color={THEME.textMuted} strokeWidth={2.6} />
+              </View>
+            </Pressable>
+
+            <View style={styles.nextRunCopy}>
+              <Text style={styles.nextRunEyebrow}>{runInfo.type === 'TODAY' ? "Today's run" : runInfo.type === 'UPCOMING' ? 'Next scheduled run' : 'Your next run'}</Text>
+              <Text style={styles.nextRunTitle}>{nextRun.title}</Text>
+              <Text style={styles.nextRunSub}>{nextRun.sub}</Text>
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [planUI.primary, styles.mainStartBtn, pressed && styles.pressed]}
+              onPress={startRun}
+              accessibilityRole="button"
+              accessibilityLabel={runInfo.type === 'TODAY' ? `Start ${nextRun.title}` : 'Start free run'}
+            >
+              <Play size={18} color={THEME.white} fill={THEME.white} />
+              <Text style={planUI.primaryText}>{runInfo.type === 'TODAY' ? 'Start run' : 'Start free run'}</Text>
+            </Pressable>
+          </View>
+
+          {/* RUN SCHEDULE */}
+          <View style={[planUI.card, styles.section]}>
+            <View style={styles.sectionHeader}>
+              <CalendarDays size={24} color={THEME.primary} />
+              <Text accessibilityRole="header" style={[planUI.heading, styles.sectionTitle]}>Run schedule</Text>
+              <TouchableOpacity accessibilityRole="button" onPress={() => router.push('/Plans')} style={styles.sectionLink}>
+                <Text style={styles.seeAll}>Full plan</Text>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.dashboardContent}>
-              {/* RUN SCHEDULE */}
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <View>
-                    <Text style={styles.sectionTitle}>RUN SCHEDULE</Text>
-                    <Text style={styles.weekSubLabel}>
-                      Week {currentWeek}
-                      {weekPlannedKm > 0 ? ` • ${weekPlannedKm.toFixed(1)} km planned` : ''}
-                    </Text>
-                  </View>
-                  <TouchableOpacity onPress={() => router.push('/Plans')}>
-                    <Text style={styles.seeAll}>FULL PLAN</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.activityLog}>
-                  {weekSchedule.length === 0 ? (
-                    <Text style={styles.statusMsg}>No runs scheduled this week.</Text>
-                  ) : (
-                    weekSchedule.map((item) => (
-                      <TouchableOpacity
-                        key={item.dayKey}
-                        style={[styles.activityItem, item.isToday && styles.scheduleItemToday]}
-                        activeOpacity={0.85}
-                        onPress={() => openRunDetails(item)}
-                      >
-                        <View style={[styles.dateBadge, item.isToday && styles.dateBadgeToday]}>
-                          <Text style={[styles.dateDay, item.isToday && styles.dateDayToday]}>
-                            {item.dateNum}
-                          </Text>
-                          <Text style={styles.dateMonth}>{item.month.toUpperCase()}</Text>
-                        </View>
-
-                        <View style={styles.activityDetails}>
-                          <View style={styles.scheduleTitleRow}>
-                            <Text style={styles.activityTitle} numberOfLines={1}>
-                              {item.runType}
-                            </Text>
-                            {item.isToday && (
-                              <View style={styles.scheduleTodayBadge}>
-                                <Text style={styles.scheduleTodayBadgeText}>TODAY</Text>
-                              </View>
-                            )}
+            <View style={styles.groupCard}>
+              {visibleSchedule.length === 0 ? (
+                <Text style={styles.statusMsg}>No runs scheduled this week.</Text>
+              ) : (
+                visibleSchedule.map((item, idx) => (
+                  <Pressable
+                    key={item.dayKey}
+                    style={({ pressed }) => [
+                      styles.groupRow,
+                      idx > 0 && styles.groupRowDivider,
+                      pressed && styles.rowPressed,
+                    ]}
+                    onPress={() => openRunDetails(item)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.runType}, ${item.name}, ${item.targetKm} kilometres${item.scheduleStatus ? `, ${item.scheduleStatus}` : ''}`}
+                  >
+                    <View style={styles.dateCol}>
+                      <Text style={[styles.dateDay, item.isToday && { color: THEME.primary }]}>{item.dateNum}</Text>
+                      <Text style={styles.dateMonth}>{item.month.toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.dateRule} />
+                    <View style={styles.activityDetails}>
+                      <View style={styles.scheduleTitleRow}>
+                        <Text style={styles.activityTitle} numberOfLines={1}>{item.runType}</Text>
+                        {item.isToday && (
+                          <View style={styles.todayBadge}>
+                            <Text style={styles.todayBadgeText}>Today</Text>
                           </View>
-                          <Text
-                            style={[
-                              styles.activitySub,
-                              item.scheduleStatus === 'completed' && styles.scheduleSubDone,
-                              item.scheduleStatus === 'missed' && styles.scheduleSubMissed,
-                            ]}
-                          >
-                            {item.scheduleStatus === 'completed'
-                              ? 'Completed'
-                              : item.scheduleStatus === 'missed'
-                                ? 'Missed'
-                                : `${item.name} · ${item.targetKm > 0 ? `${item.targetKm.toFixed(1)} km` : 'Tap for details'}`}
-                          </Text>
-                        </View>
-
-                        <ChevronRight size={18} color={THEME.textMuted} />
-                      </TouchableOpacity>
-                    ))
-                  )}
-                </View>
-              </View>
-
-              {/* 1. DAILY STATS */}
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>YOUR PROGRESS</Text>
-                  <TouchableOpacity onPress={() => router.push({ pathname: '/activity', params: { tab: 'RUNNING' } })}>
-                    <Text style={styles.seeAll}>SHOW MORE</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.statGrid}>
-                  <View style={styles.premiumStatCard}>
-                    <View style={styles.statIconHeader}>
-                      <View style={[styles.statIconBg, { backgroundColor: THEME.primaryTint }]}>
-                        <Flame size={14} color={THEME.primary} />
+                        )}
                       </View>
+                      <Text
+                        style={[
+                          styles.activitySub,
+                          item.scheduleStatus === 'completed' && styles.scheduleSubDone,
+                          item.scheduleStatus === 'missed' && styles.scheduleSubMissed,
+                        ]}
+                      >
+                        {item.scheduleStatus === 'completed'
+                          ? 'Completed'
+                          : item.scheduleStatus === 'missed'
+                            ? 'Missed'
+                            : `${item.name} · ${item.targetKm > 0 ? `${item.targetKm.toFixed(1)} km` : 'Tap for details'}`}
+                      </Text>
                     </View>
-                    <Text style={styles.premiumStatValue}>{summary?.activeCalories || 0}</Text>
-                    <Text style={styles.premiumStatLabel}>KCAL BURNED</Text>
-                  </View>
-
-                  <View style={styles.premiumStatCard}>
-                    <View style={styles.statIconHeader}>
-                      <View style={[styles.statIconBg, { backgroundColor: '#E0F2FE' }]}>
-                        <MapPin size={14} color="#0EA5E9" />
-                      </View>
-                    </View>
-                    <Text style={styles.premiumStatValue}>{(summary?.distanceKm || 0).toFixed(1)}</Text>
-                    <Text style={styles.premiumStatLabel}>KM TODAY</Text>
-                  </View>
-
-                  <View style={styles.premiumStatCard}>
-                    <View style={styles.statIconHeader}>
-                      <View style={[styles.statIconBg, { backgroundColor: '#F0FDF4' }]}>
-                        <Watch size={14} color="#22C55E" />
-                      </View>
-                    </View>
-                    <Text style={styles.premiumStatValue}>{summary?.exerciseMinutes || 0}m</Text>
-                    <Text style={styles.premiumStatLabel}>ACTIVE TIME</Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* 2. QUESTS */}
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>LIVE QUESTS</Text>
-                  <TouchableOpacity onPress={() => router.push('/quest')}>
-                    <Text style={styles.seeAll}>OPEN</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.questStack}>
-                  {liveQuestLoading ? (
-                    <Text style={styles.statusMsg}>Loading missions...</Text>
-                  ) : !liveQuest ? (
-                    <Text style={styles.statusMsg}>No active quests.</Text>
-                  ) : (
-                    <TouchableOpacity
-                      key={liveQuest.id}
-                      style={styles.liveQuestCard}
-                      activeOpacity={0.9}
-                      onPress={() => router.push('/quest')}
-                    >
-                      <View style={styles.liveQuestTopRow}>
-                        <View style={styles.liveQuestBadge}>
-                          <Award size={18} color={THEME.white} />
-                        </View>
-                        <View style={styles.questInfo}>
-                          <Text style={styles.liveQuestEyebrow}>Weekly Quest</Text>
-                          <Text style={styles.questTitle}>{liveQuest.title}</Text>
-                        </View>
-                        <View style={styles.rewardTag}>
-                          <Heart size={12} color={THEME.primary} fill={THEME.primary} />
-                          <Text style={styles.rewardText}>{liveQuest.pointsReward}</Text>
-                          <Text style={styles.rewardUnit}>pts</Text>
-                        </View>
-                        <ChevronRight size={20} color={THEME.textMuted} />
-                      </View>
-                      <Text style={styles.questDesc}>{liveQuest.description}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
-
-              {/* 3. RECENT RUNS */}
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>RECENT ACTIVITY</Text>
-                  <TouchableOpacity onPress={() => router.push('/runs/history')}>
-                    <Text style={styles.seeAll}>VIEW ALL</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.activityLog}>
-                  {historyRuns.length === 0 ? (
-                    <Text style={styles.statusMsg}>No runs recorded yet.</Text>
-                  ) : (
-                    historyRuns.map((r, idx) => (
-                      <View key={r.id || idx} style={styles.activityItem}>
-                        <View style={styles.dateBadge}>
-                          <Text style={styles.dateDay}>{new Date(r.startedAt).getDate()}</Text>
-                          <Text style={styles.dateMonth}>{new Date(r.startedAt).toLocaleDateString('en-US', {month: 'short'}).toUpperCase()}</Text>
-                        </View>
-                        <View style={styles.activityDetails}>
-                          <Text style={styles.activityTitle}>{(r.totalDistanceMeters / 1000).toFixed(2)} km Run</Text>
-                          <Text style={styles.activitySub}>{formatDuration(r.durationSeconds)} • {new Date(r.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</Text>
-                        </View>
-                        <ChevronRight size={18} color={THEME.textMuted} />
-                      </View>
-                    ))
-                  )}
-                </View>
-              </View>
-
-              <View style={{ height: 100 }} />
+                    {item.scheduleStatus === 'completed' ? <View style={styles.completedMark}><Check size={18} color={THEME.teal} strokeWidth={3} /></View> : <ChevronRight size={18} color={THEME.textMuted} />}
+                  </Pressable>
+                ))
+              )}
             </View>
           </View>
-        )}
-      </ScrollView>
+
+          {/* COMPETITIONS */}
+          <View style={[planUI.card, styles.section]}>
+            <View style={styles.sectionHeader}>
+              <Trophy size={24} color={THEME.primary} />
+              <Text accessibilityRole="header" style={[planUI.heading, styles.sectionTitle]}>Competitions</Text>
+              <TouchableOpacity accessibilityRole="button" onPress={() => router.push('/Race')} style={styles.sectionLink}>
+                <Text style={styles.seeAll}>View all</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.competitionList}>
+              {COMPETITIONS.map((competition) => (
+                <CompetitionCard
+                  key={competition.id}
+                  competition={competition}
+                  onPress={() => openCompetition(competition)}
+                />
+              ))}
+            </View>
+          </View>
+
+          {/* YOUR PROGRESS */}
+          <View style={[planUI.card, styles.section]}>
+            <View style={styles.sectionHeader}>
+              <Flag size={24} color={THEME.teal} />
+              <Text accessibilityRole="header" style={[planUI.heading, styles.sectionTitle]}>Your progress</Text>
+              <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: '/activity', params: { tab: 'RUNNING' } })} style={styles.sectionLink}>
+                <Text style={styles.seeAll}>View activity</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.statRow}>
+              <StatTile icon={<MapPin size={16} color={THEME.teal} />} tint={THEME.tealTint} value={(summary?.distanceKm || 0).toFixed(1)} label="km today" />
+              <StatTile icon={<Timer size={16} color={THEME.teal} />} tint={THEME.tealTint} value={`${summary?.exerciseMinutes || 0}m`} label="active time" />
+              <StatTile icon={<Flag size={16} color={THEME.teal} />} tint={THEME.tealTint} value={String(weekStats.count)} label="runs this week" />
+            </View>
+          </View>
+
+        </ScrollView>
+      )}
 
       <RunDetailsModal
         visible={showRunDetails && selectedScheduleRun !== null}
@@ -932,56 +825,84 @@ export default function RunScreen() {
   );
 }
 
+function StatTile({ icon, tint, value, label }: { icon: React.ReactNode; tint: string; value: string; label: string }) {
+  return (
+    <View style={styles.statTile}>
+      <View style={[styles.statIconBg, { backgroundColor: tint }]}>{icon}</View>
+      <View style={styles.statCopy}>
+        <Text style={styles.statValue} numberOfLines={1}>{value}</Text>
+        <Text style={styles.statLabel} numberOfLines={3}>{label}</Text>
+      </View>
+    </View>
+  );
+}
+
+function CompetitionCard({ competition, onPress }: { competition: Competition; onPress: () => void }) {
+  const art = competition.id === 'virtual'
+    ? require('../../assets/competitions/virtual-race-v2.webp')
+    : require('../../assets/competitions/couple-tug-v2.webp');
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.compCard, competition.id === 'virtual' ? styles.compCardTeal : styles.compCardCoral, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityLabel={`${competition.shortTitle}. ${competition.description}`}
+    >
+      <Text style={styles.compTitle} numberOfLines={2}>{competition.shortTitle}</Text>
+      <Image source={art} resizeMode="contain" style={[styles.compArt, competition.id === 'steps' && styles.compArtCouple]} />
+
+      <View style={styles.compChevron}>
+        <ChevronRight size={18} color={competition.id === 'virtual' ? THEME.teal : THEME.primary} strokeWidth={2.8} />
+      </View>
+    </Pressable>
+  );
+}
+
+// Reuse Plans' 28pt card and primary-action styles; inset controls use 16pt corners.
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: THEME.bg },
-  mapViewport: { width: '100%', overflow: 'hidden', backgroundColor: THEME.surface },
-  floatingHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100 },
-  glassHeader: { 
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    marginHorizontal: 16, marginTop: 12, padding: 20, borderRadius: 28,
-    backgroundColor: THEME.glass, elevation: 12, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 15,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.6)'
-  },
-  immersiveHeader: { backgroundColor: 'rgba(26, 28, 30, 0.85)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
-  headerLabel: { fontSize: 11, fontWeight: '800', color: THEME.textMuted, letterSpacing: 1 },
-  headerTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 3,
-  },
-  headerValue: { fontSize: 20, fontWeight: '900', color: THEME.text, flexShrink: 1 },
-  headerTodayBadge: {
-    backgroundColor: THEME.primary,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  headerTodayBadgeText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: THEME.white,
-    letterSpacing: 0.8,
-  },
-  allRunsBtn: { 
-    paddingHorizontal: 16, 
-    paddingVertical: 8, 
-    borderRadius: 14, 
-    backgroundColor: THEME.white, 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    borderWidth: 1, 
-    borderColor: THEME.border 
-  },
-  allRunsBtnText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: THEME.text,
-    letterSpacing: 0.5,
-  },
+  scroll: { flex: 1 },
+  content: { paddingHorizontal: 16, gap: 14 },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.94 },
+  rowPressed: { backgroundColor: 'rgba(15, 23, 42, 0.03)' },
 
-  activeHud: { 
-    position: 'absolute', bottom: 40, left: 16, right: 16, 
+  headerIcon: { width: 44, height: 44, borderRadius: 16, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: THEME.primaryTint },
+  headerTitle: { flex: 1, fontSize: 25, fontWeight: '800', color: THEME.text, letterSpacing: -0.6 },
+  pointsPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 16, borderCurve: 'continuous', backgroundColor: THEME.primaryTint },
+  pointsText: { fontSize: 14, fontWeight: '800', color: THEME.primary, fontVariant: ['tabular-nums'] },
+  pointsUnit: { fontSize: 10, fontWeight: '600' },
+
+  mapBlock: { padding: 0, backgroundColor: THEME.surface, overflow: 'hidden' },
+  mapCard: {
+    height: 160,
+    overflow: 'hidden',
+    backgroundColor: '#EEF2F6',
+  },
+  nextRunCopy: { paddingHorizontal: 20, paddingTop: 20, gap: 4 },
+  nextRunEyebrow: { fontSize: 13, lineHeight: 20, fontWeight: '500', color: THEME.textMuted },
+  nextRunTitle: { fontSize: 24, lineHeight: 32, fontWeight: '700', color: THEME.text, letterSpacing: -0.5 },
+  nextRunSub: { fontSize: 14, lineHeight: 20, color: THEME.textMuted },
+  mapChevron: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 4,
+    flexDirection: 'row',
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    backgroundColor: THEME.white,
+    alignItems: 'center',
+  },
+  mapHistoryText: { fontSize: 12, fontWeight: '600', color: THEME.textMuted },
+  mainStartBtn: { margin: 20, marginTop: 16, backgroundColor: THEME.primary },
+
+  activeHud: {
+    position: 'absolute', bottom: 40, left: 16, right: 16,
     backgroundColor: THEME.secondary, borderRadius: 36, padding: 28,
     shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 25,
     borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.1)'
@@ -997,176 +918,62 @@ const styles = StyleSheet.create({
   hudFinishBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   hudResumeBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: THEME.primary, alignItems: 'center', justifyContent: 'center' },
 
-  dashboardContainer: { flex: 1 },
-  overlapSection: { width: '100%', height: 0, alignItems: 'center', zIndex: 150 },
-  mainStartBtn: { 
-    backgroundColor: THEME.secondary, 
-    borderRadius: 25, 
-    marginTop: -22,
-    paddingHorizontal: 28, 
-    paddingVertical: 12,
-    alignSelf: 'center',
-    justifyContent: 'center',
-    shadowColor: THEME.primary, 
-    shadowOpacity: 0.2, 
-    shadowRadius: 10, 
-    elevation: 6,
-    borderWidth: 1.5, 
-    borderColor: 'rgba(255,255,255,0.08)'
-  },
-  startBtnContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  startBtnText: { color: THEME.white, fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
+  section: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: THEME.surface },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  sectionTitle: { flex: 1, color: THEME.text },
+  sectionLink: { minHeight: 44, justifyContent: 'center' },
+  seeAll: { fontSize: 12, fontWeight: '700', color: THEME.primary },
+  groupCard: { overflow: 'hidden' },
+  completedMark: { width: 32, height: 32, borderRadius: 16, backgroundColor: THEME.tealTint, alignItems: 'center', justifyContent: 'center' },
+  groupRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 16 },
+  groupRowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: THEME.divider },
+  dateCol: { width: 38, alignItems: 'center' },
+  dateDay: { fontSize: 22, lineHeight: 28, fontWeight: '700', color: THEME.text, fontVariant: ['tabular-nums'] },
+  dateMonth: { fontSize: 11, fontWeight: '600', color: THEME.textMuted, letterSpacing: 0.6 },
+  dateRule: { width: StyleSheet.hairlineWidth, alignSelf: 'stretch', backgroundColor: THEME.divider },
+  activityDetails: { flex: 1, minWidth: 0 },
+  activityTitle: { fontSize: 16, lineHeight: 24, fontWeight: '600', color: THEME.text, flexShrink: 1 },
+  activitySub: { fontSize: 13, lineHeight: 20, fontWeight: '400', color: THEME.textMuted, marginTop: 3 },
+  scheduleTitleRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  todayBadge: { backgroundColor: THEME.primaryTint, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 16, borderCurve: 'continuous' },
+  todayBadgeText: { fontSize: 11, fontWeight: '600', color: '#BE4451' },
+  scheduleSubDone: { color: THEME.teal, fontWeight: '700' },
+  scheduleSubMissed: { color: THEME.textMuted, fontWeight: '700' },
+  statusMsg: { textAlign: 'center', color: THEME.textMuted, padding: 28, fontSize: 14 },
 
-  dashboardContent: { paddingHorizontal: 24, paddingTop: 44 },
-  section: { marginBottom: 40 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  sectionTitle: { fontSize: 13, fontWeight: '900', color: THEME.textMuted, letterSpacing: 1, textTransform: 'uppercase' },
-  weekSubLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: THEME.textMuted,
-    marginTop: 4,
-  },
+  statRow: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: THEME.divider, paddingTop: 16, paddingBottom: 4 },
+  statTile: { flex: 1, minWidth: 0, alignItems: 'flex-start', gap: 12, paddingHorizontal: 4 },
+  statIconBg: { width: 32, height: 32, borderRadius: 16, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
+  statCopy: { alignSelf: 'stretch', minWidth: 0, gap: 4 },
+  statValue: { fontSize: 22, lineHeight: 28, fontWeight: '800', color: THEME.text, fontVariant: ['tabular-nums'] },
+  statLabel: { fontSize: 12, lineHeight: 16, color: THEME.textMuted },
 
-  scheduleItemToday: {
-    borderColor: 'rgba(255, 71, 87, 0.25)',
-    backgroundColor: '#FFFBFB',
+  competitionList: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  compCard: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 176,
+    padding: 16,
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
   },
-  dateBadgeToday: {
-    backgroundColor: THEME.primaryTint,
-  },
-  dateDayToday: {
-    color: THEME.primary,
-  },
-  scheduleTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  scheduleTodayBadge: {
-    backgroundColor: THEME.primary,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 5,
-  },
-  scheduleTodayBadgeText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: THEME.white,
-    letterSpacing: 0.6,
-  },
-  scheduleSubDone: {
-    color: '#16A34A',
-    fontWeight: '700',
-  },
-  scheduleSubMissed: {
-    color: '#EF4444',
-    fontWeight: '700',
-  },
-
-  statGrid: { 
-    flexDirection: 'row', 
-    gap: 12,
-  },
-  premiumStatCard: { 
-    flex: 1, 
-    height: 120,
-    backgroundColor: THEME.white, 
-    borderRadius: 24, 
-    padding: 16, 
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: THEME.border,
-    shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowRadius: 10,
-    elevation: 2
-  },
-  statIconHeader: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center'
-  },
-  statIconBg: {
+  compCardTeal: { backgroundColor: THEME.tealTint },
+  compCardCoral: { backgroundColor: THEME.primaryTint },
+  compArt: { position: 'absolute', width: 164, height: 110, right: -4, bottom: -3 },
+  compArtCouple: { width: 186, height: 92, right: -13, bottom: 1 },
+  compTitle: { zIndex: 1, marginBottom: 96, fontSize: 15, lineHeight: 22, fontWeight: '700', color: THEME.text, letterSpacing: -0.4 },
+  compChevron: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
     width: 32,
     height: 32,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  premiumStatValue: { fontSize: 22, fontWeight: '900', color: THEME.text, marginTop: 12 },
-  premiumStatLabel: { fontSize: 9, fontWeight: '800', color: THEME.textMuted, letterSpacing: 0.5, textTransform: 'uppercase' },
-
-  questStack: { gap: 12 },
-  liveQuestCard: {
-    backgroundColor: THEME.white,
-    borderRadius: 28,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    elevation: 3,
-    gap: 14,
-  },
-  liveQuestTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  liveQuestBadge: {
-    width: 42,
-    height: 42,
     borderRadius: 16,
-    backgroundColor: THEME.primary,
+    backgroundColor: THEME.white,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: THEME.primary,
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    elevation: 3,
   },
-  questInfo: { flex: 1 },
-  liveQuestEyebrow: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: THEME.primary,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  questTitle: { fontSize: 16, fontWeight: '800', color: THEME.text },
-  questDesc: { fontSize: 13, color: THEME.textMuted, lineHeight: 19 },
-  rewardTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: THEME.primaryTint,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    alignSelf: 'flex-start',
-  },
-  rewardText: { fontSize: 12, fontWeight: '900', color: THEME.primary },
-  rewardUnit: { fontSize: 10, fontWeight: '800', color: THEME.primary, opacity: 0.85 },
-
-  activityLog: { gap: 14 },
-  activityItem: { 
-    flexDirection: 'row', alignItems: 'center', gap: 16, padding: 14, 
-    backgroundColor: THEME.white, borderRadius: 24, borderWidth: 1, borderColor: THEME.surface 
-  },
-  dateBadge: { width: 52, height: 52, borderRadius: 16, backgroundColor: THEME.surface, alignItems: 'center', justifyContent: 'center' },
-  dateDay: { fontSize: 20, fontWeight: '900', color: THEME.text },
-  dateMonth: { fontSize: 10, fontWeight: '900', color: THEME.textMuted },
-  activityDetails: { flex: 1 },
-  activityTitle: { fontSize: 16, fontWeight: '800', color: THEME.text },
-  activitySub: { fontSize: 13, color: THEME.textMuted, marginTop: 2 },
-  statusMsg: { textAlign: 'center', color: THEME.textMuted, padding: 30, fontStyle: 'italic', fontSize: 14 },
-  seeAll: { fontSize: 11, fontWeight: '900', color: THEME.primary, letterSpacing: 1 },
 
   summaryLayer: { ...StyleSheet.absoluteFillObject, backgroundColor: THEME.white, zIndex: 1000 },
   summaryInner: { flex: 1, padding: 32 },
@@ -1182,5 +989,3 @@ const styles = StyleSheet.create({
   summarySaveDisabled: { opacity: 0.7 },
   summarySaveText: { color: THEME.white, fontSize: 16, fontWeight: '900', letterSpacing: 1 },
 });
-
-

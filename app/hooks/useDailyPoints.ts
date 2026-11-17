@@ -1,18 +1,19 @@
 // app/hooks/useDailyPoints.ts
 // Hook to calculate weighted daily points with normalization and backend duplicate prevention
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { API_BASE_URL } from '../config/api';
+import { notifyDailyReward } from '../lib/daily-reward-events';
 
 // Point category keys
 export type PointCategoryKey = 'WALK_RUN' | 'STEPS' | 'CALORIES' | 'MOBILITY' | 'HYDRATION';
 
 // Base weights for each category (sum = 100)
 const BASE_WEIGHTS: Record<PointCategoryKey, number> = {
-    WALK_RUN: 45,
+    WALK_RUN: 25,
     STEPS: 25,
     CALORIES: 20,
-    MOBILITY: 5,
+    MOBILITY: 25,
     HYDRATION: 5,
 };
 
@@ -23,7 +24,7 @@ const PRIORITY_ORDER: PointCategoryKey[] = ['WALK_RUN', 'STEPS', 'CALORIES', 'MO
 const CATEGORY_INFO: Record<PointCategoryKey, { label: string; info: string }> = {
     WALK_RUN: {
         label: 'Walk/Run',
-        info: 'Earn points by completing your daily walk or run. This is the highest-weighted category at 45% of daily points.',
+        info: 'Earn points by completing your daily walk or run. Walk/Run contributes 25% of daily points, equal to Exercise.',
     },
     STEPS: {
         label: 'Steps',
@@ -35,7 +36,7 @@ const CATEGORY_INFO: Record<PointCategoryKey, { label: string; info: string }> =
     },
     MOBILITY: {
         label: 'Exercise',
-        info: 'Complete your daily exercises to earn these points. Exercise contributes 5% of your daily points.',
+        info: 'Complete your daily exercises to earn these points. Exercise contributes 25% of daily points, equal to Walk/Run.',
     },
     HYDRATION: {
         label: 'Hydration',
@@ -135,6 +136,11 @@ export function useDailyPoints({ accessToken, dayKey, config }: UseDailyPointsOp
     const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const scope = `${accessToken}:${dayKey}`;
+    const currentScope = useRef(scope);
+    currentScope.current = scope;
+    const [loadedScope, setLoadedScope] = useState<string | null>(null);
+    const ledgerVersion = useRef(0);
 
     // Determine which categories are available today
     const availableCategories = useMemo((): PointCategoryKey[] => {
@@ -206,6 +212,8 @@ export function useDailyPoints({ accessToken, dayKey, config }: UseDailyPointsOp
 
     // Fetch existing ledger entries for the day
     const fetchLedger = useCallback(async () => {
+        const requestScope = `${accessToken}:${dayKey}`;
+        const version = ++ledgerVersion.current;
         if (!accessToken || !dayKey) {
             setLoading(false);
             return;
@@ -221,6 +229,7 @@ export function useDailyPoints({ accessToken, dayKey, config }: UseDailyPointsOp
                     'Content-Type': 'application/json',
                 },
             });
+            if (currentScope.current !== requestScope || version !== ledgerVersion.current) return;
 
             if (!response.ok) {
                 // 404 means no points earned yet - not an error
@@ -232,12 +241,16 @@ export function useDailyPoints({ accessToken, dayKey, config }: UseDailyPointsOp
             }
 
             const data = await response.json();
+            if (currentScope.current !== requestScope || version !== ledgerVersion.current) return;
             setLedgerEntries(data.entries || []);
         } catch (err) {
             console.error('[useDailyPoints] Error fetching ledger:', err);
-            setError(err instanceof Error ? err.message : 'Unknown error');
+            if (currentScope.current === requestScope && version === ledgerVersion.current) setError(err instanceof Error ? err.message : 'Unknown error');
         } finally {
-            setLoading(false);
+            if (currentScope.current === requestScope && version === ledgerVersion.current) {
+                setLoading(false);
+                setLoadedScope(requestScope);
+            }
         }
     }, [accessToken, dayKey]);
 
@@ -273,11 +286,13 @@ export function useDailyPoints({ accessToken, dayKey, config }: UseDailyPointsOp
             }
 
             const data = await response.json();
-
-            // Update local ledger
-            if (!data.alreadyAwarded) {
-                setLedgerEntries(prev => [
-                    ...prev,
+            if (currentScope.current !== `${accessToken}:${dayKey}`) return false;
+            ledgerVersion.current += 1;
+            setLoading(false);
+            setLoadedScope(`${accessToken}:${dayKey}`);
+            // Reconcile existing awards too, so another mounted screen cannot keep retrying them.
+            setLedgerEntries(prev => [
+                    ...prev.filter(entry => entry.category !== categoryKey),
                     {
                         category: categoryKey,
                         earnedPoints: data.earnedPoints,
@@ -285,7 +300,7 @@ export function useDailyPoints({ accessToken, dayKey, config }: UseDailyPointsOp
                         progress: data.progress,
                     }
                 ]);
-            }
+            if (!data.alreadyAwarded) notifyDailyReward({ category: categoryKey, points: data.earnedPoints, dayKey });
 
             return true;
         } catch (err) {
@@ -299,11 +314,17 @@ export function useDailyPoints({ accessToken, dayKey, config }: UseDailyPointsOp
         fetchLedger();
     }, [fetchLedger]);
 
+    useEffect(() => {
+        if (!error || !accessToken || !dayKey) return;
+        const retry = setTimeout(() => { void fetchLedger(); }, 15_000);
+        return () => clearTimeout(retry);
+    }, [error, accessToken, dayKey, fetchLedger]);
+
     return {
         categories,
         totalMaxPoints,
         totalEarnedPoints,
-        loading,
+        loading: loading || (!!accessToken && !!dayKey && loadedScope !== scope),
         error,
         claimPoints,
         refetch: fetchLedger,

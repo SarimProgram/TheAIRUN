@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken';
 
 import { env } from '../config/env';
 
-type ApnsPushType = 'background' | 'liveactivity';
+type ApnsPushType = 'background' | 'liveactivity' | 'widgets';
 
 type ApnsResult = {
   skipped?: boolean;
@@ -174,8 +174,34 @@ export async function sendBackgroundWakePush(params: {
   });
 }
 
+/** WidgetKit push (iOS 26+): carries no data, it only asks WidgetKit to reload the widget's timeline. */
+export async function sendWidgetReloadPush(params: { pushToken: string }) {
+  if (!env.APNS_BUNDLE_ID) {
+    return { skipped: true, status: 0, body: 'Missing bundle id' };
+  }
+
+  return sendApnsRequest({
+    deviceToken: params.pushToken,
+    pushType: 'widgets',
+    topic: `${env.APNS_BUNDLE_ID}.push-type.widgets`,
+    priority: '10',
+    payload: { aps: { 'content-changed': true } },
+  });
+}
+
+/**
+ * expo-widgets renders every Live Activity from one `LiveActivityAttributes` type whose state is
+ * `{ name, props }`, where `name` picks the JS layout and `props` is that layout's JSON-encoded props.
+ * Any other `content-state` shape fails to decode on device and the push is silently dropped.
+ */
+function expoWidgetsContentState(name: string, props: Record<string, unknown>) {
+  return { name, props: JSON.stringify(props) };
+}
+
 export async function sendLiveActivityState(params: {
   pushToken: string;
+  /** The `createLiveActivity` name of the layout, e.g. `PartnerLiveActivity`. */
+  name: string;
   payload: Record<string, unknown>;
   event: 'update' | 'end';
 }) {
@@ -192,7 +218,43 @@ export async function sendLiveActivityState(params: {
       aps: {
         timestamp: Math.floor(Date.now() / 1000),
         event: params.event,
-        'content-state': params.payload,
+        'content-state': expoWidgetsContentState(params.name, params.payload),
+      },
+    },
+  });
+}
+
+/** Starts a Live Activity remotely with the device's ActivityKit push-to-start token (iOS 17.2+). */
+export async function startLiveActivity(params: {
+  pushToStartToken: string;
+  name: string;
+  payload: Record<string, unknown>;
+  alert: { title: string; body: string };
+  staleAfterSeconds?: number;
+}) {
+  if (!env.APNS_BUNDLE_ID) {
+    return { skipped: true, status: 0, body: 'Missing bundle id' };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  return sendApnsRequest({
+    deviceToken: params.pushToStartToken,
+    pushType: 'liveactivity',
+    topic: `${env.APNS_BUNDLE_ID}.push-type.liveactivity`,
+    priority: '10',
+    payload: {
+      aps: {
+        timestamp: now,
+        event: 'start',
+        'attributes-type': 'LiveActivityAttributes',
+        attributes: {},
+        'content-state': expoWidgetsContentState(params.name, params.payload),
+        ...(params.staleAfterSeconds ? { 'stale-date': now + params.staleAfterSeconds } : {}),
+        alert: {
+          title: params.alert.title,
+          body: params.alert.body,
+          sound: 'default',
+        },
       },
     },
   });

@@ -2,6 +2,29 @@ generator client {
   provider = "prisma-client-js"
 }
 
+model WorkoutPhoto {
+  id              String   @id @default(uuid())
+  authorUserId    String
+  recipientUserId String?
+  clientId        String
+  dayKey          String
+  capturedAt      DateTime
+  createdAt       DateTime @default(now())
+  selfiePath      String?
+  surroundingsPath String?
+  selfieThumbPath String?
+  surroundingsThumbPath String?
+  expiresAt       DateTime @default(dbgenerated("(CURRENT_TIMESTAMP + '30 days'::interval)"))
+  imagesDeletedAt DateTime?
+  author          User @relation("WorkoutPhotoAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  recipient       User? @relation("WorkoutPhotoRecipient", fields: [recipientUserId], references: [id], onDelete: SetNull)
+
+  @@unique([authorUserId, clientId])
+  @@index([authorUserId, dayKey])
+  @@index([recipientUserId, createdAt])
+  @@index([imagesDeletedAt, expiresAt])
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -145,7 +168,9 @@ model UserPlan {
 
   // Weight Branch Specifics
   bodyType      String? // hourglass, pear, apple, athletic
-  trainingStyle String? // walkOnly, runOnly, walkAndRun
+  trainingStyle String? // walkOnly, runOnly, walkAndRun, workout
+  workoutDaysPerWeek Int?
+  workoutPreference String? // strength, gym, home
 
   // Current week tracking (resets when new plan generated)
   currentWeek   Int      @default(1)
@@ -223,6 +248,12 @@ model DailyTarget {
 }
 
 model User {
+  homeGoalLayout HomeGoalLayout?
+  weeklyGoalRemovalsA WeeklyGoalRemoval[] @relation("GoalRemovalUserA")
+  weeklyGoalRemovalsB WeeklyGoalRemoval[] @relation("GoalRemovalUserB")
+  claimedGuestInvites GuestPartnerInvite[]
+  workoutPhotos WorkoutPhoto[] @relation("WorkoutPhotoAuthor")
+  receivedWorkoutPhotos WorkoutPhoto[] @relation("WorkoutPhotoRecipient")
   id           String  @id @default(uuid())
   email        String  @unique
   passwordHash String?
@@ -261,6 +292,9 @@ model User {
   expoPushTokenUpdatedAt   DateTime?
   apnsDeviceToken          String?
   apnsDeviceTokenUpdatedAt DateTime?
+  // ActivityKit push-to-start token (iOS 17.2+); lets the server start a Live Activity on a locked phone.
+  liveActivityStartToken          String?
+  liveActivityStartTokenUpdatedAt DateTime?
   notificationPreferences  Json?
 
   createdAt  DateTime    @default(now())
@@ -316,16 +350,47 @@ model User {
   // Wagers
   wagersSent     Wager[] @relation("WagersSent")
   wagersReceived Wager[] @relation("WagersReceived")
+  weekPrizesAsUserA WeekPrize[] @relation("WeekPrizeUserA")
+  weekPrizesAsUserB WeekPrize[] @relation("WeekPrizeUserB")
+  couplesAsUserA    Couple[]    @relation("CoupleUserA")
+  couplesAsUserB    Couple[]    @relation("CoupleUserB")
+  coupleChallengesCreated CoupleChallenge[] @relation("CoupleChallengeCreator")
 
   // Billing / paywall
   billingProfile             BillingProfile?
   billingWebhookEvents       BillingWebhookEvent[]
   onboardingRewardPreference OnboardingRewardPreference?
   liveActivitySessions       LiveActivitySession[]
+  widgetPushDevices          WidgetPushDevice[]
 
   partnerMemoriesAuthored PartnerMemory[]     @relation("PartnerMemoriesAuthored")
   partnerMemoriesReceived PartnerMemory[]     @relation("PartnerMemoriesReceived")
   partnerMemorySyncs      PartnerMemorySync[]
+
+  sharedMealsSent     SharedMeal[] @relation("SharedMealsSent")
+  sharedMealsReceived SharedMeal[] @relation("SharedMealsReceived")
+}
+
+model HomeGoalLayout {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order String[]
+}
+
+model WeeklyGoalRemoval {
+  id String @id @default(uuid())
+  userAId String
+  userBId String
+  userA User @relation("GoalRemovalUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB User @relation("GoalRemovalUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  weekStart String
+  goal String
+  requestedById String
+  acceptedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@unique([userAId, userBId, weekStart, goal])
+  @@index([userBId, weekStart])
 }
 
 model LiveActivitySession {
@@ -341,6 +406,22 @@ model LiveActivitySession {
   updatedAt          DateTime  @updatedAt
 
   @@index([userId, activityType, endedAt])
+}
+
+/// A home screen widget that reloads from WidgetKit pushes (iOS 26+). The extension reads its feed with
+/// `feedToken`, a read-only per-device secret; only its SHA-256 is stored.
+model WidgetPushDevice {
+  id            String    @id @default(uuid())
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  kind          String
+  pushToken     String    @unique
+  feedTokenHash String    @unique
+  lastPushedAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId, kind])
 }
 
 model BillingProfile {
@@ -449,13 +530,25 @@ enum InviteStatus {
   DECLINED
 }
 
+model GuestPartnerInvite {
+  id String @id @default(uuid())
+  ownerTokenHash String @unique
+  displayName String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  claimedByUserId String?
+  claimedByUser User? @relation(fields: [claimedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
 model PartnerInvite {
   id String @id @default(uuid())
 
   fromUser   User   @relation("InvitesSent", fields: [fromUserId], references: [id])
   fromUserId String
 
-  toEmail  String // Email of person being invited
+  toEmail  String? // Null for an invite shared directly by code
   toUser   User?   @relation("InvitesReceived", fields: [toUserId], references: [id])
   toUserId String? // Set once they register/login
 
@@ -992,6 +1085,43 @@ model ChatMessage {
   @@index([viewedAt])
 }
 
+enum SharedMealMode {
+  SPLIT
+  COPY
+}
+
+enum SharedMealStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+/// "Pass a plate": a scanned meal one partner proposes to split with (or copy to) the other.
+model SharedMeal {
+  id                 String           @id @default(uuid())
+  sender             User             @relation("SharedMealsSent", fields: [senderUserId], references: [id], onDelete: Cascade)
+  senderUserId       String
+  recipient          User             @relation("SharedMealsReceived", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  recipientUserId    String
+  clientId           String
+  senderClientMealId String?
+  mode               SharedMealMode
+  mealType           MealType
+  /// Whole-plate items as scanned: [{ foodName, calories, grams, proteinG, carbsG, fatG }].
+  items              Json
+  /// SPLIT: the recipient's fraction (0–1) of each item. COPY: the recipient's serving multiplier per item.
+  itemShares         Json
+  photoPath          String?
+  cutoutPath         String?
+  status             SharedMealStatus @default(PENDING)
+  respondedAt        DateTime?
+  createdAt          DateTime         @default(now())
+  expiresAt          DateTime
+
+  @@unique([senderUserId, clientId])
+  @@index([recipientUserId, status, createdAt])
+}
+
 model UserBlock {
   id        String   @id @default(uuid())
   blocker   User     @relation("UserBlocksInitiated", fields: [blockerId], references: [id], onDelete: Cascade)
@@ -1047,4 +1177,86 @@ model Wager {
 
   @@index([fromUserId, status])
   @@index([toUserId, status])
+}
+
+// A shared prize for a partner pair and calendar week, independent of wagers.
+model WeekPrize {
+  id        String   @id @default(uuid())
+  userAId   String
+  userBId   String
+  userA     User     @relation("WeekPrizeUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User     @relation("WeekPrizeUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  weekStart String   // Monday day key in the pair's shared week timezone
+  weekprize String
+  proposedById String? // null for prizes saved before proposals existed; treated as agreed
+  acceptedAt   DateTime?
+  signatureA   Json? // SVG path strings drawn by userA in a 320x160 box
+  signatureB   Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userAId, userBId, weekStart])
+  @@index([userBId])
+}
+
+// ============================================
+// COUPLE VS COUPLE STEP CHALLENGE
+// ============================================
+// A linked partner pair with a shareable code. userAId < userBId.
+model Couple {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  userAId   String
+  userBId   String
+  userA     User     @relation("CoupleUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User     @relation("CoupleUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  challengesSent     CoupleChallenge[] @relation("CoupleChallengeChallenger")
+  challengesReceived CoupleChallenge[] @relation("CoupleChallengeOpponent")
+
+  @@unique([userAId, userBId])
+  @@index([userBId])
+}
+
+enum CoupleChallengeType {
+  FIRST_TO_100K
+  MOST_STEPS_WEEK
+}
+
+enum CoupleChallengeStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  DECLINED
+  CANCELLED
+}
+
+model CoupleChallenge {
+  id                 String                @id @default(uuid())
+  challengerCoupleId String
+  opponentCoupleId   String
+  challengerCouple   Couple                @relation("CoupleChallengeChallenger", fields: [challengerCoupleId], references: [id], onDelete: Cascade)
+  opponentCouple     Couple                @relation("CoupleChallengeOpponent", fields: [opponentCoupleId], references: [id], onDelete: Cascade)
+  type               CoupleChallengeType
+  prize              String
+  status             CoupleChallengeStatus @default(PENDING)
+  createdByUserId    String
+  createdBy          User                  @relation("CoupleChallengeCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  acceptedAt         DateTime?
+  // Day keys in `timezone`; the weekly type ends on endDayKey, the 100k type has no end.
+  startDayKey        String?
+  endDayKey          String?
+  endsAt             DateTime?
+  timezone           String?
+  // Steps each member had already logged on startDayKey when the challenge was accepted.
+  baselines          Json?
+  winnerCoupleId     String?
+  isTie              Boolean               @default(false)
+  completedAt        DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([challengerCoupleId, status])
+  @@index([opponentCoupleId, status])
 }

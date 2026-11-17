@@ -32,7 +32,7 @@ export function requirePremiumAccess() {
 }
 
 const UNPAID_PARTNER_INVITATION_ROUTES = [
-  { method: 'POST', pattern: /^\/invite\/?$/ },
+  { method: 'POST', pattern: /^\/invite(?:\/code)?\/?$/ },
   { method: 'GET', pattern: /^\/invites\/(?:pending|sent)\/?$/ },
   { method: 'POST', pattern: /^\/invites\/[^/]+\/(?:accept|decline)\/?$/ },
 ];

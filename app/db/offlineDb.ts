@@ -343,12 +343,12 @@ export type WaterLog = {
 /**
  * Insert a water log entry
  */
-export async function insertWaterLog(log: Omit<WaterLog, 'synced'>): Promise<void> {
+export async function insertWaterLog(log: Omit<WaterLog, 'synced'>, options?: { ignoreDuplicate?: boolean }): Promise<void> {
     const db = await getDatabase();
 
     await db.runAsync(
         `INSERT INTO water_logs (id, dayKey, timeBucket, amountMl, loggedAt, synced, createdAt)
-         VALUES (?, ?, ?, ?, ?, 0, ?)`,
+         VALUES (?, ?, ?, ?, ?, 0, ?)${options?.ignoreDuplicate ? ' ON CONFLICT(id) DO NOTHING' : ''}`,
         log.id,
         log.dayKey,
         log.timeBucket,

@@ -22,6 +22,24 @@ export type RunMeta = {
 };
 
 export const RUN_META_MAP: Record<string, RunMeta> = {
+  'Run–Walk': {
+    aliases: ['run–walk', 'run-walk', 'run walk', 'run/walk', 'run and walk'],
+    templateId: 'interval', launchMode: 'interval',
+    details: {
+      title: 'Run–Walk', description: 'Alternate comfortable running with walking breaks.',
+      benefits: [], expertOpinions: [],
+      phases: [{ name: 'Warm Up Walk', duration: '10%' }, { name: 'Run and Walk', duration: '80%' }, { name: 'Cool Down Walk', duration: '10%' }],
+      tips: ['Follow the scheduled run and walk blocks.', 'Pause whenever you need a break.'], intensity: 'Low', color: '#FF6B6B',
+    },
+  },
+  'Walk': {
+    aliases: ['walk', 'walking'], templateId: 'walk', launchMode: 'standard',
+    details: {
+      title: 'Walk', description: 'Follow your scheduled walking distance at a comfortable pace.',
+      benefits: [], expertOpinions: [], phases: [{ name: 'Walk', duration: '100%' }],
+      tips: ['Walk at a comfortable pace.', 'Pause whenever you need a break.'], intensity: 'Low', color: '#FF6B6B',
+    },
+  },
   'Long Run': {
     aliases: ['long run'],
     templateId: 'long',

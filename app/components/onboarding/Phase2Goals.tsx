@@ -1,334 +1,168 @@
 import React, { useEffect, useRef, useState } from 'react';
-import {
-    Animated,
-    Dimensions,
-    KeyboardAvoidingView,
-    Platform,
-    SafeAreaView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
-    ScrollView,
-    Keyboard,
-} from 'react-native';
-import { ArrowRight, ChevronLeft } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import Animated, { Easing, cancelAnimation, interpolate, interpolateColor, useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withSpring, withTiming } from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
+import { Check } from 'lucide-react-native';
+import { C, EASE_OUT, OnboardingScreen, SURFACE, SURFACE_SELECTED, ScreenTitle, rise, useCompact } from './OnboardingKit';
 
-const { height: windowHeight } = Dimensions.get('window');
-const height = Math.min(windowHeight, 800);
-const isCompact = windowHeight <= 740;
+const SETTLE = { duration: 400, dampingRatio: 0.72 };
+const RING = '#D8D9DB';
+const LABEL = 'rgba(8, 36, 55, 0.5)';
 
-const COLORS = {
-    brand: '#FF3B3B',
-    brandDark: '#D62F2F',
-    ink: '#121212',
-    white: '#FFFFFF',
-    muted: '#999999',
-    line: '#F0F0F0',
-};
+type Gender = 'male' | 'female';
+type Props = { onNext: (name: string, gender: Gender) => void; onBack: () => void; prefilledName?: string };
 
-export default function Phase2Goals({ onNext, onBack, prefilledName }: any) {
-    const trimmedPrefilled = typeof prefilledName === 'string' ? prefilledName.trim() : '';
-    const hasPrefilledName = trimmedPrefilled.length > 0;
-    const [name, setName] = useState(trimmedPrefilled);
-    const [gender, setGender] = useState<string | null>(null);
-    const genderOptions = [
-        { label: 'Male', value: 'male' },
-        { label: 'Female', value: 'female' },
-    ];
+const GENDERS: { id: Gender; label: string }[] = [
+  { id: 'female', label: 'Female' },
+  { id: 'male', label: 'Male' },
+];
 
-    const progressAnim = useRef(new Animated.Value(0)).current;
+export default function Phase2Goals({ onNext, onBack, prefilledName = '' }: Props) {
+  const compact = useCompact();
+  const nameInput = useRef<TextInput>(null);
+  const [name, setName] = useState(prefilledName.trim());
+  const [gender, setGender] = useState<Gender>('female');
+  const canContinue = name.trim().length > 0;
+  const isNameEmpty = name.length === 0;
+  const reduceMotion = useReducedMotion();
 
-    useEffect(() => {
-        Animated.timing(progressAnim, {
-            toValue: 0.25,
-            duration: 1000,
-            useNativeDriver: false,
-        }).start();
-    }, [progressAnim]);
+  const focus = useSharedValue(0);
+  const placeholderOpacity = useSharedValue(1);
 
-    const canContinue = name.trim().length > 0 && !!gender;
+  useEffect(() => {
+    placeholderOpacity.set(1);
+    if (isNameEmpty && !reduceMotion) {
+      placeholderOpacity.set(withRepeat(
+        withTiming(0.55, { duration: 1200, easing: Easing.inOut(Easing.sin) }),
+        -1,
+        true,
+      ));
+    }
+    return () => cancelAnimation(placeholderOpacity);
+  }, [isNameEmpty, reduceMotion, placeholderOpacity]);
 
-    return (
-        <View style={styles.container}>
-            <StatusBar barStyle="light-content" />
+  const placeholderStyle = useAnimatedStyle(() => ({ opacity: placeholderOpacity.get() }));
+  const nameFieldStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(focus.get(), [0, 1], [C.border, C.coral]),
+    backgroundColor: interpolateColor(focus.get(), [0, 1], [SURFACE, C.white]),
+  }));
 
-            <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={styles.hero}>
-                <View style={styles.progressContainer}>
-                    <Animated.View
-                        style={[
-                            styles.progressBar,
-                            {
-                                width: progressAnim.interpolate({
-                                    inputRange: [0, 1],
-                                    outputRange: ['0%', '100%'],
-                                }),
-                            },
-                        ]}
-                    />
-                </View>
+  const selectGender = (option: Gender) => {
+    if (option === gender) return;
+    Haptics.selectionAsync().catch(() => {});
+    setGender(option);
+  };
 
-                <SafeAreaView>
-                    <TouchableOpacity onPress={onBack} style={styles.backBtn}>
-                        <ChevronLeft color={COLORS.white} size={28} />
-                    </TouchableOpacity>
-                </SafeAreaView>
-            </LinearGradient>
+  return <OnboardingScreen
+    onBack={onBack}
+    showBrand
+    scrollable
+    avoidKeyboard
+    ctaLabel="Continue"
+    onCta={() => onNext(name.trim(), gender)}
+    ctaDisabled={!canContinue}
+  >
+    <ScreenTitle lead="Tell us about " accent="you" sparkles delay={80} />
 
-            <KeyboardAvoidingView
-                style={styles.flex}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-            >
-                <View style={styles.content}>
-                    <ScrollView
-                        style={styles.scroll}
-                        keyboardShouldPersistTaps="handled"
-                        showsVerticalScrollIndicator={false}
-                        contentContainerStyle={styles.scrollContent}
-                        bounces={false}
-                    >
-                        <View style={styles.textGroup}>
-                            <Text style={styles.welcomeText}>Let&apos;s get started!</Text>
-                            <Text style={styles.mainTitle}>Tell us about you</Text>
-                        </View>
+    <View style={{ marginTop: compact ? 28 : 40, gap: compact ? 20 : 28 }}>
+      <Animated.View entering={rise(180)} style={styles.section}>
+        <Text style={styles.label}>Name</Text>
+        <Pressable onPress={() => nameInput.current?.focus()} accessible={false}>
+          <Animated.View style={[styles.nameField, compact && styles.nameFieldCompact, nameFieldStyle]}>
+            {isNameEmpty && <Animated.Text pointerEvents="none" accessible={false} style={[styles.namePlaceholder, placeholderStyle]}>
+              Your name
+            </Animated.Text>}
+            <TextInput
+              ref={nameInput}
+              style={styles.nameInput}
+              defaultValue={name}
+              onChangeText={setName}
+              selectionColor={C.coral}
+              onFocus={() => focus.set(withTiming(1, { duration: 200, easing: EASE_OUT }))}
+              onBlur={() => focus.set(withTiming(0, { duration: 160, easing: EASE_OUT }))}
+              autoCapitalize="words"
+              autoCorrect={false}
+              returnKeyType="done"
+              onSubmitEditing={Keyboard.dismiss}
+              accessibilityLabel="Your name"
+            />
+          </Animated.View>
+        </Pressable>
+      </Animated.View>
 
-                        {!hasPrefilledName && (
-                            <View style={styles.inputGroup}>
-                                <Text style={styles.fieldLabel}>YOUR NAME</Text>
-                                <TextInput
-                                    style={styles.mainInput}
-                                    placeholder="Enter your name"
-                                    placeholderTextColor={COLORS.muted}
-                                    value={name}
-                                    onChangeText={setName}
-                                    selectionColor={COLORS.brand}
-                                    returnKeyType="done"
-                                    onSubmitEditing={Keyboard.dismiss}
-                                />
-                                <View style={styles.underline} />
-                            </View>
-                        )}
-
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.fieldLabel}>CHOOSE ONE</Text>
-                            <View style={styles.genderRow}>
-                                {genderOptions.map((opt) => (
-                                    <TouchableOpacity
-                                        key={opt.value}
-                                        onPress={() => setGender(opt.value)}
-                                        style={[
-                                            styles.pill,
-                                            gender === opt.value && styles.pillActive,
-                                        ]}
-                                    >
-                                        <Text
-                                            style={[
-                                                styles.pillText,
-                                                gender === opt.value && styles.pillTextActive,
-                                            ]}
-                                        >
-                                            {opt.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                        </View>
-                    </ScrollView>
-
-                    <View style={styles.footer}>
-                    <TouchableOpacity
-                        disabled={!canContinue}
-                        onPress={() => onNext(name, gender)}
-                        style={[styles.mainButton, !canContinue && styles.mainButtonDisabled]}
-                        activeOpacity={0.9}
-                    >
-                        <LinearGradient
-                            colors={
-                                canContinue ? [COLORS.brand, COLORS.brandDark] : ['#E5E7EB', '#D1D5DB']
-                            }
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 0 }}
-                            style={styles.gradientButton}
-                        >
-                            <Text style={[styles.nextBtnText, !canContinue && styles.nextBtnTextDisabled]}>
-                                Let&apos;s go
-                            </Text>
-                            <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
-                        </LinearGradient>
-                    </TouchableOpacity>
-                    </View>
-                </View>
-            </KeyboardAvoidingView>
+      <Animated.View entering={rise(250)} style={styles.section}>
+        <Text style={styles.label}>Gender</Text>
+        <View style={styles.genderRow} accessibilityRole="radiogroup">
+          {GENDERS.map((option) => (
+            <View key={option.id} style={styles.fill}>
+              <GenderBox option={option} selected={gender === option.id} compact={compact} onSelect={selectGender} />
+            </View>
+          ))}
         </View>
-    );
+      </Animated.View>
+    </View>
+  </OnboardingScreen>;
+}
+
+function GenderBox({ option, selected, compact, onSelect }: {
+  option: (typeof GENDERS)[number];
+  selected: boolean;
+  compact: boolean;
+  onSelect: (option: Gender) => void;
+}) {
+  const progress = useSharedValue(selected ? 1 : 0);
+  const badge = useSharedValue(selected ? 1 : 0);
+  const pressed = useSharedValue(0);
+
+  useEffect(() => {
+    progress.set(withTiming(selected ? 1 : 0, { duration: 240, easing: EASE_OUT }));
+    badge.set(selected ? withSpring(1, SETTLE) : withTiming(0, { duration: 140, easing: EASE_OUT }));
+  }, [selected, progress, badge]);
+
+  const boxStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(progress.get(), [0, 1], [C.border, C.coral]),
+    backgroundColor: interpolateColor(progress.get(), [0, 1], [SURFACE, SURFACE_SELECTED]),
+    transform: [{ scale: interpolate(pressed.get(), [0, 1], [1, 0.97]) }],
+  }));
+  const checkStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, badge.get() * 1.6),
+    transform: [{ scale: interpolate(badge.get(), [0, 1], [0.55, 1]) }],
+  }));
+  const ringStyle = useAnimatedStyle(() => ({ opacity: 1 - progress.get() }));
+
+  return <Pressable
+    onPress={() => onSelect(option.id)}
+    onPressIn={() => pressed.set(withTiming(1, { duration: 110, easing: EASE_OUT }))}
+    onPressOut={() => pressed.set(withTiming(0, { duration: 180, easing: EASE_OUT }))}
+    accessibilityRole="radio"
+    accessibilityState={{ selected }}
+    accessibilityLabel={option.label}
+  >
+    <Animated.View style={[styles.genderBox, compact && styles.genderBoxCompact, boxStyle]}>
+      <View style={styles.radio}>
+        <Animated.View style={[styles.radioRing, ringStyle]} />
+        <Animated.View style={[styles.radioChecked, checkStyle]}>
+          <Check color={C.white} size={18} strokeWidth={3.4} />
+        </Animated.View>
+      </View>
+      <Text style={styles.genderLabel} numberOfLines={1}>{option.label}</Text>
+    </Animated.View>
+  </Pressable>;
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: COLORS.white,
-    },
-    flex: {
-        flex: 1,
-    },
-    hero: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        height: height * 0.4,
-        paddingHorizontal: 25,
-    },
-    progressContainer: {
-        height: 3,
-        width: '100%',
-        backgroundColor: 'rgba(255,255,255,0.15)',
-    },
-    progressBar: {
-        height: '100%',
-        backgroundColor: COLORS.white,
-    },
-    backBtn: {
-        width: 44,
-        height: 44,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        borderRadius: 22,
-        marginTop: 10,
-    },
-    content: {
-        flex: 1,
-        marginTop: height * 0.2,
-        backgroundColor: COLORS.white,
-        borderTopLeftRadius: 40,
-        borderTopRightRadius: 40,
-        paddingHorizontal: 24,
-        paddingTop: 30,
-        paddingBottom: Platform.OS === 'ios' ? 16 : 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: -10 },
-        shadowOpacity: 0.05,
-        shadowRadius: 20,
-        elevation: 10,
-    },
-    scroll: {
-        flex: 1,
-    },
-    scrollContent: {
-        flexGrow: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingBottom: 8,
-    },
-    textGroup: {
-        marginBottom: isCompact ? 18 : 22,
-        alignItems: 'center',
-        width: '100%',
-    },
-    welcomeText: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: COLORS.brand,
-        marginBottom: 4,
-        textAlign: 'center',
-    },
-    mainTitle: {
-        fontSize: isCompact ? 28 : 30,
-        fontWeight: '900',
-        color: COLORS.ink,
-        letterSpacing: -1,
-        lineHeight: isCompact ? 32 : 34,
-        textAlign: 'center',
-    },
-    inputGroup: {
-        marginBottom: isCompact ? 18 : 22,
-        width: '100%',
-        alignItems: 'center',
-    },
-    fieldLabel: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: COLORS.muted,
-        letterSpacing: 1.5,
-        marginBottom: 10,
-        textAlign: 'center',
-    },
-    mainInput: {
-        fontSize: 20,
-        fontWeight: '600',
-        color: COLORS.ink,
-        paddingVertical: 8,
-        width: '100%',
-        textAlign: 'center',
-    },
-    underline: {
-        height: 1.5,
-        backgroundColor: COLORS.line,
-        marginTop: 5,
-        alignSelf: 'stretch',
-    },
-    genderRow: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 12,
-        justifyContent: 'center',
-    },
-    pill: {
-        paddingHorizontal: 24,
-        paddingVertical: 14,
-        borderRadius: 16,
-        backgroundColor: '#FAFAFA',
-        borderWidth: 1.5,
-        borderColor: '#F0F0F0',
-    },
-    pillActive: {
-        backgroundColor: '#FFF0F0',
-        borderColor: COLORS.brand,
-    },
-    pillText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: COLORS.muted,
-    },
-    pillTextActive: {
-        color: COLORS.brand,
-    },
-    footer: {
-        paddingTop: 12,
-        marginTop: 'auto',
-    },
-    mainButton: {
-        height: 58,
-        borderRadius: 20,
-        overflow: 'hidden',
-        shadowColor: COLORS.brand,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.22,
-        shadowRadius: 12,
-        elevation: 6,
-    },
-    mainButtonDisabled: {
-        shadowOpacity: 0,
-        elevation: 0,
-    },
-    gradientButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
-    },
-    nextBtnText: {
-        color: COLORS.white,
-        fontSize: 16,
-        fontWeight: '700',
-    },
-    nextBtnTextDisabled: {
-        color: '#9CA3AF',
-    },
+  fill: { flex: 1 },
+  section: { gap: 10 },
+  label: { marginLeft: 4, color: LABEL, fontSize: 15, fontWeight: '700' },
+  nameField: { height: 64, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1.5, borderColor: C.border, backgroundColor: SURFACE, justifyContent: 'center', paddingHorizontal: 22, boxShadow: '0 6px 18px rgba(8, 36, 55, 0.05)' },
+  nameFieldCompact: { height: 58 },
+  namePlaceholder: { position: 'absolute', left: 22, color: C.muted, fontSize: 19, fontWeight: '800', letterSpacing: -0.4 },
+  nameInput: { height: '100%', paddingHorizontal: 0, paddingVertical: 0, color: C.ink, fontSize: 19, fontWeight: '800', letterSpacing: -0.4 },
+  genderRow: { flexDirection: 'row', gap: 14 },
+  genderBox: { height: 120, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1.5, borderColor: C.border, backgroundColor: SURFACE, padding: 18, justifyContent: 'space-between', boxShadow: '0 6px 18px rgba(8, 36, 55, 0.05)' },
+  genderBoxCompact: { height: 104, padding: 16 },
+  genderLabel: { color: C.ink, fontSize: 20, fontWeight: '800', letterSpacing: -0.4 },
+  radio: { width: 28, height: 28, alignSelf: 'flex-end' },
+  radioRing: { ...StyleSheet.absoluteFillObject, borderRadius: 14, borderWidth: 2, borderColor: RING },
+  radioChecked: { ...StyleSheet.absoluteFillObject, borderRadius: 14, backgroundColor: C.coral, alignItems: 'center', justifyContent: 'center' },
 });

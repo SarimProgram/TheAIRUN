@@ -8,6 +8,8 @@
  * an immediate preview of their week before the full plan is generated.
  */
 
+import { getTrainingSchedule, type WorkoutPreference } from './trainingSchedule';
+
 export const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export type PlanActivityProfile = {
@@ -34,6 +36,8 @@ export type DaySchedule = {
     runType: string | null;
     targetKm: number;
     multiplier: number;
+    workoutPreference?: WorkoutPreference;
+    workoutId?: string;
 };
 
 const normalizeAvailableDays = (availableDays?: number[]): number[] => {
@@ -83,6 +87,27 @@ export const getMappedDays = (weekData: any, availableDays?: number[]): DaySched
 
     // Safety check for runs array
     const weekDailys = weekData["Week Dailys"];
+    const trainingSchedule = getTrainingSchedule(weekDailys);
+    if (trainingSchedule) {
+        const queue: Array<{ runType: string; targetKm: number }> = (weekDailys.runs ?? []).flatMap((run: any) =>
+            Array.from({ length: run.sessions }, () => ({ runType: run.runType, targetKm: Number(run.targetKm) || 0 })));
+        return Array.from({ length: 7 }, (_, dayIdx) => {
+            const session = trainingSchedule.sessions.find(session => session.dayOfWeek === dayIdx);
+            const day: DaySchedule = { dayIdx, name: dayNames[dayIdx], type: session ? 'STEP' : 'RECOVERY', runType: null, targetKm: 0, multiplier: 0 };
+            if (session?.activity === 'WORKOUT') {
+                day.workoutPreference = session.workoutPreference ?? 'strength';
+                day.workoutId = session.workoutId;
+            }
+            else if (session) {
+                const index = queue.findIndex(run => /walk/i.test(run.runType) === (session.activity === 'WALK'));
+                const run = queue.splice(index >= 0 ? index : 0, 1)[0];
+                day.type = 'RUN';
+                day.runType = run?.runType ?? (session.activity === 'WALK' ? 'Walk' : 'Easy Run');
+                day.targetKm = run?.targetKm ?? 0;
+            }
+            return day;
+        });
+    }
     if (!weekDailys.runs || !Array.isArray(weekDailys.runs)) {
         // Return empty schedule if runs data is missing
         return Array.from({ length: 7 }, (_, i) => ({

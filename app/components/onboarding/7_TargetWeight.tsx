@@ -1,41 +1,16 @@
-/* eslint-disable react/no-unescaped-entities */
-import React, { useState, useRef, useEffect } from 'react';
-import {
-  StyleSheet,
-  View,
-  Text,
-  SafeAreaView,
-  TouchableOpacity,
-  Animated,
-  StatusBar,
-  Dimensions,
-  Platform,
-} from 'react-native';
-import { ChevronLeft, ArrowRight, Info } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import React, { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import Animated, { interpolate, useAnimatedProps, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming } from 'react-native-reanimated';
+import Svg, { Defs, LinearGradient, Line, Path, Rect, Stop } from 'react-native-svg';
+import { ArrowRight } from 'lucide-react-native';
+import { C, EASE_OUT, OnboardingScreen, SURFACE_SELECTED, ScreenTitle, WheelPicker, rise, useCompact } from './OnboardingKit';
 
-const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
-const width = Math.min(windowWidth, 480);
-const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
-const isCompactFrame = windowHeight <= 820;
-const useCompactLayout = isAirLayout || isCompactFrame;
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const TRAIL_LENGTH = 200;
 
-const ITEM_HEIGHT = useCompactLayout ? 58 : 70;
-const VISIBLE_ITEMS = 3;
-const PICKER_HEIGHT = ITEM_HEIGHT * VISIBLE_ITEMS;
-const titleSize = useCompactLayout ? 32 : 36;
-
-const COLORS = {
-  coral: '#FF6B6B',
-  coralDark: '#EE5253',
-  black: '#1F2937',
-  muted: '#6B7280',
-  white: '#FFFFFF',
-  bg: '#FFFFFF',
-  selection: '#FFF0F0',
-  accent: '#F1F5F9',
-  cardBg: '#F9FAFB',
-};
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+const KG = range(30, 150);
+const LBS = range(70, 330);
 
 interface Props {
   currentWeight: number | string;
@@ -45,243 +20,141 @@ interface Props {
 }
 
 export default function TargetWeight({ currentWeight, unit = 'kg', onContinue, onBack }: Props) {
-  const kgValues = Array.from({ length: 121 }, (_, i) => i + 30).filter(v => v <= Number(currentWeight));
-  const lbsValues = Array.from({ length: 261 }, (_, i) => i + 70).filter(v => v <= Number(currentWeight));
-  const values = unit.toLowerCase() === 'kg' ? kgValues : lbsValues;
+  const compact = useCompact();
+  const { width } = useWindowDimensions();
+  const isKg = unit.toLowerCase() === 'kg';
+  const unitLabel = isKg ? 'kg' : 'lb';
 
-  // Initial index set to just below current weight or the last value
-  const initialIndex = values.length > 0 ? values.length - 2 : 0;
-  const safeInitialIndex = Math.max(0, initialIndex);
+  const values = useMemo(() => {
+    const all = isKg ? KG : LBS;
+    const atOrBelow = all.filter((v) => v <= Number(currentWeight));
+    return atOrBelow.length > 0 ? atOrBelow : all;
+  }, [isKg, currentWeight]);
 
-  const [selectedIndex, setSelectedIndex] = useState(safeInitialIndex);
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
+  const initialIndex = Math.max(0, values.length - 2);
+  const [index, setIndex] = useState(initialIndex);
+  const target = values[Math.min(index, values.length - 1)];
+
+  const artWidth = Math.min(width - 48, 380);
+  const artHeight = compact ? 96 : Math.round(artWidth * 0.42);
+  const [artAvailableHeight, setArtAvailableHeight] = useState(0);
+
+  return <OnboardingScreen onBack={onBack} ctaLabel="Continue" onCta={() => onContinue(target)}>
+    <ScreenTitle lead="Your " accent="goal weight?" />
+
+    <View style={styles.body}>
+      <Animated.View
+        entering={rise(160)}
+        style={[styles.summary, { marginTop: compact ? 20 : 28 }]}
+        accessible
+        accessibilityLabel={`Current weight ${currentWeight} ${unitLabel}, goal weight ${target} ${unitLabel}`}
+      >
+        <View style={styles.summarySide}>
+          <Text style={styles.summaryValue}>{currentWeight}<Text style={styles.summaryUnit}> {unitLabel}</Text></Text>
+        </View>
+        <ArrowRight color={C.muted} size={22} strokeWidth={2.4} />
+        <View style={[styles.summarySide, styles.summaryTarget]}>
+          <Text style={[styles.summaryValue, styles.coral]}>{target}<Text style={[styles.summaryUnit, styles.coral]}> {unitLabel}</Text></Text>
+        </View>
+      </Animated.View>
+
+      <Animated.View
+        entering={rise(220)}
+        style={[styles.illustration, { maxHeight: artHeight, marginTop: compact ? 8 : 16 }]}
+        onLayout={(event) => setArtAvailableHeight(event.nativeEvent.layout.height)}
+      >
+        {artAvailableHeight > 0 && <GoalSummit width={artWidth} height={Math.min(artHeight, artAvailableHeight)} />}
+      </Animated.View>
+
+      <Animated.View entering={rise(280)} style={[styles.pickerArea, compact && styles.pickerAreaCompact]}>
+        <WheelPicker
+          values={values}
+          initialIndex={initialIndex}
+          onChange={setIndex}
+          itemHeight={compact ? 60 : 78}
+          fontSize={compact ? 46 : 56}
+          highlightHeight={compact ? 64 : 80}
+          highlightWidth={compact ? 260 : 290}
+          accessibilityLabel="Goal weight"
+          unit={isKg ? 'kilograms' : 'pounds'}
+        />
+      </Animated.View>
+    </View>
+  </OnboardingScreen>;
+}
+
+function GoalSummit({ width, height }: { width: number; height: number }) {
+  const reduced = useReducedMotion();
+  const trail = useSharedValue(reduced ? 1 : 0);
+  const flag = useSharedValue(reduced ? 1 : 0);
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true })
-    ]).start();
-  }, []);
+    if (reduced) return;
+    trail.set(withDelay(320, withTiming(1, { duration: 900, easing: EASE_OUT })));
+    flag.set(withDelay(900, withSpring(1, { duration: 400, dampingRatio: 0.6 })));
+  }, [reduced, trail, flag]);
 
-  const onScroll = Animated.event(
-    [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-    { useNativeDriver: true }
-  );
+  const trailProps = useAnimatedProps(() => ({ strokeDashoffset: TRAIL_LENGTH * (1 - trail.get()) }));
+  const flagStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, flag.get() * 2),
+    transform: [{ scale: interpolate(flag.get(), [0, 1], [0.4, 1]) }],
+  }));
 
-  const renderValue = (val: string | number, index: number) => {
-    const inputRange = [
-      (index - 1) * ITEM_HEIGHT,
-      index * ITEM_HEIGHT,
-      (index + 1) * ITEM_HEIGHT,
-    ];
+  const sx = width / 340;
+  const sy = height / 150;
+  const flagBox = 56 * sy;
 
-    const scale = scrollY.interpolate({
-      inputRange,
-      outputRange: [0.85, 1.15, 0.85],
-      extrapolate: 'clamp',
-    });
-
-    const opacity = scrollY.interpolate({
-      inputRange,
-      outputRange: [0.3, 1, 0.3],
-      extrapolate: 'clamp',
-    });
-
-    const color = scrollY.interpolate({
-      inputRange,
-      outputRange: [COLORS.muted, COLORS.black, COLORS.muted],
-      extrapolate: 'clamp',
-    });
-
-    return (
-      <View style={styles.itemWrapper} key={index}>
-        <Animated.Text style={[styles.valueText, { opacity, transform: [{ scale }], color }]}>
-          {val}
-        </Animated.Text>
-      </View>
-    );
-  };
-
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-      <SafeAreaView style={styles.flex}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
-            <ChevronLeft color={COLORS.black} size={30} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={[styles.main, useCompactLayout && styles.mainCompact]}>
-          <Animated.View style={[
-            styles.topSection,
-            useCompactLayout && styles.topSectionCompact,
-            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
-          ]}>
-           
-            <Text style={styles.title}>
-              What's your{"\n"}
-              <Text style={{ color: COLORS.coral }}>Goal Weight?</Text>
-            </Text>
-            <Text style={styles.subtitle}>
-              We'll create a plan to help you hit your target.
-            </Text>
-          </Animated.View>
-
-          <View style={[styles.weightSummary, useCompactLayout && styles.weightSummaryCompact]}>
-            <View style={styles.weightBox}>
-              <Text style={styles.weightLabel}>CURRENT</Text>
-              <Text style={styles.weightVal}>{currentWeight}<Text style={styles.weightUnitSmall}>{unit}</Text></Text>
-            </View>
-
-            <ArrowRight color="#E2E8F0" size={20} />
-
-            <View style={[styles.weightBox, styles.targetHighlighted]}>
-              <Text style={[styles.weightLabel, { color: COLORS.coral }]}>TARGET GOAL</Text>
-              <Text style={[styles.weightVal, { color: COLORS.coral }]}>
-                {values[selectedIndex]}<Text style={[styles.weightUnitSmall, { color: COLORS.coral }]}>{unit}</Text>
-              </Text>
-            </View>
-          </View>
-
-          <Animated.View style={[styles.pickerSection, useCompactLayout && styles.pickerSectionCompact, { opacity: fadeAnim }]}>
-            <View style={styles.pickerContainer}>
-              <View style={styles.indicator} pointerEvents="none" />
-              <Animated.FlatList<any>
-                contentContainerStyle={{ paddingVertical: ITEM_HEIGHT }}
-                data={values}
-                renderItem={({ item, index }) => renderValue(item, index)}
-                keyExtractor={(_, index) => index.toString()}
-                showsVerticalScrollIndicator={false}
-                snapToInterval={ITEM_HEIGHT}
-                onScroll={onScroll}
-                onMomentumScrollEnd={(e) => {
-                  const index = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-                  setSelectedIndex(index);
-                }}
-                decelerationRate="fast"
-                initialScrollIndex={safeInitialIndex}
-                getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
-              />
-            </View>
-          </Animated.View>
-
-          <View style={[styles.infoNote, useCompactLayout && styles.infoNoteCompact]}>
-            <Info color={COLORS.muted} size={16} />
-            <Text style={[styles.infoText, useCompactLayout && styles.infoTextCompact]}>
-              We recommend a healthy and sustainable weight loss pace of 0.5 - 1 kg per week.
-            </Text>
-          </View>
-        </View>
-
-        <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
-          <TouchableOpacity style={styles.mainButton} onPress={() => onContinue(values[selectedIndex])} activeOpacity={0.9}>
-            <LinearGradient
-              colors={[COLORS.coral, COLORS.coralDark]}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-              style={styles.gradientButton}
-            >
-              <Text style={styles.buttonText}>Continue</Text>
-              <ArrowRight color="white" size={20} strokeWidth={3} />
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    </View>
-  );
+  return <View style={{ width, height }} pointerEvents="none" accessible={false}>
+    <Svg width={width} height={height} viewBox="0 0 340 150" preserveAspectRatio="none">
+      <Defs>
+        <LinearGradient id="peak" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor="#FF7F78" />
+          <Stop offset="1" stopColor="#FFC9C4" />
+        </LinearGradient>
+        <LinearGradient id="hill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor="#FFD6D2" />
+          <Stop offset="1" stopColor="#FFE9E7" />
+        </LinearGradient>
+        <LinearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0.55" stopColor={C.bg} stopOpacity="0" />
+          <Stop offset="1" stopColor={C.bg} stopOpacity="1" />
+        </LinearGradient>
+      </Defs>
+      <Path d="M0 150 C30 122 70 100 110 104 C140 107 160 118 190 132 L190 150 Z" fill="url(#hill)" />
+      <Path d="M150 150 C190 118 230 96 275 100 C305 103 325 116 340 124 L340 150 Z" fill="url(#hill)" />
+      <Path d="M50 150 C100 136 132 96 158 64 C163 57 167 53 170 52 C173 53 177 57 182 64 C208 96 240 136 290 150 Z" fill="url(#peak)" />
+      <AnimatedPath
+        d="M182 150 C150 140 150 126 178 116 C200 108 192 94 172 88 C156 82 162 70 170 56"
+        stroke={C.white}
+        strokeWidth={3.5}
+        strokeLinecap="round"
+        fill="none"
+        strokeDasharray={`${TRAIL_LENGTH} ${TRAIL_LENGTH}`}
+        animatedProps={trailProps}
+      />
+      <Rect x="0" y="0" width="340" height="150" fill="url(#fade)" />
+    </Svg>
+    <Animated.View style={[styles.flag, { left: 170 * sx - 10 * sy, width: flagBox, height: flagBox }, flagStyle]}>
+      <Svg width={flagBox} height={flagBox} viewBox="160 0 56 56">
+        <Line x1="170" y1="54" x2="170" y2="12" stroke={C.ink} strokeWidth={2.5} strokeLinecap="round" />
+        <Path d="M171 12 C178 10 184 16 194 14 L190 21 L194 28 C184 30 178 24 171 26 Z" fill={C.coral} />
+        <Line x1="201" y1="10" x2="207" y2="4" stroke={C.coral} strokeOpacity={0.6} strokeWidth={2.5} strokeLinecap="round" />
+        <Line x1="204" y1="20" x2="212" y2="19" stroke={C.coral} strokeOpacity={0.6} strokeWidth={2.5} strokeLinecap="round" />
+      </Svg>
+    </Animated.View>
+  </View>;
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
-  flex: { flex: 1 },
-  header: { paddingHorizontal: 16, paddingTop: 10 },
-  backBtn: { width: 44, height: 44, justifyContent: 'center' },
-  main: { flex: 1, paddingHorizontal: 32, paddingTop: 10 },
-  mainCompact: { paddingTop: 4 },
-  topSection: { marginBottom: 30 },
-  topSectionCompact: { marginBottom: 16 },
-  badge: {
-    backgroundColor: '#FFF0F0',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6
-  },
-  badgeText: { fontSize: 10, fontWeight: '900', color: COLORS.coral, letterSpacing: 1.5 },
-  title: { fontSize: titleSize, fontWeight: '900', color: COLORS.black, lineHeight: titleSize + 6, letterSpacing: -1, marginBottom: 8 },
-  subtitle: { fontSize: 15, color: COLORS.muted, lineHeight: 22, fontWeight: '500' },
-
-  weightSummary: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.cardBg,
-    borderRadius: 28,
-    padding: 10,
-    marginBottom: 30,
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingLeft: 24,
-  },
-  weightSummaryCompact: {
-    marginBottom: 14,
-    paddingVertical: 8,
-  },
-  weightBox: {
-    alignItems: 'center',
-  },
-  targetHighlighted: {
-    backgroundColor: COLORS.selection,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 107, 107, 0.2)',
-  },
-  weightLabel: { fontSize: 10, fontWeight: '800', color: COLORS.muted, marginBottom: 4, letterSpacing: 0.5 },
-  weightVal: { fontSize: useCompactLayout ? 22 : 24, fontWeight: '900', color: COLORS.black },
-  weightUnitSmall: { fontSize: 14, color: COLORS.muted, fontWeight: '600' },
-  weightDivider: { width: 1, height: 30, backgroundColor: '#E2E8F0' },
-
-  pickerSection: { alignItems: 'center', height: PICKER_HEIGHT, marginBottom: 30 },
-  pickerSectionCompact: { marginBottom: 14 },
-  pickerContainer: { height: PICKER_HEIGHT, width: width * 0.45, justifyContent: 'center', alignItems: 'center' },
-  indicator: { position: 'absolute', height: ITEM_HEIGHT, width: '110%', backgroundColor: COLORS.selection, borderRadius: 20, zIndex: -1 },
-  itemWrapper: { height: ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center' },
-  valueText: { fontSize: useCompactLayout ? 36 : 42, fontWeight: '900', letterSpacing: -1.5 },
-
-  infoNote: {
-    flexDirection: 'row',
-    backgroundColor: '#F8FAFC',
-    padding: 16,
-    borderRadius: 16,
-    alignItems: 'center',
-    gap: 12
-  },
-  infoNoteCompact: {
-    padding: 12,
-    borderRadius: 14,
-    gap: 10,
-  },
-  infoText: { flex: 1, fontSize: 13, color: COLORS.muted, lineHeight: 18, fontWeight: '500' },
-  infoTextCompact: { fontSize: 12, lineHeight: 16 },
-
-  footer: { paddingHorizontal: 32, paddingBottom: 32 },
-  footerCompact: { paddingTop: 18, paddingBottom: Platform.OS === 'ios' ? 12 : 20 },
-  mainButton: {
-    height: 64,
-    borderRadius: 22,
-    overflow: 'hidden',
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 15,
-    elevation: 8
-  },
-  gradientButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
-  buttonText: { color: 'white', fontSize: 16, fontWeight: '800', letterSpacing: -0.5 },
+  body: { flex: 1, minHeight: 0 },
+  illustration: { flex: 1, minHeight: 0, alignSelf: 'center', justifyContent: 'center' },
+  summary: { height: 68, flexShrink: 0, padding: 6, gap: 8, borderRadius: 999, borderCurve: 'continuous', backgroundColor: 'rgba(241,241,243,0.85)', flexDirection: 'row', alignItems: 'center' },
+  summarySide: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center', borderRadius: 999, borderCurve: 'continuous' },
+  summaryTarget: { backgroundColor: SURFACE_SELECTED, borderWidth: 1.5, borderColor: 'rgba(255, 69, 72, 0.22)' },
+  summaryValue: { color: C.ink, fontSize: 26, fontWeight: '900', letterSpacing: -0.8, fontVariant: ['tabular-nums'] },
+  summaryUnit: { color: 'rgba(8, 36, 55, 0.45)', fontSize: 17, fontWeight: '700', letterSpacing: 0 },
+  coral: { color: C.coral },
+  flag: { position: 'absolute', top: 0, transformOrigin: '18% 96%' },
+  pickerArea: { flexShrink: 0, justifyContent: 'center', paddingVertical: 12 },
+  pickerAreaCompact: { paddingVertical: 8 },
 });

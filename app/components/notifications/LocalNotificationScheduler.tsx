@@ -6,6 +6,7 @@ import * as Notifications from 'expo-notifications';
 import { API_BASE_URL } from '@/config/api';
 import { loadRuns } from '@/lib/run-storage';
 import { useAuth } from '@/src/auth/authContext';
+import { useEntitlement } from '@/src/billing';
 import {
   cacheNotificationPreferences,
   loadCachedNotificationPreferences,
@@ -157,6 +158,12 @@ async function buildQuestReminder(authFetch: (url: string, options?: RequestInit
 
 export default function LocalNotificationScheduler() {
   const { authFetch, isAuthenticated } = useAuth();
+  const { access, runTogetherProEntitlement } = useEntitlement();
+  const trialEndsAt: string | null = runTogetherProEntitlement?.periodType === 'TRIAL'
+    ? runTogetherProEntitlement.expirationDate
+    : access?.accessSource === 'self' && access?.accessStatus === 'TRIAL_ACTIVE'
+      ? access.trialEndsAt
+      : null;
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -185,6 +192,21 @@ export default function LocalNotificationScheduler() {
       }
 
       const entries: ManagedNotificationRequest[] = [];
+
+      if (preferences.billingReminder && trialEndsAt) {
+        const reminderAt = new Date(new Date(trialEndsAt).getTime() - 24 * 60 * 60 * 1000);
+        if (Number.isFinite(reminderAt.getTime()) && reminderAt.getTime() > Date.now()) {
+          entries.push({
+            key: 'trial_ending_reminder',
+            content: {
+              title: 'Keep going together',
+              body: 'Your free access wraps up tomorrow.',
+              data: { type: 'billing_reminder' },
+            },
+            trigger: dateTrigger(reminderAt),
+          });
+        }
+      }
 
       const weekData = await fetchJsonIfOk(authFetch, `${API_BASE_URL}/summary/week`);
       const todaySummary = await fetchJsonIfOk(authFetch, `${API_BASE_URL}/summary/today`);
@@ -315,7 +337,7 @@ export default function LocalNotificationScheduler() {
       active = false;
       appStateSubscription.remove();
     };
-  }, [authFetch, isAuthenticated]);
+  }, [authFetch, isAuthenticated, trialEndsAt]);
 
   return null;
 }

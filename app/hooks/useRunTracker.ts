@@ -5,6 +5,7 @@ import * as TaskManager from "expo-task-manager";
 import type { RunPoint } from "@/types/run";
 import { haversineDistanceMeters } from "@/lib/geo";
 import { KalmanGPSFilter } from "@/lib/kalman-gps-filter";
+import { ensureForegroundLocationPermission } from "@/lib/location-permission";
 
 // --- BACKGROUND TASK NAME ---
 const BACKGROUND_LOCATION_TASK = "background-location-task";
@@ -414,18 +415,20 @@ export function useRunTracker() {
   // --- ACTIONS ---
 
   async function ensureLocationPermission() {
-    // Request foreground permission first
-    const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
-    if (foregroundStatus !== 'granted') {
+    if (!(await ensureForegroundLocationPermission())) {
       console.warn("Foreground permission denied");
       return false;
     }
 
     // Request background permission for tracking when app is backgrounded
-    const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
-    if (backgroundStatus !== 'granted') {
-      console.warn("Background permission denied - tracking may stop when app is in background");
-      // Continue anyway - foreground will still work
+    try {
+      const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
+      if (backgroundStatus !== 'granted') {
+        console.warn("Background permission denied - tracking may stop when app is in background");
+        // Continue anyway - foreground will still work
+      }
+    } catch (e) {
+      console.warn("Background permission request failed - continuing with foreground tracking", e);
     }
 
     return true;
@@ -435,7 +438,6 @@ export function useRunTracker() {
     // 1. Permissions
     const hasPermission = await ensureLocationPermission();
     if (!hasPermission) {
-      alert("Location permission is required to track your run.");
       return false;
     }
 

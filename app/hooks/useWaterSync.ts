@@ -33,10 +33,11 @@ type WaterByPeriod = {
 
 const SYNC_INTERVAL_MS = 30_000; // Sync every 30s
 const GLASS_ML = 250; // 250ml per glass
+export const DEFAULT_WATER_TARGET_ML = 2000; // 8 glasses × 250ml
 
 const waterListeners = new Set<() => void>();
 
-function notifyWaterListeners() {
+export function notifyWaterListeners() {
     waterListeners.forEach((listener) => {
         try {
             listener();
@@ -46,7 +47,7 @@ function notifyWaterListeners() {
     });
 }
 
-function subscribeToWaterChanges(listener: () => void) {
+export function subscribeToWaterChanges(listener: () => void) {
     waterListeners.add(listener);
     return () => {
         waterListeners.delete(listener);
@@ -85,7 +86,7 @@ async function syncWaterToBackend(
 
 export function useWaterSync({ accessToken }: UseWaterSyncOptions) {
     const [waterMl, setWaterMl] = useState(0);
-    const [waterTarget] = useState(2000); // 8 glasses × 250ml
+    const [waterTarget] = useState(DEFAULT_WATER_TARGET_ML);
     const [waterByPeriod, setWaterByPeriod] = useState<WaterByPeriod>({
         morning: 0,
         afternoon: 0,
@@ -125,6 +126,7 @@ export function useWaterSync({ accessToken }: UseWaterSyncOptions) {
      * Log a glass of water (250ml)
      */
     const logWater = useCallback(async (amountMl: number = GLASS_ML) => {
+        setError(null);
         try {
             await getDatabase();
 

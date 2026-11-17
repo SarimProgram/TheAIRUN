@@ -2,6 +2,8 @@ import { prisma } from '../db/prisma';
 import { sendBackgroundWakePush, sendLiveActivityState } from './apns';
 
 export type PartnerLivePayload = {
+  userGender?: string | null;
+  partnerGender?: string | null;
   userName: string;
   userKcal: number;
   userGoal: number;
@@ -16,6 +18,8 @@ export type PartnerLivePayload = {
 };
 
 const DEFAULT_CALORIE_TARGET = 2000;
+/** Must match `createLiveActivity('PartnerLiveActivity', ...)` in the app. */
+const PARTNER_LIVE_ACTIVITY_NAME = 'PartnerLiveActivity';
 
 function getDayKey(date: Date = new Date(), timezone?: string): string {
   if (timezone) {
@@ -61,6 +65,7 @@ async function loadParticipantState(userId: string) {
       id: true,
       displayName: true,
       timezone: true,
+      gender: true,
       plan: {
         select: {
           dailyCalorieTarget: true,
@@ -105,6 +110,7 @@ async function loadParticipantState(userId: string) {
   return {
     id: user.id,
     displayName: user.displayName,
+    gender: user.gender,
     calorieTarget: firstPositiveInt(
       summary?.calorieTarget,
       user.plan?.dailyCalorieTarget,
@@ -126,6 +132,7 @@ export async function buildPartnerLivePayloadForUser(userId: string): Promise<Pa
         select: {
           id: true,
           displayName: true,
+          gender: true,
         },
       },
     },
@@ -143,6 +150,8 @@ export async function buildPartnerLivePayloadForUser(userId: string): Promise<Pa
   if (!viewer.partnerId || !viewer.partner) {
     return {
       userName: viewerState.displayName || 'You',
+      userGender: viewerState.gender,
+      partnerGender: null,
       userKcal: viewerState.consumedCalories,
       userGoal: viewerState.calorieTarget,
       userSteps: viewerState.steps,
@@ -160,6 +169,8 @@ export async function buildPartnerLivePayloadForUser(userId: string): Promise<Pa
   if (!partnerState) {
     return {
       userName: viewerState.displayName || 'You',
+      userGender: viewerState.gender,
+      partnerGender: viewer.partner.gender,
       userKcal: viewerState.consumedCalories,
       userGoal: viewerState.calorieTarget,
       userSteps: viewerState.steps,
@@ -175,6 +186,8 @@ export async function buildPartnerLivePayloadForUser(userId: string): Promise<Pa
 
   return {
     userName: viewerState.displayName || 'You',
+    userGender: viewerState.gender,
+    partnerGender: partnerState.gender,
     userKcal: viewerState.consumedCalories,
     userGoal: viewerState.calorieTarget,
     userSteps: viewerState.steps,
@@ -230,6 +243,7 @@ async function pushPartnerSurfaceUpdateForViewer(userId: string, reason: string)
         try {
           await sendLiveActivityState({
             pushToken: session.pushToken,
+            name: PARTNER_LIVE_ACTIVITY_NAME,
             payload,
             event: 'update',
           });
@@ -249,6 +263,7 @@ async function pushPartnerSurfaceUpdateForViewer(userId: string, reason: string)
         try {
           await sendLiveActivityState({
             pushToken: session.pushToken,
+            name: PARTNER_LIVE_ACTIVITY_NAME,
             payload,
             event: 'end',
           });

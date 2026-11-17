@@ -19,6 +19,8 @@ import { ReminderPartnerPreviewModal } from '@/components/partner/ReminderPartne
 import { PartnerReminderPartnerViewPreview } from '@/components/partner/PartnerReminderPartnerViewPreview';
 import { buildPartnerCelebrationRequest } from '@/components/partner/buildPartnerCelebrationRequest';
 import { CustomReminderEditorSheet } from '@/components/partner/CustomReminderEditorSheet';
+import { BottleThrowModal } from '@/components/partner/BottleThrowModal';
+import { buildBottleThrowMessage } from '@/utils/bottleThrowMessage';
 import {
     PARTNER_REMINDER_CATEGORIES,
     mergePartnerReminderCategories,
@@ -255,7 +257,9 @@ function ReminderCarouselCard({
                     ) : (
                         <>
                             <Send size={12} color="#FFFFFF" strokeWidth={2.4} />
-                            <Text style={styles.sendButtonText}>{sent ? 'Sent' : 'Send'}</Text>
+                            <Text style={styles.sendButtonText}>
+                                {sent ? 'Sent' : option.delivery === 'throw' ? 'Throw' : option.delivery === 'tug' ? 'Invite & open' : 'Send'}
+                            </Text>
                         </>
                     )}
                 </TouchableOpacity>
@@ -398,6 +402,7 @@ export function ReminderPartnerOptions({
     const [busyId, setBusyId] = useState<string | null>(null);
     const [sentId, setSentId] = useState<string | null>(null);
     const [preview, setPreview] = useState<PreviewState | null>(null);
+    const [throwOption, setThrowOption] = useState<PartnerReminderOption | null>(null);
     const [partnerViewPreview, setPartnerViewPreview] =
         useState<ReturnType<typeof buildPartnerCelebrationRequest>>(null);
 
@@ -472,10 +477,27 @@ export function ReminderPartnerOptions({
         ],
     );
 
+    const handleThrow = useCallback(
+        (xPct: number) => {
+            if (!throwOption) return;
+            const message = buildBottleThrowMessage(xPct);
+            onSendReminder(message, throwOption.label);
+            flashSent(throwOption.id);
+            onAfterSend?.(throwOption.label);
+        },
+        [flashSent, onAfterSend, onSendReminder, throwOption],
+    );
+
     const handleSendFromPreview = useCallback(async () => {
         if (!preview) return;
         if (!chatConnected) {
             Alert.alert('Chat unavailable', 'Live partner chat is not available right now.');
+            return;
+        }
+
+        if (preview.option.delivery === 'throw') {
+            setPreview(null);
+            setThrowOption(preview.option);
             return;
         }
 
@@ -489,6 +511,16 @@ export function ReminderPartnerOptions({
         (option: PartnerReminderOption) => {
             if (!chatConnected) {
                 Alert.alert('Chat unavailable', 'Live partner chat is not available right now.');
+                return;
+            }
+
+            if (option.delivery === 'throw') {
+                setThrowOption(option);
+                return;
+            }
+
+            if (option.delivery === 'tug') {
+                void sendOption(option);
                 return;
             }
 
@@ -581,6 +613,13 @@ export function ReminderPartnerOptions({
             <PartnerReminderPartnerViewPreview
                 request={partnerViewPreview}
                 onFinish={() => setPartnerViewPreview(null)}
+            />
+
+            <BottleThrowModal
+                visible={!!throwOption}
+                partnerName={partnerName}
+                onClose={() => setThrowOption(null)}
+                onThrow={handleThrow}
             />
         </>
     );

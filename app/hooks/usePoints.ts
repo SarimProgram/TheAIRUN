@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../config/api';
 import { parseApiError } from '../utils/premiumErrors';
+import { subscribeToDailyRewards } from '../lib/daily-reward-events';
 
 interface UsePointsOptions {
     accessToken: string | null;
@@ -109,6 +110,8 @@ export function usePoints({ accessToken }: UsePointsOptions): UsePointsReturn {
     useEffect(() => {
         fetchPoints();
     }, [fetchPoints]);
+
+    useEffect(() => subscribeToDailyRewards(() => { void fetchPoints(); }), [fetchPoints]);
 
     return {
         balance,

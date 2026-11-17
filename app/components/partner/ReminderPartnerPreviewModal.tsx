@@ -55,7 +55,11 @@ export function ReminderPartnerPreviewModal({
     }
 
     const isFullscreen = option.delivery === 'fullscreen' && !!option.mode;
-    const previewHint = isFullscreen
+    const previewHint = option.delivery === 'tug'
+        ? 'Invite your partner, then place your phone on the left and theirs on the right. Your steps pull the rope across both screens.'
+        : option.delivery === 'throw'
+        ? 'Flick a bottle onto their screen. It stays there until they drink a glass.'
+        : isFullscreen
         ? 'Send to open fullscreen on their home screen and surprise your partner.'
         : option.delivery === 'notification-card'
           ? 'Send this loving nudge as a chat note from you.'
@@ -119,7 +123,7 @@ export function ReminderPartnerPreviewModal({
                         ) : (
                             <>
                                 <Send size={16} color="#FFFFFF" strokeWidth={2.4} />
-                                <Text style={styles.sendButtonText}>Send to {partnerName}</Text>
+                                <Text style={styles.sendButtonText}>{option.delivery === 'tug' ? 'Invite & open tug of war' : `Send to ${partnerName}`}</Text>
                             </>
                         )}
                     </TouchableOpacity>

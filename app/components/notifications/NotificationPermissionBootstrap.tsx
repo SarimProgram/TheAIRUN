@@ -7,6 +7,7 @@ import {
   syncRemotePushTokenForPreferences,
 } from '@/utils/notificationRegistration';
 import { ensureNotificationPermissionAsync } from '@/utils/pushNotifications';
+import { loadOnboardingCheckpoint } from '@/src/onboarding/checkpoint';
 
 export default function NotificationPermissionBootstrap() {
   const { authFetch, isAuthenticated } = useAuth();
@@ -30,6 +31,10 @@ export default function NotificationPermissionBootstrap() {
         if (!active || permissionStatus !== 'undetermined') {
           return;
         }
+
+        // During onboarding, ask when the user enables the trial reminder.
+        const checkpoint = await loadOnboardingCheckpoint();
+        if (!active || checkpoint?.completed === false) return;
 
         const latestStatus = await ensureNotificationPermissionAsync();
         if (!active || latestStatus !== 'granted' || !hasRemoteNotificationsEnabled(preferences)) {

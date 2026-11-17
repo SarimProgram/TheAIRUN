@@ -41,14 +41,14 @@ export default function WelcomeScreen() {
 
     // Automatic Transition
     const timer = setTimeout(() => {
-      router.push('/(tabs)');
+      router.replace('/(tabs)');
     }, 3200);
 
     return () => clearTimeout(timer);
   }, []);
 
   const handlePress = () => {
-    router.push('/(tabs)'); 
+    router.replace('/(tabs)');
   };
 
   return (

@@ -13,30 +13,62 @@ import {
   KeyboardAvoidingView,
   TouchableWithoutFeedback,
   Keyboard,
+  Image,
+  Pressable,
+  useWindowDimensions,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeInDown,
+  FadeOut,
+  SlideInDown,
+  SlideOutDown,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  ArrowDown,
   Flame,
   Calendar,
-  ChevronRight,
+  CalendarDays,
+  ChartLine,
+  Check,
+  Footprints,
+  Route,
   Sunrise,
   Sun,
   Sunset,
   RefreshCw,
   Pencil,
+  ChevronLeft,
   Scale,
   Plus,
-  Lock,
   CheckCircle2,
+  Target,
   X,
+  Dumbbell,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/auth/authContext';
+import { getGenderMascotSource, getWeeklyAvatarSource } from '@/utils/genderMascot';
 import { useWeightLog } from '../../hooks/useWeightLog';
-import { getMappedDays, getWeekLoggedWeightKg } from '../../utils/planProjection';
-import { Fonts } from '../../constants/theme';
+import { getMappedDays, getPlanWeekDateRange, getWeekLoggedWeightKg } from '../../utils/planProjection';
 import { getSessionActivityKind, PlanSessionIcon } from './PlanSessionIcon';
+import { getWeightJourneyStage, WeightJourneyCharacter } from './WeightJourneyCharacter';
+import { CoachBrushStroke } from './PlanCoachArt';
+import { usePlanColors } from './PlanVisuals';
+import { type TrainingSchedule, workoutLabel } from '../../utils/trainingSchedule';
+import { findPartnerWorkout } from './partnerWorkoutDefinitions';
 
 type PlanGoalType = 'weightloss' | 'running' | 'both' | string | null;
 
@@ -156,6 +188,7 @@ function WeightProjectionContent({
   isLocked,
   variant = 'card',
 }: WeightProjectionContentProps) {
+  const c = usePlanColors();
   const expectedWeight = week['Expected weight'];
   const comparison =
     compareLoggedWeight &&
@@ -170,7 +203,7 @@ function WeightProjectionContent({
 
   if (comparison?.hasLoggedWeight && comparison.expectedLossKg > WEIGHT_CHANGE_THRESHOLD_KG) {
     const actualIsGain = comparison.actualLossKg < -WEIGHT_CHANGE_THRESHOLD_KG;
-    const resultColor = comparison.beatTarget ? COLORS.success : COLORS.danger;
+    const resultColor = comparison.beatTarget ? (c.isFemale ? c.secondary : COLORS.success) : COLORS.danger;
     const ResultIcon = comparison.beatTarget ? CheckCircle2 : X;
 
     return (
@@ -225,6 +258,8 @@ function isWeightFocusedGoal(goalType?: PlanGoalType) {
 }
 
 type WeekDailys = {
+  trainingSchedule?: TrainingSchedule;
+  workoutDays?: number;
   stepDays: number;
   runDays: number;
   recoveryDays: number;
@@ -264,9 +299,11 @@ export type PlanWeeklyTabProps = {
   startingWeightKg?: number | null;
   targetWeightKg?: number | null;
   usesImperial?: boolean;
+  gender?: string | null;
 
   loading?: boolean;
   onRegeneratePlan?: () => void;
+  onResetPlan?: () => void;
   devPrompt?: string | null;
   regenerating?: boolean;
   availableDays?: number[];
@@ -334,7 +371,232 @@ const COLORS = {
   locked: '#B2BEC3',
   success: '#16A34A',
   danger: '#DC2626',
+  rail: '#DDE4E1',
+  teal: '#25887F',
+  blob: '#FFF0ED',
+  card: '#FFFFFF',
+  ink: '#1F2427',
 };
+
+const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
+const HERO_VISIBLE_UNTIL_WEEK = 3;
+const PAGE_BG = '#F6F7F5';
+const HERO_TOP = '#FFFFFF';
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+const WEEK_ART = [
+  require('../../assets/plan/week-sneaker.png'),
+  require('../../assets/plan/week-dumbbell.png'),
+  require('../../assets/plan/week-salad.png'),
+  require('../../assets/plan/week-bottle.png'),
+];
+const WEEK_ART_FINAL = require('../../assets/plan/week-trophy.png');
+
+function getWeekArt(weekNumber: number, totalWeeks: number) {
+  if (weekNumber === totalWeeks) return WEEK_ART_FINAL;
+  return WEEK_ART[(weekNumber - 1) % WEEK_ART.length];
+}
+
+function formatWeeklyChange(changeKg: number, usesImperial: boolean) {
+  if (usesImperial) return `${(changeKg * 2.20462).toFixed(1)} lbs`;
+  return `${Number(changeKg.toFixed(2))} kg`;
+}
+
+function getWeeklyWeightDelta(
+  week: WeekPlan,
+  previousWeek: WeekPlan | undefined,
+  startingWeightKg: number | null | undefined,
+) {
+  const expected = week['Expected weight'];
+  const previous = previousWeek?.['Expected weight'] ?? startingWeightKg;
+  if (typeof expected !== 'number' || !Number.isFinite(expected)) return null;
+  if (typeof previous !== 'number' || !Number.isFinite(previous)) return null;
+  return previous - expected;
+}
+
+function PressableScale({
+  children,
+  style,
+  disabled,
+  onPress,
+  accessibilityLabel,
+}: {
+  children: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
+  disabled?: boolean;
+  onPress?: () => void;
+  accessibilityLabel?: string;
+}) {
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.get() }] }));
+
+  return (
+    <AnimatedPressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ disabled: !!disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      onPressIn={() => scale.set(withTiming(0.97, { duration: 120, easing: EASE_OUT }))}
+      onPressOut={() => scale.set(withSpring(1, { duration: 400, dampingRatio: 1 }))}
+      style={[style, animatedStyle]}
+    >
+      {children}
+    </AnimatedPressable>
+  );
+}
+
+type WeekState = 'completed' | 'current' | 'upcoming' | 'locked';
+
+function TimelineNode({ state }: { state: WeekState }) {
+  const styles = useWeeklyStyles();
+  if (state === 'completed') {
+    return (
+      <View style={[styles.nodeBase, styles.nodeCompleted]}>
+        <Check size={16} color="#FFF" strokeWidth={3.25} />
+      </View>
+    );
+  }
+  if (state === 'current') {
+    return (
+      <View style={styles.nodeCurrentWrap}>
+        <View style={[styles.nodeBase, styles.nodeCurrent]}>
+          <View style={styles.nodeCurrentDot} />
+        </View>
+      </View>
+    );
+  }
+  if (state === 'locked') {
+    return (
+      <View style={[styles.nodeBase, styles.nodeLocked]} />
+    );
+  }
+  return <View style={[styles.nodeBase, styles.nodeUpcoming]} />;
+}
+
+function HeroMascot({ gender, stage }: { gender?: string | null; stage?: number }) {
+  return (
+    <View pointerEvents="none" style={styles.heroMascotWrap}>
+      {stage == null ? <CoachBrushStroke gender={gender} /> : null}
+      {stage != null ? (
+        <WeightJourneyCharacter gender={gender} stage={stage} pose="standing" width={156} height={218} />
+      ) : (
+        <Image source={getGenderMascotSource(gender)} style={styles.heroMascot} resizeMode="contain" />
+      )}
+    </View>
+  );
+}
+
+function CurrentWeekMascot({ gender, compact, stage }: { gender?: string | null; compact: boolean; stage?: number }) {
+  return (
+    <View pointerEvents="none" style={[styles.cardMascotWrap, compact && styles.cardMascotWrapCompact]}>
+      {stage == null ? <CoachBrushStroke gender={gender} /> : null}
+      {stage != null ? (
+        <WeightJourneyCharacter gender={gender} stage={stage} width={compact ? 64 : 78} height={96} />
+      ) : (
+        <Image source={getWeeklyAvatarSource(gender)} style={[styles.cardMascot, compact && styles.cardMascotCompact]} resizeMode="contain" />
+      )}
+    </View>
+  );
+}
+
+const CHART_HEIGHT = 108;
+const CHART_PAD_X = 8;
+const CHART_PAD_Y = 10;
+
+function buildSmoothPath(points: { x: number; y: number }[]) {
+  if (points.length === 0) return '';
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i += 1) {
+    const prev = points[i - 1];
+    const point = points[i];
+    const midX = (prev.x + point.x) / 2;
+    d += ` C ${midX} ${prev.y}, ${midX} ${point.y}, ${point.x} ${point.y}`;
+  }
+  return d;
+}
+
+function JourneyChart({
+  values,
+  currentIndex,
+}: {
+  values: number[];
+  currentIndex: number;
+}) {
+  const [width, setWidth] = React.useState(0);
+  const reveal = useSharedValue(0);
+
+  React.useEffect(() => {
+    if (width === 0) return;
+    reveal.set(withDelay(300, withTiming(width, { duration: 1100, easing: EASE_OUT })));
+  }, [reveal, width]);
+
+  const revealStyle = useAnimatedStyle(() => ({ width: reveal.get() }));
+
+  const points = React.useMemo(() => {
+    if (width === 0 || values.length < 2) return [];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    const innerW = width - CHART_PAD_X * 2;
+    const innerH = CHART_HEIGHT - CHART_PAD_Y * 2;
+    return values.map((value, index) => ({
+      x: CHART_PAD_X + (index / (values.length - 1)) * innerW,
+      y: CHART_PAD_Y + (1 - (value - min) / range) * innerH,
+    }));
+  }, [values, width]);
+
+  const linePath = buildSmoothPath(points);
+  const areaPath =
+    points.length > 0
+      ? `${linePath} L ${points[points.length - 1].x} ${CHART_HEIGHT} L ${points[0].x} ${CHART_HEIGHT} Z`
+      : '';
+  const currentPoint = currentIndex < 0 ? null : points[Math.min(currentIndex, points.length - 1)];
+
+  return (
+    <View style={styles.chartCanvas} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+      {points.length > 0 ? (
+        <>
+          <Animated.View style={[styles.chartReveal, revealStyle]}>
+            <Svg width={width} height={CHART_HEIGHT}>
+              <Defs>
+                <SvgLinearGradient id="journeyArea" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0" stopColor={COLORS.primary} stopOpacity={0.2} />
+                  <Stop offset="1" stopColor={COLORS.primary} stopOpacity={0} />
+                </SvgLinearGradient>
+              </Defs>
+              <Path d={areaPath} fill="url(#journeyArea)" />
+              <Path d={linePath} stroke={COLORS.primary} strokeWidth={2.5} fill="none" strokeLinecap="round" />
+              {points.map((point, index) => {
+                const reached = index <= currentIndex;
+                return (
+                  <Circle
+                    key={index}
+                    cx={point.x}
+                    cy={point.y}
+                    r={index === currentIndex ? 0 : 3}
+                    fill={reached ? COLORS.primary : '#FFF'}
+                    stroke={COLORS.primary}
+                    strokeWidth={reached ? 0 : 1.5}
+                  />
+                );
+              })}
+            </Svg>
+          </Animated.View>
+          {currentPoint ? (
+            <Animated.View
+              entering={FadeIn.duration(300).delay(1100)}
+              pointerEvents="none"
+              style={[styles.chartCurrentDot, { left: currentPoint.x - 15, top: currentPoint.y - 15 }]}
+            >
+              <View style={styles.chartCurrentDotInner} />
+            </Animated.View>
+          ) : null}
+        </>
+      ) : null}
+    </View>
+  );
+}
 
 export function PlanWeeklyTab({
   weeklyPlan,
@@ -346,8 +608,10 @@ export function PlanWeeklyTab({
   startingWeightKg,
   targetWeightKg,
   usesImperial = false,
+  gender,
   loading,
   onRegeneratePlan,
+  onResetPlan,
   devPrompt,
   regenerating,
   availableDays = [],
@@ -360,6 +624,8 @@ export function PlanWeeklyTab({
   onClose,
   onSelectSessionDay,
 }: PlanWeeklyTabProps) {
+  const c = usePlanColors(gender);
+  const styles = useWeeklyStyles(gender);
   const { authFetch, isAuthenticated } = useAuth();
   const {
     currentWeightKg,
@@ -383,12 +649,19 @@ export function PlanWeeklyTab({
   const pageScrollRef = React.useRef<ScrollView>(null);
   const weekListTopRef = React.useRef(0);
   const weekOffsetsRef = React.useRef<Record<number, number>>({});
+  const viewportHeightRef = React.useRef(0);
+  const pageBodyTopRef = React.useRef(0);
 
   const scrollToCurrentWeek = React.useCallback(() => {
-    const offset = weekOffsetsRef.current[planWeekToday];
-    if (offset == null) return;
+    if (planWeekToday <= HERO_VISIBLE_UNTIL_WEEK) return;
+    const rowY = weekOffsetsRef.current[planWeekToday];
+    if (rowY == null) return;
+    const offset = pageBodyTopRef.current + weekListTopRef.current + rowY;
     requestAnimationFrame(() => {
-      pageScrollRef.current?.scrollTo({ y: Math.max(0, offset - 16), animated: false });
+      pageScrollRef.current?.scrollTo({
+        y: Math.max(0, offset - viewportHeightRef.current * 0.3),
+        animated: false,
+      });
     });
   }, [planWeekToday]);
 
@@ -408,13 +681,14 @@ export function PlanWeeklyTab({
   const toggleDay = (day: number) => {
     setDraftAvailableDays((prev) => {
       const exists = prev.includes(day);
-      if (exists && prev.length <= 3) return prev;
+      if (exists && prev.length <= (weeklyPlan[0]?.['Week Dailys'].trainingSchedule ? 1 : 3)) return prev;
       return exists ? prev.filter((item) => item !== day) : [...prev, day].sort((a, b) => a - b);
     });
   };
 
   const handleSaveScheduleAndTime = async () => {
-    if (draftAvailableDays.length < 3) return;
+    const required = weeklyPlan[0]?.['Week Dailys'].trainingSchedule?.sessions.length;
+    if (required ? draftAvailableDays.length !== required : draftAvailableDays.length < 3) return;
     await onChangeScheduleDays?.(draftAvailableDays);
     onChangeTrainingTimePreference?.(draftTrainingTimePreference);
     setShowEditPlanSheet(false);
@@ -439,7 +713,8 @@ export function PlanWeeklyTab({
   };
 
   const sheetBusy = !!scheduleUpdating || !!adjusting || !!regenerating;
-  const canSaveScheduleAndTime = draftAvailableDays.length >= 3 && !sheetBusy;
+  const requiredTrainingDays = weeklyPlan[0]?.['Week Dailys'].trainingSchedule?.sessions.length;
+  const canSaveScheduleAndTime = (requiredTrainingDays ? draftAvailableDays.length === requiredTrainingDays : draftAvailableDays.length >= 3) && !sheetBusy;
   const canApplyPlanChanges = !!selectedAdjustment && !!onAdjustPlanManually && !sheetBusy;
 
   const getTimeLabel = (time: LegacyTrainingTimePreference) => {
@@ -476,43 +751,98 @@ export function PlanWeeklyTab({
     return { totalLossKg, progress };
   }, [planWeekToday, journeyEndWeightKg, startingWeightKg, totalWeeks]);
 
-  const heroTitle = showWeightGoalLayout
-    ? goalType === 'both'
-      ? 'Train & Transform'
-      : 'Weight Loss Journey'
-    : 'Running Journey';
-
   const currentWeekPlan = weeklyPlan.find((week) => week.Week === planWeekToday) ?? null;
+  const hasWeightNumbers =
+    showWeightGoalLayout && typeof startingWeightKg === 'number' && Number.isFinite(startingWeightKg);
 
-  const headerCaption = React.useMemo(() => {
-    if (totalWeeks === 0) return 'Generate your plan to see each week ahead.';
+  const weekCharacterStages = React.useMemo(() => {
+    let previousStage = -1;
+    return weeklyPlan.map((week, index) => {
+      const stage = getWeightJourneyStage(startingWeightKg, journeyEndWeightKg, week['Expected weight']);
+      const hasCharacter = (index < weeklyPlan.length - 1 || index === 0) && (index % 4 === 0 || index % 4 === 3);
+      if (!hasCharacter) return stage;
+      // Nearby projections can round to the same sprite; vary the next pose by one stage.
+      const artStage = stage === previousStage ? (stage < 9 ? stage + 1 : 8) : stage;
+      previousStage = artStage;
+      return artStage;
+    });
+  }, [journeyEndWeightKg, startingWeightKg, weeklyPlan]);
 
-    if (showWeightGoalLayout && typeof startingWeightKg === 'number') {
-      const parts = [formatWeightValue(startingWeightKg, usesImperial)];
-      if (typeof journeyEndWeightKg === 'number') {
-        parts.push(formatWeightValue(journeyEndWeightKg, usesImperial));
-      }
-      if (journeyStats.totalLossKg != null && journeyStats.totalLossKg > 0) {
-        return `${parts.join(' → ')} · ${formatWeightLoss(journeyStats.totalLossKg, usesImperial)} total`;
-      }
-      return parts.join(' → ');
+  const heroStats = React.useMemo(() => {
+    if (hasWeightNumbers) {
+      return [
+        {
+          key: 'start',
+          label: 'Start',
+          value: formatWeightValue(startingWeightKg as number, usesImperial),
+          Icon: Scale,
+        },
+        {
+          key: 'target',
+          label: 'Target',
+          value: typeof journeyEndWeightKg === 'number' ? formatWeightValue(journeyEndWeightKg, usesImperial) : '—',
+          Icon: Target,
+        },
+        {
+          key: 'loss',
+          label: 'Total Loss',
+          value: journeyStats.totalLossKg != null ? formatWeightLoss(journeyStats.totalLossKg, usesImperial) : '—',
+          Icon: ArrowDown,
+        },
+      ];
     }
-
-    if (currentWeekPlan) {
-      return `${currentWeekPlan['Week name']} · ${currentWeekPlan['Run km/week']} km this week`;
-    }
-
-    return heroTitle;
+    const totalKm = weeklyPlan.reduce((sum, week) => sum + (Number(week['Run km/week']) || 0), 0);
+    return [
+      {
+        key: 'week',
+        label: 'This week',
+        value: currentWeekPlan ? `${currentWeekPlan['Run km/week']} km` : '—',
+        Icon: Footprints,
+      },
+      { key: 'total', label: 'Total', value: `${Math.round(totalKm)} km`, Icon: Route },
+      {
+        key: 'left',
+        label: 'Weeks left',
+        value: `${Math.max(0, totalWeeks - planWeekToday)}`,
+        Icon: CalendarDays,
+      },
+    ];
   }, [
     currentWeekPlan,
-    heroTitle,
+    hasWeightNumbers,
     journeyEndWeightKg,
     journeyStats.totalLossKg,
-    showWeightGoalLayout,
+    planWeekToday,
     startingWeightKg,
     totalWeeks,
     usesImperial,
+    weeklyPlan,
   ]);
+
+  const chartValues = React.useMemo(() => {
+    if (hasWeightNumbers) {
+      return [startingWeightKg as number, ...weeklyPlan.map((week) => week['Expected weight'])].filter(
+        (value) => typeof value === 'number' && Number.isFinite(value),
+      );
+    }
+    return weeklyPlan.map((week) => Number(week['Run km/week']) || 0);
+  }, [hasWeightNumbers, startingWeightKg, weeklyPlan]);
+
+  const { width: windowWidth } = useWindowDimensions();
+  const compact = windowWidth < 360;
+  const insets = useSafeAreaInsets();
+  const heroSubtitle =
+    goalType === 'both'
+      ? `${totalWeeks}-week run & weight journey`
+      : showWeightGoalLayout
+        ? `${totalWeeks}-week weight loss journey`
+        : `${totalWeeks}-week running journey`;
+  const chartCurrentIndex = hasWeightNumbers ? -1 : planWeekToday - 1;
+  const chartSummary = hasWeightNumbers
+    ? `${formatWeightInputValue(startingWeightKg, usesImperial)} → ${
+        typeof journeyEndWeightKg === 'number' ? formatWeightValue(journeyEndWeightKg, usesImperial) : '—'
+      }`
+    : `${chartValues[0] ?? 0} → ${chartValues[chartValues.length - 1] ?? 0} km/wk`;
 
   const openWeightModal = React.useCallback(() => {
     setWeightInput(formatWeightInputValue(currentWeightKg, usesImperial));
@@ -534,208 +864,159 @@ export function PlanWeeklyTab({
     }
   }, [logWeight, usesImperial, weightInput]);
 
-  const renderGlassBackdrop = (isLocked: boolean, isActive: boolean, isCompleted: boolean) => {
-    const accentColors = isLocked
-      ? (['#F4F5F7', '#ECEFF3'] as const)
-      : isActive
-        ? (['rgba(255, 107, 107, 0.18)', 'rgba(255, 107, 107, 0.06)'] as const)
-        : isCompleted
-          ? (['rgba(255, 107, 107, 0.1)', 'rgba(255, 255, 255, 0.72)'] as const)
-          : (['rgba(255, 255, 255, 0.94)', 'rgba(248, 249, 250, 0.9)'] as const);
-
-    return (
-      <>
-        <LinearGradient
-          colors={accentColors}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFill}
-        />
-        {Platform.OS === 'ios' ? (
-          <BlurView intensity={isLocked ? 12 : 28} tint="light" style={StyleSheet.absoluteFill} />
-        ) : null}
-        <LinearGradient
-          colors={['rgba(255,255,255,0.8)', 'rgba(255,255,255,0.45)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFill}
-        />
-      </>
-    );
-  };
-
-  const renderWeekStatusChip = (isActive: boolean, isCompleted: boolean, isLocked: boolean) => {
-    if (isActive) {
-      return (
-        <View style={styles.weekStatusChipActive}>
-          <Text style={styles.weekStatusChipActiveText}>Current</Text>
-        </View>
-      );
-    }
-    if (isCompleted) {
-      return (
-        <View style={styles.weekStatusChipDone}>
-          <CheckCircle2 size={12} color={COLORS.primary} />
-          <Text style={styles.weekStatusChipDoneText}>Done</Text>
-        </View>
-      );
-    }
-    if (isLocked) {
-      return (
-        <View style={styles.weekStatusChipLocked}>
-          <Lock size={11} color={COLORS.locked} />
-          <Text style={styles.weekStatusChipLockedText}>Locked</Text>
-        </View>
-      );
-    }
-    return null;
-  };
-
   const selectedWeekLoggedWeightKg = React.useMemo(() => {
     if (!selectedWeek) return null;
     return getWeekLoggedWeightKg(weightHistory, planStartDate, selectedWeek.Week);
   }, [selectedWeek, weightHistory, planStartDate]);
 
-  const renderWeekCard = (week: WeekPlan) => {
+  const renderWeekCard = (week: WeekPlan, index: number) => {
     const isActive = week.Week === planWeekToday;
     const isCompleted = week.Week < planWeekToday;
     const isLocked = week.Week > planWeekToday + 1;
-    const runs = getMappedDays(week, availableDays).filter((day) => day.type === 'RUN');
-    const recoveryDays = getMappedDays(week, availableDays).filter((day) => day.type === 'RECOVERY');
-    const projectionLead = `By Week ${week.Week},`;
+    const state: WeekState = isActive ? 'current' : isCompleted ? 'completed' : isLocked ? 'locked' : 'upcoming';
+    const isFirst = index === 0;
+    const isLast = index === weeklyPlan.length - 1;
+    // One opening character, then alternate pairs of icons and characters.
+    const showJourneyCharacter = hasWeightNumbers && (!isLast || isFirst) && (index % 4 === 0 || index % 4 === 3);
+    const iconIndex = Math.floor(index / 4) * 2 + (index % 4) - 1;
+    const weekArt = hasWeightNumbers && !isLast
+      ? WEEK_ART[Math.max(0, iconIndex) % WEEK_ART.length]
+      : getWeekArt(week.Week, totalWeeks);
+    const runCount = getMappedDays(week, availableDays).filter((day) => day.type === 'RUN').length;
     const weekLoggedWeightKg = getWeekLoggedWeightKg(weightHistory, planStartDate, week.Week);
-    const compareLoggedWeight = weekLoggedWeightKg !== null;
+
+    let headline = `Run ${week['Run km/week']} km`;
+    let subLabel = `${runCount} ${runCount === 1 ? 'run' : 'runs'} · `;
+    let subValue = `${week['Steps/day target'].toLocaleString()} steps/day`;
+    if (hasWeightNumbers) {
+      const delta = getWeeklyWeightDelta(week, weeklyPlan[index - 1], startingWeightKg);
+      if (delta != null && delta > WEIGHT_CHANGE_THRESHOLD_KG) {
+        headline = `Lose ${formatWeeklyChange(delta, usesImperial)}`;
+      } else if (delta != null && delta < -WEIGHT_CHANGE_THRESHOLD_KG) {
+        headline = `Gain ${formatWeeklyChange(Math.abs(delta), usesImperial)}`;
+      } else {
+        headline = 'Hold steady';
+      }
+      subLabel = compact ? 'Projected: ' : 'Projected weight: ';
+      subValue = formatWeightValue(week['Expected weight'], usesImperial);
+    }
+
+    const loggedResult =
+      hasWeightNumbers && weekLoggedWeightKg != null
+        ? {
+            onTrack: weekLoggedWeightKg <= week['Expected weight'] + WEIGHT_CHANGE_THRESHOLD_KG,
+            logged: formatWeightValue(weekLoggedWeightKg, usesImperial),
+            gap: formatWeightLoss(Math.abs(weekLoggedWeightKg - week['Expected weight']), usesImperial),
+          }
+        : null;
+
+    const weekStart = planStartDate ? getPlanWeekDateRange(planStartDate, week.Week).start : null;
+    const baselineLog = weekStart ? weightHistory
+      .filter((point) => Number.isFinite(point.weightKg) && new Date(point.loggedAt) < weekStart)
+      .sort((a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime())[0] : null;
+    const baseline = baselineLog?.weightKg ?? (index === 0 ? startingWeightKg : null);
+    const targetLoss = getWeeklyWeightDelta(week, weeklyPlan[index - 1], startingWeightKg);
+    const weeklyProgress = typeof baseline === 'number' && weekLoggedWeightKg != null && targetLoss != null && targetLoss > 0
+      ? Math.min(1, Math.max(0, (baseline - weekLoggedWeightKg) / targetLoss)) : 0;
 
     return (
-      <TouchableOpacity
+      <Animated.View
         key={week.Week}
-        style={[
-          styles.weekCardTouchable,
-          isActive && styles.weekCardTouchableActive,
-          isLocked && styles.weekCardTouchableLocked,
-        ]}
-        onPress={() => !isLocked && onSelectWeek(week)}
+        entering={FadeInDown.duration(420)
+          .delay(220 + Math.min(index, 8) * 55)
+          .easing(EASE_OUT)}
+        style={styles.timelineRow}
         onLayout={(event) => {
-          weekOffsetsRef.current[week.Week] = weekListTopRef.current + event.nativeEvent.layout.y;
+          weekOffsetsRef.current[week.Week] = event.nativeEvent.layout.y;
           if (week.Week === planWeekToday) {
             scrollToCurrentWeek();
           }
         }}
-        activeOpacity={isLocked ? 1 : 0.84}
       >
-        <View style={styles.glassShell}>
-          {renderGlassBackdrop(isLocked, isActive, isCompleted)}
-
-          <View style={styles.glassInner}>
-            <View style={styles.weekCardTitleRow}>
-              <Text style={[styles.weekCardName, isLocked && styles.weightTextMuted]} numberOfLines={1}>
-                {week['Week name']}
-              </Text>
-              {renderWeekStatusChip(isActive, isCompleted, isLocked)}
-            </View>
-
-            <View style={styles.weightProjectionBlock}>
-              <Text style={[styles.weightProjectionLead, isLocked && styles.weightTextMuted]}>
-                {projectionLead}
-              </Text>
-              {showWeightGoalLayout ? (
-                <>
-                  <WeightProjectionContent
-                    week={week}
-                    startingWeightKg={startingWeightKg}
-                    usesImperial={usesImperial}
-                    loggedWeightKg={weekLoggedWeightKg}
-                    compareLoggedWeight={compareLoggedWeight}
-                    isLocked={isLocked}
-                  />
-                  {isActive ? (
-                    <TouchableOpacity
-                      style={styles.weekCardLogWeightBtn}
-                      onPress={openWeightModal}
-                      disabled={loggingWeight}
-                      activeOpacity={0.85}
-                    >
-                      {loggingWeight ? (
-                        <ActivityIndicator size="small" color={COLORS.primary} />
-                      ) : (
-                        <>
-                          <Plus size={14} color={COLORS.primary} strokeWidth={2.5} />
-                          <Text style={styles.weekCardLogWeightBtnText}>Log weight</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <Text style={[styles.weightProjectionAction, isLocked && styles.weightTextMuted]}>
-                    you&apos;ll run
-                  </Text>
-                  <Text style={[styles.weightProjectionValue, isLocked && styles.weightProjectionValueLocked]}>
-                    {week['Run km/week']} km
-                  </Text>
-                  <Text style={[styles.weightProjectionSub, isLocked && styles.weightTextMuted]}>
-                    {week['Steps/day target'].toLocaleString()} steps/day · {recoveryDays.length} recovery days
-                  </Text>
-                </>
-              )}
-            </View>
-
-            {runs.length > 0 ? (
-              <View style={styles.weightRunsSection}>
-                <Text style={styles.weightRunsSectionLabel}>This week&apos;s runs</Text>
-                {runs.map((run, runIndex) => (
-                  <View
-                    key={`${week.Week}-${run.dayIdx}-${run.runType ?? 'run'}-${runIndex}`}
-                    style={styles.weightRunRow}
-                  >
-                    <View style={styles.weightRunIconWrap}>
-                      <PlanSessionIcon
-                        kind={getSessionActivityKind(run.runType, 'RUN')}
-                        size={17}
-                        color={isLocked ? COLORS.locked : COLORS.primary}
-                      />
-                    </View>
-                    <View style={styles.weightRunCopy}>
-                      <Text style={[styles.weightRunName, isLocked && styles.weightTextMuted]} numberOfLines={1}>
-                        {run.runType}
-                      </Text>
-                      <Text style={[styles.weightRunDay, isLocked && styles.weightTextMuted]}>
-                        {run.name}
-                      </Text>
-                    </View>
-                    <Text style={[styles.weightRunKm, isLocked && styles.weightTextMuted]}>
-                      {run.targetKm} km
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-
-            <View style={styles.weightCardFooter}>
-              <View style={styles.weekMetaGroup}>
-                <View style={styles.weekMetaPill}>
-                  <Flame size={12} color={isLocked ? COLORS.locked : COLORS.primary} />
-                  <Text style={[styles.weekMetaText, isLocked && styles.weightTextMuted]}>
-                    {week['Calories/day']} kcal
-                  </Text>
-                </View>
-                <View style={styles.weekMetaPill}>
-                  <Ionicons
-                    name="trail-sign-outline"
-                    size={13}
-                    color={isLocked ? COLORS.locked : COLORS.primary}
-                  />
-                  <Text style={[styles.weekMetaText, isLocked && styles.weightTextMuted]}>
-                    {week['Run km/week']} km/wk
-                  </Text>
-                </View>
-              </View>
-              <ChevronRight size={16} color={COLORS.locked} />
-            </View>
-          </View>
+        <View style={styles.timelineRail}>
+          <View
+            style={[
+              styles.railSegment,
+              isFirst && styles.railSegmentHidden,
+              week.Week <= planWeekToday && styles.railSegmentReached,
+            ]}
+          />
+          <TimelineNode state={state} />
+          <View
+            style={[
+              styles.railSegment,
+              isLast && styles.railSegmentHidden,
+              week.Week < planWeekToday && styles.railSegmentReached,
+            ]}
+          />
         </View>
-      </TouchableOpacity>
+
+        <PressableScale
+          disabled={isLocked}
+          accessibilityLabel={`Week ${week.Week}, ${headline}${isLocked ? ', locked' : ''}`}
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            onSelectWeek(week);
+          }}
+          style={[styles.weekCard, isActive && styles.weekCardActive, isLocked && styles.weekCardLocked]}
+        >
+          {isActive ? <Text style={styles.currentBadge}>Current</Text> : null}
+          <View style={styles.weekCardTop}>
+            <View style={styles.weekCardCopy}>
+              <View style={[styles.weekPill, isActive && styles.weekPillActive]}>
+                <Text style={[styles.weekPillText, isActive && styles.weekPillTextActive]}>Week {week.Week}</Text>
+              </View>
+              <Text
+                style={[styles.weekHeadline, isActive && styles.weekHeadlineActive, compact && styles.weekHeadlineCompact]}
+                numberOfLines={1}
+              >
+                {headline}
+              </Text>
+              {hasWeightNumbers ? (
+                <View style={styles.projectedWeightBlock}>
+                  <Text style={styles.projectedWeightLabel}>Projected weight</Text>
+                  <Text selectable style={[styles.projectedWeightValue, isActive && styles.projectedWeightValueActive]}>{subValue}</Text>
+                </View>
+              ) : (
+                <Text style={styles.weekSub}>{subLabel}<Text style={styles.weekSubStrong}>{subValue}</Text></Text>
+              )}
+
+            </View>
+
+            {isActive && (!hasWeightNumbers || showJourneyCharacter) ? (
+              <CurrentWeekMascot gender={gender} compact={compact} stage={hasWeightNumbers ? weekCharacterStages[index] : undefined} />
+            ) : showJourneyCharacter ? (
+              <WeightJourneyCharacter gender={gender} stage={weekCharacterStages[index]} width={70} height={92} />
+            ) : (
+              <Image source={weekArt} style={styles.weekArt} resizeMode="contain" />
+            )}
+          </View>
+
+          {isActive && hasWeightNumbers ? (
+            <View style={styles.weekProgressRow}>
+              <Text style={styles.weekProgressLabel}>Progress</Text>
+              <View accessibilityRole="progressbar" accessibilityLabel="Weekly weight progress" accessibilityValue={{ min: 0, max: 100, now: Math.round(weeklyProgress * 100) }} style={styles.weekProgressTrack}><View style={[styles.weekProgressFill, { width: `${weeklyProgress * 100}%` }]} /></View>
+              <Text style={styles.weekProgressValue}>{Math.round(weeklyProgress * 100)}%</Text>
+            </View>
+          ) : null}
+          {isActive && hasWeightNumbers && (weekLoggedWeightKg == null || baseline == null) ? <Text style={styles.weekProgressHint}>{weekLoggedWeightKg == null ? 'Log your weight in week details to track progress' : 'A previous weigh-in is needed to measure weekly change'}</Text> : null}
+
+          {loggedResult ? (
+            <View style={[styles.loggedChip, loggedResult.onTrack ? styles.loggedChipGood : styles.loggedChipBad]}>
+              {loggedResult.onTrack ? (
+                <CheckCircle2 size={14} color={c.isFemale ? c.secondary : COLORS.success} strokeWidth={2.5} />
+              ) : (
+                <X size={14} color={COLORS.danger} strokeWidth={2.5} />
+              )}
+              <Text style={[styles.loggedChipText, { color: loggedResult.onTrack ? (c.isFemale ? c.secondary : COLORS.success) : COLORS.danger }]}>
+                {loggedResult.onTrack
+                  ? `On track · logged ${loggedResult.logged}`
+                  : `${loggedResult.gap} above plan · logged ${loggedResult.logged}`}
+              </Text>
+            </View>
+          ) : null}
+        </PressableScale>
+      </Animated.View>
     );
   };
 
@@ -744,8 +1025,14 @@ export function PlanWeeklyTab({
       <View style={styles.pageHeader}>
         <View style={styles.pageHeaderRow}>
           {onClose ? (
-            <TouchableOpacity onPress={onClose} style={styles.pageHeaderIconBtn} activeOpacity={0.85}>
-              <X size={20} color={COLORS.textMain} />
+            <TouchableOpacity
+              onPress={onClose}
+              style={styles.pageHeaderIconBtn}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+            >
+              <ChevronLeft size={24} color={COLORS.ink} />
             </TouchableOpacity>
           ) : (
             <View style={styles.pageHeaderIconSpacer} />
@@ -753,11 +1040,6 @@ export function PlanWeeklyTab({
 
           <View style={styles.pageHeaderTitleWrap}>
             <Text style={styles.pageHeaderTitle}>Weekly Plan</Text>
-            {totalWeeks > 0 ? (
-              <Text style={styles.pageHeaderSubtitle}>
-                Week {planWeekToday} of {totalWeeks}
-              </Text>
-            ) : null}
           </View>
 
           {weeklyPlan.length > 0 ? (
@@ -766,40 +1048,77 @@ export function PlanWeeklyTab({
               style={styles.pageHeaderIconBtn}
               disabled={sheetBusy}
               activeOpacity={0.85}
+              accessibilityLabel="Edit plan"
             >
-              <Pencil size={18} color={COLORS.primary} />
+              <Pencil size={18} color={COLORS.textMain} />
             </TouchableOpacity>
           ) : (
             <View style={styles.pageHeaderIconSpacer} />
           )}
         </View>
-
-        {totalWeeks > 0 ? (
-          <View style={styles.pageHeaderSummary}>
-            <View style={styles.pageHeaderMetaRow}>
-              <Text style={styles.pageHeaderCaption} numberOfLines={2}>
-                {headerCaption}
-              </Text>
-              <Text style={styles.pageHeaderPercent}>{Math.round(journeyStats.progress * 100)}%</Text>
-            </View>
-            <View style={styles.pageHeaderProgressTrack}>
-              <View
-                style={[
-                  styles.pageHeaderProgressFill,
-                  { width: `${Math.max(4, journeyStats.progress * 100)}%` },
-                ]}
-              />
-            </View>
-          </View>
-        ) : null}
       </View>
 
       <ScrollView
         ref={pageScrollRef}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.pageScrollContent}
+        contentContainerStyle={[styles.pageScrollContent, { paddingBottom: Math.max(insets.bottom, 24) }]}
+        onLayout={(event) => {
+          viewportHeightRef.current = event.nativeEvent.layout.height;
+        }}
       >
-        <View style={styles.pageBody}>
+        {!loading && totalWeeks > 0 ? (
+          <>
+            <View style={styles.hero}>
+              <LinearGradient
+                colors={c.isFemale ? [HERO_TOP, '#FFFAFB', '#FFF8F9'] : [HERO_TOP, '#FAFBFA', PAGE_BG]}
+                locations={[0, 0.5, 1]}
+                style={StyleSheet.absoluteFill}
+              />
+              <HeroMascot gender={gender} stage={hasWeightNumbers ? getWeightJourneyStage(startingWeightKg, journeyEndWeightKg, currentWeightKg ?? startingWeightKg) : undefined} />
+              <Animated.View entering={FadeInDown.duration(500).easing(EASE_OUT)} style={styles.heroCopy}>
+                <Text style={styles.durationPill}>{totalWeeks}-Week</Text>
+                <Text style={[styles.heroTitle, compact && { fontSize: 25, lineHeight: 29 }]}>{showWeightGoalLayout ? 'Weight Loss Plan' : 'Your Running Plan'}</Text>
+                <Text style={styles.heroSubtitle} numberOfLines={2}>
+                  {hasWeightNumbers && journeyStats.totalLossKg != null ? `Lose ${formatWeeklyChange(journeyStats.totalLossKg / Math.max(1, totalWeeks), usesImperial)} / week on average` : heroSubtitle}
+                </Text>
+              </Animated.View>
+            </View>
+
+            <Animated.View
+              entering={FadeInDown.duration(480).delay(120).easing(EASE_OUT)}
+              style={styles.statsCard}
+            >
+              {heroStats.map((stat, statIndex) => (
+                <React.Fragment key={stat.key}>
+                  {statIndex > 0 ? <View style={styles.statsDivider} /> : null}
+                  <View style={styles.statItemNew}>
+                    <View style={styles.statLabelRow}>
+                      {!compact ? <stat.Icon size={13} color={COLORS.textSub} strokeWidth={2.25} /> : null}
+                      <Text style={[styles.statLabelNew, compact && styles.statLabelCompact]} numberOfLines={1}>
+                        {stat.label}
+                      </Text>
+                    </View>
+                    <Text
+                      style={[styles.statValueNew, compact && styles.statValueCompact]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                    >
+                      {stat.value}
+                    </Text>
+                  </View>
+                </React.Fragment>
+              ))}
+            </Animated.View>
+          </>
+        ) : null}
+
+        <View
+          style={styles.pageBody}
+          onLayout={(event) => {
+            pageBodyTopRef.current = event.nativeEvent.layout.y;
+            scrollToCurrentWeek();
+          }}
+        >
           {loading ? (
             <View style={styles.loadingBlock}>
               <ActivityIndicator size="small" color={COLORS.primary} />
@@ -836,10 +1155,6 @@ export function PlanWeeklyTab({
                 </View>
               ) : (
                 <>
-                  <View style={styles.sectionHeadingRow}>
-                    <Text style={styles.sectionHeading}>Your weeks</Text>
-                    <Text style={styles.sectionHeadingMeta}>{totalWeeks} total</Text>
-                  </View>
                   <View
                     style={styles.weekList}
                     onLayout={(event) => {
@@ -847,9 +1162,10 @@ export function PlanWeeklyTab({
                       scrollToCurrentWeek();
                     }}
                   >
-                    {weeklyPlan.map((week) => renderWeekCard(week))}
+                    {weeklyPlan.map((week, index) => renderWeekCard(week, index))}
                   </View>
                 </>
+
               )}
 
               {__DEV__ && onRegeneratePlan ? (
@@ -901,16 +1217,44 @@ export function PlanWeeklyTab({
             </>
           )}
         </View>
+        {!loading && chartValues.length > 1 ? (
+          <Animated.View
+            entering={FadeInDown.duration(500).delay(260).easing(EASE_OUT)}
+            style={styles.journeySection}
+          >
+            <View style={styles.chartCard}>
+              <View style={styles.chartHeader}>
+                <View style={styles.chartTitleRow}>
+                  <ChartLine size={18} color={COLORS.primary} strokeWidth={2.25} />
+                  <Text style={styles.chartTitle}>Your Journey</Text>
+                </View>
+                <Text style={styles.chartSummary}>{chartSummary}</Text>
+              </View>
+              <JourneyChart values={chartValues} currentIndex={chartCurrentIndex} />
+              <View style={styles.chartAxis}><Text style={styles.chartAxisText}>Start</Text><Text style={styles.chartAxisText}>Week {totalWeeks}</Text></View>
+              <Text style={styles.chartAxisText}>{hasWeightNumbers ? 'Projected weight' : 'Planned weekly distance'}</Text>
+            </View>
+          </Animated.View>
+        ) : null}
+
       </ScrollView>
 
       {selectedWeek ? (
-        <View style={styles.sheetOverlay}>
+        <Animated.View
+          style={styles.sheetOverlay}
+          entering={FadeIn.duration(200)}
+          exiting={FadeOut.duration(180)}
+        >
           <TouchableOpacity
             style={StyleSheet.absoluteFill}
             activeOpacity={1}
             onPress={() => onSelectWeek(null)}
           />
-          <View style={styles.detailSheet}>
+          <Animated.View
+            style={styles.detailSheet}
+            entering={SlideInDown.duration(340).easing(EASE_OUT)}
+            exiting={SlideOutDown.duration(220)}
+          >
             <View style={styles.modalDragHandle} />
             <View style={styles.detailHeaderRow}>
               <View style={{ flex: 1 }}>
@@ -923,7 +1267,12 @@ export function PlanWeeklyTab({
             </View>
 
             <View style={styles.detailHeroGlass}>
-              {renderGlassBackdrop(false, true, false)}
+              <LinearGradient
+                colors={c.isFemale ? ['#FFF0F2', '#FFFAFB'] : ['#F2F7F5', '#FAFBFA']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
               <View style={styles.detailHeroInner}>
                 {showWeightGoalLayout ? (
                   <>
@@ -961,15 +1310,15 @@ export function PlanWeeklyTab({
               </View>
               <View style={styles.detailStatCard}>
                 <Ionicons name="trail-sign-outline" size={16} color={COLORS.primary} />
-                <Text style={styles.detailStatLabel}>Run vol</Text>
-                <Text style={styles.detailStatValue}>{selectedWeek['Run km/week']}k</Text>
+                <Text style={styles.detailStatLabel}>{selectedWeek['Week Dailys'].trainingSchedule ? 'Training' : 'Run vol'}</Text>
+                <Text style={styles.detailStatValue}>{selectedWeek['Week Dailys'].trainingSchedule ? `${selectedWeek['Week Dailys'].trainingSchedule.sessions.length} days` : `${selectedWeek['Run km/week']}k`}</Text>
               </View>
             </View>
 
             <Text style={styles.sessionHeader}>Schedule</Text>
             <ScrollView showsVerticalScrollIndicator={false} style={styles.detailScheduleScroll}>
               {getMappedDays(selectedWeek, availableDays)
-                .filter((day) => day.type !== 'STEP')
+                .filter((day) => day.type !== 'STEP' || !!day.workoutPreference)
                 .map((day) => (
                   <TouchableOpacity
                     key={day.dayIdx}
@@ -978,24 +1327,24 @@ export function PlanWeeklyTab({
                       day.type === 'RUN' ? styles.sessionRunCard : styles.sessionRecCard,
                     ]}
                     onPress={() => {
-                      if (day.type === 'RUN') {
+                      if (day.type === 'RUN' || day.workoutPreference) {
                         onSelectSessionDay?.(selectedWeek.Week, day.dayIdx);
                       }
                     }}
-                    activeOpacity={day.type === 'RUN' && onSelectSessionDay ? 0.75 : 1}
-                    disabled={day.type !== 'RUN' || !onSelectSessionDay}
+                    activeOpacity={(day.type === 'RUN' || day.workoutPreference) && onSelectSessionDay ? 0.75 : 1}
+                    disabled={(day.type !== 'RUN' && !day.workoutPreference) || !onSelectSessionDay}
                   >
                     <View style={styles.sessionCardIconWrap}>
-                      <PlanSessionIcon
+                      {day.workoutPreference ? <Dumbbell size={18} color={COLORS.primary} /> : <PlanSessionIcon
                         kind={getSessionActivityKind(day.runType, day.type)}
                         size={18}
                         color={COLORS.primary}
-                      />
+                      />}
                     </View>
                     <View style={styles.sessionCardHeader}>
                       <Text style={styles.sessionDay}>{day.name.toUpperCase()}</Text>
                       <Text style={styles.sessionType}>
-                        {day.runType || (day.type === 'RECOVERY' ? 'Recovery' : 'Active')}
+                        {day.workoutPreference ? findPartnerWorkout(day.workoutId)?.name ?? workoutLabel(day.workoutPreference) : day.runType || (day.type === 'RECOVERY' ? 'Recovery' : 'Active')}
                       </Text>
                     </View>
                     <View style={[styles.sessionTimePill, { backgroundColor: `${getTimeAccent(trainingTimePreference)}14` }]}>
@@ -1041,18 +1390,26 @@ export function PlanWeeklyTab({
                 </View>
               </>
             ) : null}
-          </View>
-        </View>
+          </Animated.View>
+        </Animated.View>
       ) : null}
 
       {showEditPlanSheet ? (
-        <View style={styles.sheetOverlay}>
+        <Animated.View
+          style={styles.sheetOverlay}
+          entering={FadeIn.duration(200)}
+          exiting={FadeOut.duration(180)}
+        >
           <TouchableOpacity
             style={StyleSheet.absoluteFill}
             activeOpacity={1}
             onPress={() => !sheetBusy && setShowEditPlanSheet(false)}
           />
-          <View style={styles.editPlanModalCard}>
+          <Animated.View
+            style={styles.editPlanModalCard}
+            entering={SlideInDown.duration(340).easing(EASE_OUT)}
+            exiting={SlideOutDown.duration(220)}
+          >
             <View style={styles.modalDragHandle} />
             <View style={styles.modalContentHeader}>
               <Text style={styles.modalWeek}>EDIT PLAN</Text>
@@ -1066,8 +1423,8 @@ export function PlanWeeklyTab({
                 Change when you train, or adjust how hard the plan feels.
               </Text>
 
-              <Text style={styles.editPlanSectionTitle}>Run days</Text>
-              <Text style={styles.editPlanSectionHint}>Pick at least 3 days you can train.</Text>
+              <Text style={styles.editPlanSectionTitle}>{requiredTrainingDays ? 'Training days' : 'Run days'}</Text>
+              <Text style={styles.editPlanSectionHint}>{requiredTrainingDays ? `Pick exactly ${requiredTrainingDays} training ${requiredTrainingDays === 1 ? 'day' : 'days'}.` : 'Pick at least 3 days you can train.'}</Text>
               <View style={styles.scheduleGrid}>
                 {DAY_OPTIONS.map((day) => {
                   const selected = draftAvailableDays.includes(day.id);
@@ -1165,9 +1522,31 @@ export function PlanWeeklyTab({
               {!selectedAdjustment ? (
                 <Text style={styles.applyHelperText}>Choose an intensity option above first.</Text>
               ) : null}
+
+              {onResetPlan ? (
+                <>
+                  <View style={styles.editPlanDivider} />
+                  <Text style={styles.editPlanSectionTitle}>Start a new plan</Text>
+                  <Text style={styles.editPlanSectionHint}>
+                    Set a new goal, update your weight, and rebuild your plan from week 1.
+                  </Text>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    style={[styles.secondaryActionBtn, sheetBusy && styles.disabledPrimaryBtn]}
+                    disabled={sheetBusy}
+                    onPress={() => {
+                      setShowEditPlanSheet(false);
+                      onResetPlan();
+                    }}
+                  >
+                    <RefreshCw size={18} color={COLORS.primary} />
+                    <Text style={styles.secondaryActionBtnText}>Full reset plan</Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
             </ScrollView>
-          </View>
-        </View>
+          </Animated.View>
+        </Animated.View>
       ) : null}
 
       <Modal visible={weightModalOpen} animationType="fade" transparent onRequestClose={() => setWeightModalOpen(false)}>
@@ -1226,9 +1605,23 @@ export function PlanWeeklyTab({
 }
 
 const styles = StyleSheet.create({
+  durationPill: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: '#ECEFEC', color: COLORS.textSub, fontWeight: '800', fontSize: 12 },
+  currentBadge: { position: 'absolute', top: 10, right: 12, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999, backgroundColor: '#E4F2ED', color: '#24786F', fontSize: 10, fontWeight: '800', zIndex: 1 },
+  weekProgressRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+  weekProgressLabel: { fontSize: 12, fontWeight: '600', color: COLORS.ink },
+  weekProgressTrack: { flex: 1, height: 8, borderRadius: 4, overflow: 'hidden', backgroundColor: '#E4E8E4' },
+  weekProgressFill: { height: '100%', borderRadius: 4, backgroundColor: '#11AF8A' },
+  weekProgressValue: { minWidth: 32, textAlign: 'right', fontSize: 12, fontWeight: '800', color: COLORS.ink, fontVariant: ['tabular-nums'] },
+  weekProgressHint: { fontSize: 10, lineHeight: 14, color: COLORS.textSub, marginTop: 6 },
+  chartAxis: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  chartAxisText: { fontSize: 10, color: COLORS.textSub },
+  projectedWeightBlock: { marginTop: 8, gap: 2 },
+  projectedWeightLabel: { fontSize: 11, lineHeight: 15, fontWeight: '600', color: COLORS.textSub },
+  projectedWeightValue: { fontSize: 25, lineHeight: 30, fontWeight: '900', color: COLORS.ink, letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
+  projectedWeightValueActive: { fontSize: 29, lineHeight: 34 },
   pageRoot: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: PAGE_BG,
   },
   sheetOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1237,103 +1630,125 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.45)',
   },
   pageHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 2,
-    paddingBottom: 12,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F3F5',
+    paddingHorizontal: 18, paddingTop: 4, paddingBottom: 6, backgroundColor: HERO_TOP,
   },
   pageHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    minHeight: 40,
+    minHeight: 44,
   },
   pageHeaderIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F5F6F8',
+    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', boxShadow: '0 6px 20px rgba(54, 27, 31, 0.04)',
   },
   pageHeaderIconSpacer: {
-    width: 40,
-    height: 40,
-  },
-  weekCardLogWeightBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 6,
-    marginTop: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: COLORS.primaryFade,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 107, 107, 0.18)',
-  },
-  weekCardLogWeightBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.primary,
+    width: 44,
+    height: 44,
   },
   pageHeaderTitleWrap: {
     flex: 1,
     alignItems: 'center',
   },
   pageHeaderTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: COLORS.textMain,
-    letterSpacing: -0.2,
-  },
-  pageHeaderSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.textSub,
-  },
-  pageHeaderSummary: {
-    marginTop: 10,
-    gap: 8,
-  },
-  pageHeaderMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  pageHeaderCaption: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '600',
-    color: COLORS.textSub,
-  },
-  pageHeaderPercent: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: COLORS.primary,
-    fontVariant: ['tabular-nums'],
-  },
-  pageHeaderProgressTrack: {
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: '#EEF1F4',
-    overflow: 'hidden',
-  },
-  pageHeaderProgressFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: COLORS.primary,
+    fontSize: 22, fontWeight: '900', color: COLORS.ink, letterSpacing: -0.7,
   },
   pageScrollContent: {
-    paddingBottom: 40,
+    paddingBottom: 24,
+  },
+
+  hero: {
+    minHeight: 176, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 50, overflow: 'hidden',
+  },
+  heroWave: {
+    position: 'absolute',
+    left: 0,
+    bottom: 0,
+  },
+  heroMascotWrap: {
+    position: 'absolute', right: -12, top: 0, width: 168, height: 260,
+  },
+  heroMascot: {
+    width: 168, height: 260,
+  },
+  heroCopy: {
+    maxWidth: '60%', gap: 8,
+  },
+  heroTitle: {
+    fontSize: 29, lineHeight: 33, fontWeight: '800', color: COLORS.ink, letterSpacing: -1,
+  },
+  heroSubtitle: {
+    fontSize: 13, lineHeight: 18, fontWeight: '600', color: COLORS.textMain,
+  },
+
+  statsCard: {
+    flexDirection: 'row', alignItems: 'center', marginHorizontal: 14, marginTop: -20, borderRadius: 16, borderCurve: 'continuous', backgroundColor: COLORS.card, paddingHorizontal: 12, paddingVertical: 10, boxShadow: '0 6px 20px rgba(28, 43, 38, 0.03)',
+  },
+  statsDivider: {
+    width: 1, alignSelf: 'stretch', backgroundColor: '#E5E9E5', marginHorizontal: 10,
+  },
+  statItemNew: {
+    flex: 1, alignItems: 'center', gap: 3,
+  },
+  statLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  statLabelNew: {
+    flexShrink: 1, fontSize: 10, fontWeight: '600', color: COLORS.textSub,
+  },
+  statValueNew: {
+    fontSize: 17, fontWeight: '800', color: COLORS.ink, letterSpacing: -0.3, fontVariant: ['tabular-nums'],
+  },
+  statValueCompact: {
+    fontSize: 15,
+  },
+  statLabelCompact: {
+    fontSize: 10,
+  },
+
+  journeySection: {
+    paddingHorizontal: 14, marginTop: 16,
+  },
+  chartCard: {
+    borderRadius: 22, borderCurve: 'continuous', backgroundColor: COLORS.card, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 14, boxShadow: '0 8px 28px rgba(28, 43, 38, 0.04)',
+  },
+  chartHeader: {
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 8,
+  },
+  chartTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  chartTitle: {
+    fontSize: 18, fontWeight: '900', color: COLORS.ink,
+  },
+  chartSummary: {
+    fontSize: 14, fontWeight: '800', color: COLORS.ink, fontVariant: ['tabular-nums'],
+  },
+  chartCanvas: {
+    height: CHART_HEIGHT,
+  },
+  chartReveal: {
+    height: CHART_HEIGHT,
+    overflow: 'hidden',
+  },
+  chartCurrentDot: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chartCurrentDotInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#FFF',
+    borderWidth: 3,
+    borderColor: COLORS.primary,
   },
   loadingBlock: {
     alignItems: 'center',
@@ -1347,14 +1762,14 @@ const styles = StyleSheet.create({
     color: COLORS.textSub,
   },
   pageBody: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingHorizontal: 14, paddingTop: 14,
   },
   sectionHeadingRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 12,
+    paddingHorizontal: 4,
   },
   sectionHeading: {
     fontSize: 18,
@@ -1367,114 +1782,164 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.textSub,
   },
-  weekList: {
-    gap: 12,
+  weekList: {},
+
+  timelineRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  timelineRail: {
+    width: 32, alignItems: 'center',
+  },
+  railSegment: {
+    flex: 1, width: 2, backgroundColor: '#DDE4E1',
+  },
+  railSegmentHidden: {
+    opacity: 0,
+  },
+  railSegmentReached: {
+    backgroundColor: COLORS.teal,
+  },
+  nodeBase: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nodeCompleted: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: COLORS.teal,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+  },
+  nodeCurrentWrap: {
+    width: 28, height: 28, alignItems: 'center', justifyContent: 'center',
+  },
+  nodeCurrent: {
+    width: 28, height: 28, borderRadius: 14, backgroundColor: COLORS.teal, borderWidth: 3, borderColor: '#FFFFFF',
+  },
+  nodeCurrentDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#FFFFFF',
+  },
+  nodeUpcoming: {
+    width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#C7D3CD',
+  },
+  nodeLocked: {
+    width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#C7D3CD',
   },
 
-  weekCardTouchable: {
-    borderRadius: 24,
-    borderCurve: 'continuous',
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.72)',
-    boxShadow: '0 10px 28px rgba(45, 52, 54, 0.08)',
+  weekCard: {
+    flex: 1, marginVertical: 5, minHeight: 92, borderRadius: 16, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: COLORS.card, borderWidth: 1, borderColor: '#E8ECE8', paddingLeft: 16, paddingRight: 10, paddingVertical: 12, justifyContent: 'center', boxShadow: '0 4px 14px rgba(28, 43, 38, 0.04)',
   },
-  weekCardTouchableActive: {
-    borderColor: 'rgba(255, 107, 107, 0.45)',
-    boxShadow: '0 14px 34px rgba(255, 107, 107, 0.18)',
+  weekCardActive: {
+    minHeight: 164, borderWidth: 1, borderColor: '#A9CEC3', paddingTop: 14, paddingBottom: 12, boxShadow: '0 6px 18px rgba(28, 43, 38, 0.04)',
   },
-  weekCardTouchableLocked: {
-    opacity: 0.72,
-    boxShadow: '0 6px 16px rgba(45, 52, 54, 0.05)',
+  weekCardLocked: {
+    backgroundColor: '#FFFFFF',
   },
-  glassShell: {
-    overflow: 'hidden',
-    borderRadius: 24,
-    borderCurve: 'continuous',
-    backgroundColor: 'rgba(255, 255, 255, 0.35)',
-  },
-  glassInner: {
-    padding: 14,
-  },
-  weekCardTitleRow: {
+  weekCardTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginBottom: 8,
+    gap: 8,
   },
-  weekStatusChipActive: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: COLORS.primaryFade,
-  },
-  weekStatusChipActiveText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: COLORS.primary,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-  },
-  weekStatusChipDone: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: COLORS.primaryFade,
-  },
-  weekStatusChipDoneText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: COLORS.primary,
-    textTransform: 'uppercase',
-  },
-  weekStatusChipLocked: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(178, 190, 195, 0.16)',
-  },
-  weekStatusChipLockedText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: COLORS.locked,
-    textTransform: 'uppercase',
-  },
-  weekCardName: {
+  weekCardCopy: {
     flex: 1,
+    alignItems: 'flex-start',
+    gap: 2,
+  },
+  weekPill: {
+    paddingHorizontal: 9, paddingVertical: 2, borderRadius: 999, backgroundColor: '#F0F2EF', marginBottom: 4,
+  },
+  weekPillActive: {
+    backgroundColor: '#E4F2ED',
+  },
+  weekPillText: {
+    fontSize: 12, fontWeight: '800', color: '#59635F', fontVariant: ['tabular-nums'],
+  },
+  weekPillTextActive: {
+    color: '#24786F',
+  },
+  weekHeadline: {
+    fontSize: 20, fontWeight: '800', color: COLORS.ink, letterSpacing: -0.4, fontVariant: ['tabular-nums'],
+  },
+  weekHeadlineActive: {
+    fontSize: 22,
+  },
+  weekHeadlineCompact: {
+    fontSize: 18,
+  },
+  weekSub: {
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '600',
     color: COLORS.textSub,
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
   },
-  weightProjectionBlock: {
-    marginBottom: 12,
-    gap: 0,
-  },
-  weightProjectionLead: {
-    fontFamily: Fonts.serif,
-    fontSize: 20,
-    lineHeight: 26,
+  weekSubStrong: {
+    fontWeight: '800',
     color: COLORS.textMain,
-    letterSpacing: -0.3,
+    fontVariant: ['tabular-nums'],
+  },
+  weekArt: {
+    width: 70, height: 64,
+  },
+  cardMascotWrap: {
+    width: 78, height: 98, marginTop: 24, alignItems: 'center', justifyContent: 'flex-end',
+  },
+  cardMascot: {
+    width: 70, height: 96,
+  },
+  cardMascotWrapCompact: {
+    width: 64,
+  },
+  cardMascotCompact: {
+    width: 54, height: 96, marginBottom: 0,
+  },
+  loggedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  loggedChipGood: {
+    backgroundColor: 'rgba(22, 163, 74, 0.08)',
+  },
+  loggedChipBad: {
+    backgroundColor: 'rgba(220, 38, 38, 0.07)',
+  },
+  loggedChipText: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  logWeightBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+    minHeight: 30,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: COLORS.primary,
+    boxShadow: '0 4px 10px rgba(255, 107, 107, 0.35)',
+  },
+  logWeightBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFF',
   },
   weightProjectionAction: {
-    fontFamily: Fonts.serif,
     fontSize: 24,
     lineHeight: 30,
     color: COLORS.textSub,
-    fontStyle: 'italic',
     letterSpacing: -0.4,
   },
   weightProjectionValue: {
-    fontFamily: Fonts.serif,
     fontSize: 38,
     lineHeight: 40,
     fontWeight: '700',
@@ -1507,91 +1972,6 @@ const styles = StyleSheet.create({
   weightTextMuted: {
     color: COLORS.locked,
   },
-  weightRunsSection: {
-    gap: 8,
-    paddingTop: 10,
-    marginBottom: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(45, 52, 54, 0.08)',
-  },
-  weightRunsSectionLabel: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: COLORS.textSub,
-    letterSpacing: 1.1,
-    textTransform: 'uppercase',
-    marginBottom: 2,
-  },
-  weightRunRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    borderCurve: 'continuous',
-    backgroundColor: 'rgba(255, 255, 255, 0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.8)',
-  },
-  weightRunIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 107, 107, 0.1)',
-  },
-  weightRunCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  weightRunName: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.textMain,
-  },
-  weightRunDay: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.textSub,
-  },
-  weightRunKm: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: COLORS.primary,
-    fontVariant: ['tabular-nums'],
-  },
-  weightCardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(45, 52, 54, 0.08)',
-  },
-  weekMetaGroup: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    flex: 1,
-  },
-  weekMetaPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.62)',
-  },
-  weekMetaText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: COLORS.textSub,
-  },
-
   card: {
     backgroundColor: '#FFF',
     borderRadius: 16,
@@ -1750,18 +2130,14 @@ const styles = StyleSheet.create({
     padding: 18,
   },
   detailHeroLead: {
-    fontFamily: Fonts.serif,
     fontSize: 18,
     color: COLORS.textMain,
   },
   detailHeroAction: {
-    fontFamily: Fonts.serif,
     fontSize: 22,
     color: COLORS.textSub,
-    fontStyle: 'italic',
   },
   detailHeroValue: {
-    fontFamily: Fonts.serif,
     fontSize: 34,
     fontWeight: '700',
     color: COLORS.primary,
@@ -2399,3 +2775,30 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+
+function useWeeklyStyles(gender?: string | null) {
+  const { isFemale, secondary, secondarySoft } = usePlanColors(gender);
+  return React.useMemo(() => isFemale ? {
+    ...styles,
+    pageRoot: { ...styles.pageRoot, backgroundColor: '#FFF8F9' },
+    statsDivider: { ...styles.statsDivider, backgroundColor: '#F0EDF1' },
+    durationPill: { ...styles.durationPill, backgroundColor: '#F0EDF1' },
+    currentBadge: { ...styles.currentBadge, backgroundColor: secondarySoft, color: secondary },
+    weekProgressTrack: { ...styles.weekProgressTrack, backgroundColor: '#FFE0E4' },
+    weekProgressFill: { ...styles.weekProgressFill, backgroundColor: '#FF6069' },
+    railSegment: { ...styles.railSegment, backgroundColor: '#EADCE0' },
+    railSegmentReached: { ...styles.railSegmentReached, backgroundColor: secondary },
+    nodeCompleted: { ...styles.nodeCompleted, backgroundColor: secondary },
+    nodeCurrent: { ...styles.nodeCurrent, backgroundColor: secondary },
+    nodeUpcoming: { ...styles.nodeUpcoming, borderColor: '#DFC7CD' },
+    nodeLocked: { ...styles.nodeLocked, borderColor: '#DFC7CD' },
+    weekCard: { ...styles.weekCard, borderColor: '#F0EDF1' },
+    weekCardActive: { ...styles.weekCardActive, borderColor: '#F5AAB2' },
+    weekPill: { ...styles.weekPill, backgroundColor: '#F0EDF1' },
+    weekPillText: { ...styles.weekPillText, color: '#63606A' },
+    weekPillActive: { ...styles.weekPillActive, backgroundColor: secondarySoft },
+    weekPillTextActive: { ...styles.weekPillTextActive, color: secondary },
+    loggedChipGood: { ...styles.loggedChipGood, backgroundColor: secondarySoft },
+  } : styles, [isFemale, secondary, secondarySoft]);
+}

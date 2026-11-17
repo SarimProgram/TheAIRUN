@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/iosicon.png",
     "scheme": "app",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "au.com.msarim.theaicoach",
       "googleServicesFile": "./GoogleService-Info.plist",
@@ -164,7 +164,9 @@
               "description": "View your and your partner's calories",
               "contentMarginsDisabled": true,
               "supportedFamilies": [
-                "systemMedium"
+                "systemSmall",
+                "systemMedium",
+                "accessoryRectangular"
               ]
             },
             {
@@ -175,6 +177,39 @@
               "supportedFamilies": [
                 "systemSmall"
               ]
+            },
+            {
+              "name": "WaterWidget",
+              "displayName": "Water",
+              "description": "Track today's water and log a glass right from your Home Screen",
+              "contentMarginsDisabled": true,
+              "supportedFamilies": [
+                "systemSmall",
+                "systemMedium",
+                "accessoryRectangular"
+              ]
+            },
+            {
+              "name": "WhiteboardWidget",
+              "displayName": "Whiteboard",
+              "description": "A large whiteboard canvas reserved for your next ideas",
+              "contentMarginsDisabled": true,
+              "supportedFamilies": ["systemLarge"]
+            },
+            {
+              "name": "PlaceholderOneWidget",
+              "displayName": "Partner Food",
+              "description": "Food your partner passes you, ready to review or already logged",
+              "contentMarginsDisabled": true,
+              "pushUpdates": true,
+              "supportedFamilies": ["systemSmall", "systemMedium"]
+            },
+            {
+              "name": "PlaceholderTwoWidget",
+              "displayName": "Placeholder 2",
+              "description": "Reserved for an upcoming RunTogether widget",
+              "contentMarginsDisabled": true,
+              "supportedFamilies": ["systemSmall", "systemMedium"]
             }
           ]
         }

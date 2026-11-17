@@ -3,32 +3,17 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
     View,
     Text,
-    TextInput,
     TouchableOpacity,
     Modal,
     StyleSheet,
     ScrollView,
     ActivityIndicator,
+    BackHandler,
     Alert,
     Animated,
-    Dimensions,
     InteractionManager,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { 
-    Unlink, 
-    Mail, 
-    MessageCircleMore, 
-    ArrowRight, 
-    ArrowLeft,
-    CheckCircle2,
-    Bell,
-    AlertTriangle,
-    Droplets,
-    Trash2,
-    ChevronRight,
-    Store,
-} from 'lucide-react-native';
 import { useAuth } from '@/src/auth/authContext';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -36,8 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_BASE_URL } from '../../config/api';
 import { useChat } from '@/contexts/ChatContext';
 import { PartnerConnectedHub } from '@/components/partner/PartnerConnectedHub';
-import { PartnerConnectArtwork } from '@/components/partner/PartnerConnectArtwork';
-import { PartnerInviteShareOptions } from '@/components/partner/PartnerInviteShareOptions';
+import { FindPartnerScreen } from '@/components/partner/FindPartnerScreen';
 import { buildPartnerInviteShareMessage } from '@/utils/partnerInviteShare';
 import { APP_NAME } from '@/constants/branding';
 import { usePartnerMemories } from '@/hooks/usePartnerMemories';
@@ -46,13 +30,11 @@ import { getMappedDays, type DaySchedule } from '@/utils/planProjection';
 import type { PartnerDaySummary, ScheduledPartnerRun, TimelineWeightHistoryEntry, PartnerMarketplaceHistoryEntry } from '@/utils/partnerTimeline';
 import { journeyStartWeightToKg } from '@/utils/partnerTimeline';
 
-const { width } = Dimensions.get('window');
-const PARTNER_CONNECT_ART_WIDTH = Math.min(width * 0.9, 420);
 
 type Invite = {
     id: string;
     code?: string;
-    toEmail: string;
+    toEmail: string | null;
     status: string;
     createdAt: string;
     updatedAt?: string;
@@ -253,6 +235,9 @@ export default function PartnerScreen() {
     const { connected: isPartnerConnected, sendMessage: sendChatMessage } = useChat();
 
     const [email, setEmail] = useState('');
+    const [inviteError, setInviteError] = useState('');
+    const [emailSent, setEmailSent] = useState(false);
+    const inviteRequestRef = useRef(false);
     const [loading, setLoading] = useState(false);
 
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -296,31 +281,12 @@ export default function PartnerScreen() {
 
     const [currentStep, setCurrentStep] = useState(0); // 0: Start, 1: Invite, 2: Share
 
-    const pulseAnim = useRef(new Animated.Value(1)).current;
-    const fadeAnim = useRef(new Animated.Value(1)).current;
-    const slideAnim = useRef(new Animated.Value(0)).current;
+    const initialInvitesLoadedRef = useRef(false);
     const heroNotificationAnim = useRef(new Animated.Value(0)).current;
     const heroNotificationTranslateX = useRef(new Animated.Value(28)).current;
     const sentToastAnim = useRef(new Animated.Value(0)).current;
     const notificationDirectionRef = useRef<1 | -1>(1);
     const sentToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        Animated.loop(
-            Animated.sequence([
-                Animated.timing(pulseAnim, {
-                    toValue: 1.03,
-                    duration: 1200,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(pulseAnim, {
-                    toValue: 1,
-                    duration: 1200,
-                    useNativeDriver: true,
-                }),
-            ])
-        ).start();
-    }, [pulseAnim]);
 
     useEffect(() => {
         if (!waterNudgeSentAt) return;
@@ -375,49 +341,16 @@ export default function PartnerScreen() {
         };
     }, []);
 
-    const transitionToStep = (step: number) => {
-        Animated.parallel([
-            Animated.timing(fadeAnim, {
-                toValue: 0,
-                duration: 200,
-                useNativeDriver: true,
-            }),
-            Animated.timing(slideAnim, {
-                toValue: step > currentStep ? -20 : 20,
-                duration: 200,
-                useNativeDriver: true,
-            })
-        ]).start(() => {
-            setCurrentStep(step);
-            slideAnim.setValue(step > currentStep ? 20 : -20);
-            Animated.parallel([
-                Animated.timing(fadeAnim, {
-                    toValue: 1,
-                    duration: 300,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(slideAnim, {
-                    toValue: 0,
-                    duration: 300,
-                    useNativeDriver: true,
-                })
-            ]).start();
+    const transitionToStep = (step: number) => setCurrentStep(step);
+
+    useFocusEffect(useCallback(() => {
+        if (hasPartner || currentStep === 0) return;
+        const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+            if (!inviteRequestRef.current) setCurrentStep(currentStep === 2 ? 1 : 0);
+            return true;
         });
-    };
-
-    const handleBackPress = useCallback(() => {
-        if (currentStep > 0) {
-            transitionToStep(currentStep - 1);
-            return;
-        }
-
-        if (router.canGoBack()) {
-            router.back();
-            return;
-        }
-
-        router.push('/(tabs)');
-    }, [currentStep, router]);
+        return () => subscription.remove();
+    }, [hasPartner, currentStep]));
 
     const fetchPartnerData = useCallback(async () => {
         if (!isAuthenticated) return;
@@ -473,13 +406,14 @@ export default function PartnerScreen() {
             }
 
             // If we have no partner but have a pending sent invite, jump to the share screen
-            if (currentStep === 0 && !partnerData.hasPartner && sent.length > 0 && sent.some((i: any) => i.status === 'PENDING')) {
+            if (!initialInvitesLoadedRef.current && !partnerData.hasPartner && sent.some((i: Invite) => i.status === 'PENDING')) {
                 setCurrentStep(2);
             }
+            initialInvitesLoadedRef.current = true;
         } catch (err: any) {
             console.log('[Partner] Fetch error:', err);
         }
-    }, [authFetch, currentStep, isAuthenticated, syncMemories]);
+    }, [authFetch, isAuthenticated, syncMemories]);
 
     useEffect(() => {
         fetchPartnerData();
@@ -501,24 +435,28 @@ export default function PartnerScreen() {
         }, [fetchPartnerData, refetchUserPoints])
     );
 
-    const sendInvite = async () => {
-        if (!email.trim()) return;
+    const sendInvite = async (codeOnly = false) => {
+        if (inviteRequestRef.current || (!codeOnly && !email.trim())) return;
+        inviteRequestRef.current = true;
         setLoading(true);
+        setInviteError('');
         try {
-            const res = await authFetch(`${API_BASE_URL}/partner/invite`, {
+            const res = await authFetch(`${API_BASE_URL}/partner/invite${codeOnly ? '/code' : ''}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: email.trim().toLowerCase() }),
+                body: codeOnly ? undefined : JSON.stringify({ email: email.trim().toLowerCase() }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || data.message || 'Failed to send invite');
             setLatestInvite(data.invite || null);
+            setEmailSent(data.emailDelivery?.sent === true);
             transitionToStep(2);
             setEmail('');
             fetchPartnerData();
         } catch (err: any) {
-            Alert.alert('Error', err.message);
+            setInviteError(err.message || 'Could not create your invitation. Please try again.');
         } finally {
+            inviteRequestRef.current = false;
             setLoading(false);
         }
     };
@@ -638,7 +576,7 @@ export default function PartnerScreen() {
     const cancelInvite = async () => {
         if (!inviteToDisplay) return;
         
-        Alert.alert('Cancel Invite', `Cancel invitation to ${inviteToDisplay.toEmail}?`, [
+        Alert.alert('Cancel Invite', inviteToDisplay.toEmail ? `Cancel invitation to ${inviteToDisplay.toEmail}?` : 'Cancel this shared invite code?', [
             { text: 'No', style: 'cancel' },
             {
                 text: 'Yes, Cancel',
@@ -1108,206 +1046,34 @@ export default function PartnerScreen() {
         );
     };
 
-    const COLORS = {
-        primary: '#FF6B6B',
-        primaryDark: '#EE5253',
-        primaryLight: '#FFF5F5',
-        bg: '#FFFFFF',
-        card: '#FFFFFF',
-        border: '#F1F5F9',
-        text: '#1F2937',
-        muted: '#64748B',
-        success: '#10B981',
-        warning: '#F59E0B',
-    };
-
     if (!isAuthenticated) return null;
+
+    if (!hasPartner) return <FindPartnerScreen
+        step={currentStep} gender={currentUser?.gender}
+        email={email} onEmailChange={value => { setEmail(value); setInviteError(''); }}
+        loading={loading} error={inviteError} code={inviteCode} recipient={inviteToDisplay?.toEmail}
+        emailSent={emailSent} message={shareMessage}
+        incoming={pendingReceived[0] ? { id: pendingReceived[0].id, name: pendingReceived[0].fromUser?.displayName || 'Your partner' } : undefined}
+        onStep={step => { setInviteError(''); setCurrentStep(step); }}
+        onSendEmail={() => { void sendInvite(); }} onCreateCode={() => { void sendInvite(true); }}
+        onCancel={() => { void cancelInvite(); }} onAccept={id => { void acceptInvite(id); }}
+        onMarketplace={() => router.push('/(tabs)/marketplace')}
+    />;
 
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
             
-            {currentStep !== 0 && (
-                <View
-                    style={[
-                        styles.topNav,
-                        {
-                            paddingTop: Math.max(insets.top + 8, 24),
-                            height: Math.max(insets.top + 64, 88),
-                        },
-                    ]}
-                >
-                    <TouchableOpacity onPress={handleBackPress} style={styles.backCircle} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-                        <ArrowLeft size={20} color={COLORS.text} />
-                    </TouchableOpacity>
-
-                    {currentStep !== 0 && (
-                        <View style={styles.stepDots}>
-                            {[0,1,2].map(s => (
-                                <View key={s} style={[styles.dot, currentStep === s && styles.dotActive]} />
-                            ))}
-                        </View>
-                    )}
-
-                    <View style={{width: 44}} />
-                </View>
-            )}
-
-            <Animated.View style={[styles.main, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-                {currentStep === 0 && (
-                    <View style={styles.content}>
-                        {hasPartner && partner ? (
-                            <PartnerConnectedHub
-                                userName={currentUser?.displayName ?? 'You'}
-                                partnerName={partner.displayName}
-                                userGender={currentUser?.gender}
-                                partnerGender={partner.gender}
-                                userPoints={userPoints ?? 0}
-                                partnerPoints={Number(partner.pointsBalance ?? partner.points ?? 0)}
-                            />
-                        ) : (
-                            <ScrollView 
-                                style={styles.connectedScroll}
-                                contentContainerStyle={[
-                                    styles.unconnectedScrollContent,
-                                    { paddingBottom: Math.max(insets.bottom + 24, 40) },
-                                ]}
-                                showsVerticalScrollIndicator={false}
-                            >
-                                <View style={styles.welcomeBox}>
-                                    <PartnerConnectArtwork width={PARTNER_CONNECT_ART_WIDTH} />
-                                    <View style={styles.welcomeTextShell}>
-                                        <Text style={styles.titleModern}>Connect to Partner</Text>
-                                        <Text style={styles.subtitleModern}>Team up with a partner to see each other&apos;s progress, compare stats, and stay on track together.</Text>
-                                    </View>
-                                    
-                                    {pendingReceived.length > 0 ? (
-                                        <TouchableOpacity style={styles.incomingBannerModern} onPress={() => acceptInvite(pendingReceived[0].id)}>
-                                            <View style={styles.bannerInfo}>
-                                                <View style={styles.bannerIconShell}>
-                                                    <CheckCircle2 size={24} color="#10B981" />
-                                                </View>
-                                                <View>
-                                                    <Text style={styles.bannerTextModern}>Incoming Invite</Text>
-                                                    <Text style={styles.bannerSubModern}>From {pendingReceived[0].fromUser?.displayName}</Text>
-                                                </View>
-                                            </View>
-                                            <View style={styles.bannerActionModern}>
-                                                <Text style={styles.bannerActionText}>Accept</Text>
-                                            </View>
-                                        </TouchableOpacity>
-                                    ) : (
-                                        <TouchableOpacity style={styles.primaryBtnModern} onPress={() => transitionToStep(1)}>
-                                            <Text style={styles.primaryBtnTextModern}>Find Partner</Text>
-                                            <ArrowRight size={24} color="#FFF" />
-                                        </TouchableOpacity>
-                                    )}
-
-                                    <TouchableOpacity
-                                        style={styles.marketplaceBtnModern}
-                                        onPress={() => router.push('/(tabs)/marketplace')}
-                                    >
-                                        <View style={styles.marketplaceBtnIcon}>
-                                            <Store size={21} color="#E24C5B" strokeWidth={2.3} />
-                                        </View>
-                                        <View style={styles.marketplaceBtnCopy}>
-                                            <Text style={styles.marketplaceBtnTitle}>Marketplace</Text>
-                                            <Text style={styles.marketplaceBtnSubtitle}>
-                                                Create rewards redeemable with workout points
-                                            </Text>
-                                        </View>
-                                        <ChevronRight size={19} color="#94A3B8" />
-                                    </TouchableOpacity>
-                                </View>
-
-                                {!hasPartner && (
-                                    <View style={styles.footerProfile}>
-                                        <View style={styles.miniavatar}>
-                                            <Text style={styles.miniavatarText}>{currentUser?.displayName?.charAt(0)}</Text>
-                                        </View>
-                                        <Text style={styles.footerName}>{currentUser?.displayName}</Text>
-                                    </View>
-                                )}
-                            </ScrollView>
-                        )}
-                    </View>
-                )}
-
-                {currentStep === 1 && (
-                    <ScrollView 
-                        style={styles.content}
-                        contentContainerStyle={[styles.connectedScrollContent, { paddingBottom: Math.max(insets.bottom + 24, 120), alignItems: 'center' }]}
-                        showsVerticalScrollIndicator={false}
-                    >
-                         <View style={styles.iconRing}>
-                            <Mail size={32} color="#EF4444" />
-                        </View>
-                        <Text style={styles.title}>Invite.</Text>
-                        <Text style={styles.subtitle}>Type your partner&apos;s email below.</Text>
-                        
-                        <View style={styles.inputShell}>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="email@example.com"
-                                placeholderTextColor="#9CA3AF"
-                                value={email}
-                                onChangeText={setEmail}
-                                keyboardType="email-address"
-                                autoFocus
-                                editable={!loading}
-                            />
-                        </View>
-
-                        <TouchableOpacity 
-                            style={[styles.primaryBtn, (loading || !email.trim()) && styles.btnDisabled]} 
-                            onPress={sendInvite}
-                            disabled={loading || !email.trim()}
-                        >
-                            {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.primaryBtnText}>Send Invite</Text>}
-                        </TouchableOpacity>
-                        
-                        <TouchableOpacity style={styles.ghostBtn} onPress={() => transitionToStep(0)}>
-                            <Text style={styles.ghostBtnText}>Cancel</Text>
-                        </TouchableOpacity>
-                    </ScrollView>
-                )}
-
-                {currentStep === 2 && (
-                    <ScrollView 
-                        style={styles.content}
-                        contentContainerStyle={[styles.connectedScrollContent, { paddingBottom: Math.max(insets.bottom + 24, 120), alignItems: 'center' }]}
-                        showsVerticalScrollIndicator={false}
-                    >
-                        <View style={styles.iconRing}>
-                            <CheckCircle2 size={32} color="#EF4444" />
-                        </View>
-                        <Text style={styles.title}>Share.</Text>
-                        <Text style={styles.subtitle}>Code sent to {inviteToDisplay?.toEmail}</Text>
-
-                        <View style={styles.codeShell}>
-                            <Text style={styles.codeText}>{inviteCode}</Text>
-                        </View>
-
-                        <Animated.View style={[styles.pulseBox, { transform: [{ scale: pulseAnim }] }]}>
-                            <Text style={styles.pulseText}>Partner needs to enter this code in the app</Text>
-                        </Animated.View>
-
-                        <View style={styles.buttonRow}>
-                            <PartnerInviteShareOptions message={shareMessage} />
-
-                            <TouchableOpacity style={[styles.shareOption, { marginTop: 12, backgroundColor: '#FEF2F2' }]} onPress={cancelInvite}>
-                                <Trash2 size={24} color="#EF4444" />
-                                <Text style={[styles.shareOptionText, { color: '#EF4444' }]}>Delete Invitation</Text>
-                            </TouchableOpacity>
-                        </View>
-
-                        <TouchableOpacity style={styles.doneBtn} onPress={() => transitionToStep(0)}>
-                            <Text style={styles.doneBtnText}>Done</Text>
-                        </TouchableOpacity>
-                    </ScrollView>
-                )}
-
-            </Animated.View>
+            <View style={styles.main}>
+                {partner && <PartnerConnectedHub
+                    userName={currentUser?.displayName ?? 'You'}
+                    partnerName={partner.displayName}
+                    userGender={currentUser?.gender}
+                    partnerGender={partner.gender}
+                    userPoints={userPoints ?? 0}
+                    partnerPoints={Number(partner.pointsBalance ?? partner.points ?? 0)}
+                />}
+            </View>
 
             <Modal
                 visible={isLastWagerSheetOpen && !!lastWager && !!lastOutcome && !!partner}
@@ -2229,7 +1995,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     welcomeBox: {
-        width: width * 0.9,
+        width: '90%',
         alignItems: 'flex-start',
         paddingVertical: 20,
         gap: 28,
@@ -2408,7 +2174,7 @@ const styles = StyleSheet.create({
         color: '#1F2937',
     },
     inputShell: {
-        width: width * 0.88,
+        width: '88%',
         height: 64,
         backgroundColor: '#F8FAFC',
         borderRadius: 20,
@@ -2463,7 +2229,7 @@ const styles = StyleSheet.create({
         fontWeight: '800',
     },
     buttonRow: {
-        width: width * 0.88,
+        width: '88%',
         marginBottom: 24,
     },
     shareOption: {
@@ -2489,7 +2255,7 @@ const styles = StyleSheet.create({
         color: '#1F2937',
     },
     doneBtn: {
-        width: width * 0.88,
+        width: '88%',
         height: 60,
         justifyContent: 'center',
         alignItems: 'center',

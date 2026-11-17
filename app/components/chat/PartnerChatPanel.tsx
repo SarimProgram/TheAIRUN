@@ -24,6 +24,8 @@ import {
   isInterventionAnimation,
   parseDrawMessage,
 } from './partnerNoteShared';
+import { isBottleThrowMessage } from '@/utils/bottleThrowMessage';
+import { isMealPassMessage } from '@/utils/mealPassMessage';
 
 type ChatMessage = {
   id: string;
@@ -281,7 +283,7 @@ export default function PartnerChatPanel({
     () =>
       [...messages]
         .filter((m) => m.fromUserId !== currentUserId)
-        .filter((m) => !isInterventionAnimation(m.content))
+        .filter((m) => !isInterventionAnimation(m.content) && !isBottleThrowMessage(m.content) && !isMealPassMessage(m.content))
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? null,
     [messages, currentUserId]
   );
@@ -290,7 +292,7 @@ export default function PartnerChatPanel({
     () =>
       [...messages]
         .filter((m) => m.fromUserId === currentUserId)
-        .filter((m) => !isInterventionAnimation(m.content))
+        .filter((m) => !isInterventionAnimation(m.content) && !isBottleThrowMessage(m.content) && !isMealPassMessage(m.content))
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? null,
     [messages, currentUserId]
   );

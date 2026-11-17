@@ -1,442 +1,191 @@
-import React, { useEffect, useRef } from 'react';
-import {
-    StyleSheet,
-    View,
-    Text,
-    SafeAreaView,
-    TouchableOpacity,
-    Animated,
-    Easing,
-    StatusBar,
-    Dimensions,
-    Platform,
-} from 'react-native';
-import Svg, { Line, Path } from 'react-native-svg';
-import { ChevronLeft } from 'lucide-react-native';
+import React, { useEffect } from 'react';
+import { Pressable, ScrollView, StatusBar, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Image } from 'expo-image';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, { Easing, FadeIn, FadeInDown, cancelAnimation, useAnimatedProps, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withSpring, withTiming } from 'react-native-reanimated';
+import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
+import { ArrowRight, ChevronLeft } from 'lucide-react-native';
+import * as Haptics from 'expo-haptics';
 
-const { width: windowWidth } = Dimensions.get('window');
-const isTablet = Platform.OS === 'ios' ? Platform.isPad : windowWidth >= 600;
-const width = isTablet ? 480 : windowWidth;
-
-const COLORS = {
-    brand: '#FF3B3B',
-    brandDark: '#D62F2F',
-    brandSoft: '#FFF5F5',
-    ink: '#121212',
-    white: '#FFFFFF',
-    border: '#E8ECF0',
-    borderStrong: '#E2E8F0',
-    grid: '#B8C4D4',
-    gridStrong: '#94A3B8',
-    surface: '#F5F5F7',
-    surfaceStrong: '#EDEEF2',
-    muted: '#64748B',
-    mutedStrong: '#94A3B8',
-};
-
+const C = { bg: '#FFFAFA', coral: '#FF595D', ink: '#14283F', muted: '#8D99AA', grid: '#E9E7EC' };
+const TOGETHER = 'M 48 158 C 93 125, 116 116, 166 111 S 228 77, 264 62 S 294 53, 314 48';
+const ALONE = 'M 48 158 C 92 142, 111 139, 153 146 S 206 149, 240 138 S 283 125, 314 121.333';
+const BASE = 'L 314 158 L 48 158 Z';
+const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
 const AnimatedPath = Animated.createAnimatedComponent(Path);
-
-const CHART_WIDTH = Math.min(width - 120, 280);
-const CHART_HEIGHT = 180;
-const ALONE_PATH_LEN = 520;
-const RUN_PATH_LEN = 470;
-const DRAW_EASE = Easing.bezier(0.22, 1, 0.36, 1);
-
-// Y positions: 40 = top (high), 150 = bottom (low)
-const Y_TOP = 40;
-const Y_BOTTOM = 150;
-const X_LEFT = 20;
-const X_RIGHT = CHART_WIDTH - 20;
-
-const GRID_H_LINES = [0.16, 0.32, 0.48, 0.64, 0.8].map(
-    (t) => Y_TOP + (Y_BOTTOM - Y_TOP) * t,
-);
-const GRID_V_LINES = [0.2, 0.4, 0.6, 0.8].map(
-    (t) => X_LEFT + (X_RIGHT - X_LEFT) * t,
-);
-
-// RunTogether curve (brand) — slow start, then compounding S-curve ending high.
-const RUN_PATH = `M ${X_LEFT} ${Y_BOTTOM} C ${CHART_WIDTH * 0.18} ${Y_BOTTOM - 4}, ${CHART_WIDTH * 0.28} ${Y_BOTTOM - 18}, ${CHART_WIDTH * 0.38} ${Y_BOTTOM - 12} S ${CHART_WIDTH * 0.58} ${Y_TOP + 55}, ${CHART_WIDTH * 0.68} ${Y_TOP + 38} S ${CHART_WIDTH * 0.82} ${Y_TOP + 18}, ${X_RIGHT} ${Y_TOP}`;
-
-// Alone curve (gray) — sharp burst, early peak, wobble, then fades back down.
-const ALONE_PATH = `M ${X_LEFT} ${Y_BOTTOM} C ${CHART_WIDTH * 0.1} ${Y_TOP + 52}, ${CHART_WIDTH * 0.22} ${Y_TOP + 18}, ${CHART_WIDTH * 0.34} ${Y_TOP + 32} S ${CHART_WIDTH * 0.48} ${Y_BOTTOM - 38}, ${CHART_WIDTH * 0.56} ${Y_BOTTOM - 22} S ${CHART_WIDTH * 0.68} ${Y_TOP + 48}, ${CHART_WIDTH * 0.76} ${Y_BOTTOM - 30} S ${CHART_WIDTH * 0.88} ${Y_BOTTOM - 8}, ${X_RIGHT} ${Y_BOTTOM - 20}`;
-
-const RUN_END = { x: X_RIGHT, y: Y_TOP };
-const ALONE_END = { x: X_RIGHT, y: Y_BOTTOM - 20 };
+const AnimatedGroup = Animated.createAnimatedComponent(G);
+const DRAW_LENGTH = 360;
 
 interface Props {
-    onContinue: () => void;
-    onBack: () => void;
-    userName?: string;
+  onContinue: () => void;
+  onBack: () => void;
+  userName?: string;
 }
 
 export default function Phase3ProofChart({ onContinue, onBack, userName }: Props) {
-    const fadeAnim = useRef(new Animated.Value(0)).current;
-    const slideAnim = useRef(new Animated.Value(20)).current;
-    const grayDraw = useRef(new Animated.Value(0)).current;
-    const brandDraw = useRef(new Animated.Value(0)).current;
-    const dotOpacity = useRef(new Animated.Value(0)).current;
-    const dotScale = useRef(new Animated.Value(0.6)).current;
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const contentWidth = Math.min(width, 480);
+  const compact = height < 740;
+  const reduceMotion = useReducedMotion();
+  const graphProgress = useSharedValue(reduceMotion ? 1 : 0);
+  const fillOpacity = useSharedValue(reduceMotion ? 1 : 0);
+  const badgeOpacity = useSharedValue(reduceMotion ? 1 : 0);
+  const buttonScale = useSharedValue(1);
 
-    const grayStrokeDashoffset = grayDraw.interpolate({
-        inputRange: [0, 1],
-        outputRange: [ALONE_PATH_LEN, 0],
-    });
-    const brandStrokeDashoffset = brandDraw.interpolate({
-        inputRange: [0, 1],
-        outputRange: [RUN_PATH_LEN, 0],
-    });
+  useEffect(() => {
+    graphProgress.set(reduceMotion ? 1 : withDelay(280, withTiming(1, { duration: 1150, easing: EASE_OUT })));
+    fillOpacity.set(reduceMotion ? 1 : withDelay(650, withTiming(1, { duration: 450, easing: EASE_OUT })));
+    badgeOpacity.set(reduceMotion ? 1 : withDelay(1180, withTiming(1, { duration: 240, easing: EASE_OUT })));
+    return () => {
+      cancelAnimation(graphProgress);
+      cancelAnimation(fillOpacity);
+      cancelAnimation(badgeOpacity);
+    };
+  }, [reduceMotion, graphProgress, fillOpacity, badgeOpacity]);
 
-    useEffect(() => {
-        Animated.parallel([
-            Animated.parallel([
-                Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-                Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
-            ]),
-            Animated.parallel([
-                Animated.timing(grayDraw, {
-                    toValue: 1,
-                    duration: 2600,
-                    easing: DRAW_EASE,
-                    useNativeDriver: false,
-                }),
-                Animated.sequence([
-                    Animated.delay(280),
-                    Animated.timing(brandDraw, {
-                        toValue: 1,
-                        duration: 3000,
-                        easing: DRAW_EASE,
-                        useNativeDriver: false,
-                    }),
-                ]),
-                Animated.sequence([
-                    Animated.delay(3100),
-                    Animated.parallel([
-                        Animated.spring(dotOpacity, {
-                            toValue: 1,
-                            friction: 7,
-                            tension: 90,
-                            useNativeDriver: true,
-                        }),
-                        Animated.spring(dotScale, {
-                            toValue: 1,
-                            friction: 7,
-                            tension: 90,
-                            useNativeDriver: true,
-                        }),
-                    ]),
-                ]),
-            ]),
-        ]).start();
-    }, [brandDraw, dotOpacity, dotScale, fadeAnim, grayDraw, slideAnim]);
+  const graphProps = useAnimatedProps(() => ({ strokeDashoffset: DRAW_LENGTH * (1 - graphProgress.get()) }));
+  const fillProps = useAnimatedProps(() => ({ opacity: fillOpacity.get() }));
+  const badgeProps = useAnimatedProps(() => ({ opacity: badgeOpacity.get() }));
+  const buttonStyle = useAnimatedStyle(() => ({ transform: [{ scale: buttonScale.get() }] }));
+  const enter = (delay: number) => reduceMotion
+    ? FadeIn.duration(220)
+    : FadeInDown.duration(280).delay(delay).easing(EASE_OUT);
 
-    return (
-        <View style={styles.container}>
-            <StatusBar barStyle="dark-content" />
-            <SafeAreaView style={styles.safe}>
-                <View style={styles.header}>
-                    <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
-                        <ChevronLeft color={COLORS.ink} size={30} />
-                    </TouchableOpacity>
-                </View>
-
-                <Animated.View
-                    style={[
-                        styles.content,
-                        { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
-                    ]}
-                >
-                    <Text style={styles.title}>
-                        Better results{'\n'}with RunTogether
-                    </Text>
-
-                    <View style={styles.card}>
-                        <Text style={styles.cardLabel}>
-                            {userName ? `${userName}'s progress with a plan` : 'Your progress with a plan'}
-                        </Text>
-
-                        <View style={styles.chartWrap}>
-                            <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
-                                {GRID_H_LINES.map((y, i) => (
-                                    <Line
-                                        key={`grid-h-${i}`}
-                                        x1={X_LEFT}
-                                        y1={y}
-                                        x2={X_RIGHT}
-                                        y2={y}
-                                        stroke={COLORS.grid}
-                                        strokeWidth={1.5}
-                                        opacity={0.9}
-                                    />
-                                ))}
-                                {GRID_V_LINES.map((x, i) => (
-                                    <Line
-                                        key={`grid-v-${i}`}
-                                        x1={x}
-                                        y1={Y_TOP}
-                                        x2={x}
-                                        y2={Y_BOTTOM}
-                                        stroke={COLORS.grid}
-                                        strokeWidth={1.5}
-                                        opacity={0.9}
-                                    />
-                                ))}
-                                <Line
-                                    x1={X_LEFT}
-                                    y1={Y_TOP}
-                                    x2={X_RIGHT}
-                                    y2={Y_TOP}
-                                    stroke={COLORS.gridStrong}
-                                    strokeWidth={1.5}
-                                    opacity={0.55}
-                                />
-                                <Line
-                                    x1={X_LEFT}
-                                    y1={Y_TOP}
-                                    x2={X_LEFT}
-                                    y2={Y_BOTTOM}
-                                    stroke={COLORS.gridStrong}
-                                    strokeWidth={1.5}
-                                    opacity={0.55}
-                                />
-                                <Line
-                                    x1={X_RIGHT}
-                                    y1={Y_TOP}
-                                    x2={X_RIGHT}
-                                    y2={Y_BOTTOM}
-                                    stroke={COLORS.gridStrong}
-                                    strokeWidth={1.5}
-                                    opacity={0.55}
-                                />
-                                {/* Baseline */}
-                                <Path
-                                    d={`M ${X_LEFT} ${Y_BOTTOM} L ${X_RIGHT} ${Y_BOTTOM}`}
-                                    stroke={COLORS.gridStrong}
-                                    strokeWidth={2}
-                                    fill="none"
-                                />
-                                {/* Alone (gray) — draws first, sits on the back */}
-                                <AnimatedPath
-                                    d={ALONE_PATH}
-                                    stroke={COLORS.mutedStrong}
-                                    strokeWidth={3}
-                                    fill="none"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeDasharray={ALONE_PATH_LEN}
-                                    strokeDashoffset={grayStrokeDashoffset}
-                                />
-                                {/* RunTogether (brand) — draws on top */}
-                                <AnimatedPath
-                                    d={RUN_PATH}
-                                    stroke={COLORS.brand}
-                                    strokeWidth={4}
-                                    fill="none"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeDasharray={RUN_PATH_LEN}
-                                    strokeDashoffset={brandStrokeDashoffset}
-                                />
-                            </Svg>
-
-                            {/* Endpoint dots */}
-                            <Animated.View
-                                style={[
-                                    styles.endDot,
-                                    styles.endDotBrand,
-                                    {
-                                        top: RUN_END.y - 7,
-                                        left: RUN_END.x - 7,
-                                        opacity: dotOpacity,
-                                        transform: [{ scale: dotScale }],
-                                    },
-                                ]}
-                            />
-                            <Animated.View
-                                style={[
-                                    styles.endDot,
-                                    styles.endDotGray,
-                                    {
-                                        top: ALONE_END.y - 5,
-                                        left: ALONE_END.x - 5,
-                                        opacity: dotOpacity,
-                                        transform: [{ scale: dotScale }],
-                                    },
-                                ]}
-                            />
-                        </View>
-
-                        <View style={styles.axisRow}>
-                            <Text style={styles.axisText}>Week 1</Text>
-                            <Text style={styles.axisText}>Week 6</Text>
-                        </View>
-
-                        <View style={styles.legendRow}>
-                            <View style={styles.legendItem}>
-                                <View style={[styles.legendDot, { backgroundColor: COLORS.brand }]} />
-                                <Text style={styles.legendText}>RunTogether</Text>
-                            </View>
-                            <View style={styles.legendItem}>
-                                <View style={[styles.legendDot, { backgroundColor: COLORS.mutedStrong }]} />
-                                <Text style={styles.legendText}>On your own</Text>
-                            </View>
-                        </View>
-
-                        <Text style={styles.stat}>
-                            People with a plan are 3× more likely to reach their goal.
-                        </Text>
-                    </View>
-                </Animated.View>
-
-                <View style={styles.footer}>
-                    <TouchableOpacity
-                        onPress={onContinue}
-                        activeOpacity={0.9}
-                        style={styles.continueBtn}
-                    >
-                        <Text style={styles.continueText}>Continue</Text>
-                    </TouchableOpacity>
-                </View>
-            </SafeAreaView>
+  return <View style={styles.root}>
+    <StatusBar barStyle="dark-content" />
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View style={styles.topBlush} />
+      <View style={styles.bottomMint} />
+      <View style={styles.bottomMintInner} />
+    </View>
+    <ScrollView
+      style={styles.fill}
+      contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: Math.max(insets.bottom, 16) + (__DEV__ ? 76 : 0) }]}
+      contentInsetAdjustmentBehavior="never"
+      showsVerticalScrollIndicator={false}
+      bounces={false}
+    >
+      <View style={[styles.page, { maxWidth: contentWidth }]}>
+        <View style={styles.header}>
+          <Pressable onPress={onBack} style={({ pressed }) => [styles.back, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="Back" hitSlop={8}>
+            <ChevronLeft color={C.ink} size={32} strokeWidth={2.5} />
+          </Pressable>
+          <View style={styles.brand}>
+            <Image source={require('../../assets/logo.png')} tintColor={C.coral} contentFit="contain" style={styles.brandMark} accessible={false} />
+            <Text style={styles.brandName}>RunTogether</Text>
+          </View>
         </View>
-    );
+        <View style={[styles.hero, { marginTop: compact ? 14 : 24 }]}>
+          <Animated.View entering={enter(0)} style={styles.headlineWrap}>
+            <Text accessibilityRole="header" style={[styles.headline, { fontSize: Math.min(compact ? 48 : 53, (contentWidth - 48) / 6.3), lineHeight: compact ? 51 : 56 }]}>
+              3× Faster{'\n'}Together
+            </Text>
+            <Svg pointerEvents="none" width={42} height={34} viewBox="0 0 42 34" style={styles.headlineRays}>
+              <Path d="M 6 12 L 7 3 M 20 17 L 29 6 M 29 27 L 39 23" stroke={C.coral} strokeWidth={3.5} strokeLinecap="round" />
+            </Svg>
+            <Svg pointerEvents="none" width={145} height={13} viewBox="0 0 145 13" style={styles.underline}>
+              <Path d="M 4 9 Q 72 0 141 7" stroke={C.coral} strokeWidth={4} fill="none" strokeLinecap="round" />
+            </Svg>
+          </Animated.View>
+          <Animated.View entering={enter(90)} style={[styles.artwork, { height: (contentWidth - 40) * 2 / 3, marginTop: compact ? 14 : 20 }]}>
+            <Image source={require('../../assets/onboarding/together-fist-bump.png')} style={StyleSheet.absoluteFill} contentFit="contain" accessibilityLabel="Two running partners fist bumping" />
+            <Svg pointerEvents="none" width={48} height={34} viewBox="0 0 48 34" style={styles.fistRays}>
+              <Path d="M 10 26 L 4 16 M 24 18 L 24 4 M 37 25 L 44 14" stroke={C.coral} strokeWidth={3.5} strokeLinecap="round" />
+            </Svg>
+          </Animated.View>
+          <Animated.View entering={enter(180)} style={styles.chartCard}>
+            <View accessible accessibilityRole="image" accessibilityLabel={`${userName ? `${userName}'s illustrative` : 'Illustrative'} progress from week 1 to week 6. Together rises from zero to 3 times progress, alone rises to 1 times progress.`}>
+              <Svg width="100%" height={(contentWidth - 52) * 193 / 360} viewBox="0 0 360 193" fontFamily="Helvetica">
+                <Defs>
+                  <LinearGradient id="togetherFill" x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset="0" stopColor={C.coral} stopOpacity={0.32} />
+                    <Stop offset="1" stopColor={C.coral} stopOpacity={0.02} />
+                  </LinearGradient>
+                  <LinearGradient id="aloneFill" x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset="0" stopColor={C.muted} stopOpacity={0.24} />
+                    <Stop offset="1" stopColor={C.muted} stopOpacity={0.03} />
+                  </LinearGradient>
+                </Defs>
+                <SvgText x={48} y={18} fill={C.ink} fontSize={9} fontWeight="600">Progress</SvgText>
+                {[0, 1, 2, 3].map(tick => {
+                  const y = 158 - tick * (110 / 3);
+                  return <G key={tick}>
+                    <Line x1={48} y1={y} x2={314} y2={y} stroke={C.grid} strokeWidth={0.8} strokeDasharray={tick === 0 ? undefined : '3 5'} />
+                    <Line x1={44} y1={y} x2={48} y2={y} stroke={C.grid} />
+                    <SvgText x={36} y={y + 3.5} textAnchor="end" fill="#66758A" fontSize={10} fontWeight="600">{tick === 0 ? '0' : `${tick}×`}</SvgText>
+                  </G>;
+                })}
+                <Line x1={48} y1={35} x2={48} y2={158} stroke={C.grid} />
+                <AnimatedGroup animatedProps={fillProps}>
+                  <Path d={`${ALONE} ${BASE}`} fill="url(#aloneFill)" />
+                  <Path d={`${TOGETHER} ${BASE}`} fill="url(#togetherFill)" />
+                </AnimatedGroup>
+                <AnimatedPath animatedProps={graphProps} d={ALONE} stroke={C.muted} strokeWidth={3} fill="none" strokeLinecap="round" strokeDasharray={`${DRAW_LENGTH} ${DRAW_LENGTH}`} />
+                <AnimatedPath animatedProps={graphProps} d={TOGETHER} stroke={C.coral} strokeWidth={3.5} fill="none" strokeLinecap="round" strokeDasharray={`${DRAW_LENGTH} ${DRAW_LENGTH}`} />
+                <AnimatedGroup animatedProps={badgeProps}>
+                <Circle cx={314} cy={48} r={9} fill={C.coral} opacity={0.13} />
+                <Circle cx={314} cy={48} r={5.5} fill="#FFFFFF" stroke={C.coral} strokeWidth={2.5} />
+                <G>
+                  <Rect x={236} y={1} width={120} height={35} rx={17.5} fill={C.coral} stroke="#FFFFFF" strokeWidth={1} />
+                  <Path d="M 307 35 L 314 43 L 321 35" fill={C.coral} />
+                  <Path d="M 248 11 H 258 V 17 Q 258 23 253 23 Q 248 23 248 17 Z M 248 13 H 245 V 16 Q 245 19 249 19 M 258 13 H 261 V 16 Q 261 19 257 19 M 253 23 V 27 M 249 27 H 257" stroke="#FFFFFF" strokeWidth={1.6} fill="none" strokeLinejoin="round" />
+                  <SvgText x={269} y={23} fill="#FFFFFF" fontSize={14} fontWeight="700">Together</SvgText>
+                </G>
+                <Rect x={297} y={109} width={59} height={25} rx={12.5} fill={C.muted} />
+                <SvgText x={326.5} y={126} textAnchor="middle" fill="#FFFFFF" fontSize={12} fontWeight="700">Alone</SvgText>
+                </AnimatedGroup>
+                <SvgText x={48} y={180} fill="#485C74" fontSize={11} fontWeight="700">Week 1</SvgText>
+                <SvgText x={314} y={180} textAnchor="end" fill="#485C74" fontSize={11} fontWeight="700">Week 6</SvgText>
+              </Svg>
+            </View>
+          </Animated.View>
+        </View>
+        <View style={styles.spacer} />
+        <Animated.View entering={enter(260)} style={buttonStyle}>
+        <Pressable
+          onPressIn={() => buttonScale.set(withSpring(reduceMotion ? 1 : 0.97, { duration: 150, dampingRatio: 1 }))}
+          onPressOut={() => buttonScale.set(withSpring(1, { duration: 260, dampingRatio: 1 }))}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+            onContinue();
+          }}
+          style={({ pressed }) => [styles.continueButton, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Continue"
+        >
+          <Text style={styles.continueText}>Continue</Text>
+          <ArrowRight color="#FFFFFF" size={27} strokeWidth={2.4} />
+        </Pressable>
+        </Animated.View>
+      </View>
+    </ScrollView>
+  </View>;
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: COLORS.white,
-    },
-    safe: {
-        flex: 1,
-    },
-    header: {
-        paddingHorizontal: 16,
-        paddingTop: 10,
-    },
-    backBtn: {
-        width: 44,
-        height: 44,
-        justifyContent: 'center',
-    },
-    content: {
-        flex: 1,
-        paddingHorizontal: 28,
-        paddingTop: 16,
-        justifyContent: 'flex-start',
-        alignItems: 'center',
-    },
-    title: {
-        fontSize: 28,
-        fontWeight: '900',
-        color: COLORS.ink,
-        letterSpacing: -0.8,
-        lineHeight: 34,
-        marginBottom: 0,
-        alignSelf: 'stretch',
-        textAlign: 'left',
-    },
-    card: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 24,
-        paddingVertical: 22,
-        paddingHorizontal: 20,
-        marginTop: 'auto',
-        marginBottom: 'auto',
-        alignSelf: 'stretch',
-        alignItems: 'center',
-    },
-    cardLabel: {
-        alignSelf: 'flex-start',
-        fontSize: 15,
-        fontWeight: '700',
-        color: COLORS.ink,
-        marginBottom: 8,
-    },
-    chartWrap: {
-        width: CHART_WIDTH,
-        height: CHART_HEIGHT,
-        alignSelf: 'center',
-        position: 'relative',
-        marginTop: 4,
-    },
-    endDot: {
-        position: 'absolute',
-        borderRadius: 999,
-    },
-    endDotBrand: {
-        width: 14,
-        height: 14,
-        backgroundColor: COLORS.brand,
-        borderWidth: 2,
-        borderColor: COLORS.white,
-    },
-    endDotGray: {
-        width: 10,
-        height: 10,
-        backgroundColor: COLORS.mutedStrong,
-        borderWidth: 2,
-        borderColor: COLORS.white,
-    },
-    axisRow: {
-        width: CHART_WIDTH,
-        alignSelf: 'center',
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginTop: 8,
-        paddingHorizontal: 4,
-    },
-    axisText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: COLORS.muted,
-    },
-    legendRow: {
-        flexDirection: 'row',
-        gap: 18,
-        marginTop: 18,
-        marginBottom: 12,
-        alignSelf: 'center',
-    },
-    legendItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    legendDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    legendText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: COLORS.ink,
-    },
-    stat: {
-        fontSize: 13,
-        color: COLORS.muted,
-        textAlign: 'center',
-        lineHeight: 19,
-        marginTop: 4,
-        paddingHorizontal: 8,
-        fontWeight: '500',
-    },
-    footer: {
-        paddingHorizontal: 28,
-        paddingBottom: Platform.OS === 'ios' ? 20 : 24,
-        paddingTop: 12,
-    },
-    continueBtn: {
-        height: 56,
-        borderRadius: 28,
-        backgroundColor: COLORS.ink,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    continueText: {
-        color: COLORS.white,
-        fontSize: 16,
-        fontWeight: '700',
-    },
+  root: { flex: 1, backgroundColor: C.bg, overflow: 'hidden' },
+  fill: { flex: 1 },
+  scrollContent: { flexGrow: 1, alignItems: 'center' },
+  page: { width: '100%', flexGrow: 1, paddingHorizontal: 24 },
+  topBlush: { position: 'absolute', width: 300, height: 220, borderRadius: 999, backgroundColor: '#FFDCDD', top: -160, left: -140 },
+  bottomMint: { position: 'absolute', width: 340, height: 170, borderRadius: 999, backgroundColor: '#E1F5F1', bottom: -135, right: -95, transform: [{ rotate: '-24deg' }] },
+  bottomMintInner: { position: 'absolute', width: 280, height: 140, borderRadius: 999, backgroundColor: '#BEEAE5', bottom: -135, right: -85, transform: [{ rotate: '-24deg' }] },
+  header: { height: 48, alignItems: 'center', justifyContent: 'center' },
+  back: { position: 'absolute', left: -8, width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
+  pressed: { opacity: 0.5 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  brandMark: { width: 27, height: 27 },
+  brandName: { color: C.ink, fontSize: 21, fontWeight: '900', letterSpacing: -0.9 },
+  hero: { width: '100%' },
+  headlineWrap: { alignItems: 'center', alignSelf: 'center' },
+  headline: { color: C.ink, fontWeight: '900', letterSpacing: -2, textAlign: 'center' },
+  headlineRays: { position: 'absolute', right: -18, top: -16 },
+  underline: { alignSelf: 'flex-end', marginRight: 8, marginTop: 1 },
+  artwork: { marginHorizontal: -4 },
+  fistRays: { position: 'absolute', left: '50%', marginLeft: -24, top: '37%' },
+  chartCard: { backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 28, borderCurve: 'continuous', marginTop: -29, marginHorizontal: -4, paddingHorizontal: 6, paddingTop: 10, paddingBottom: 1, boxShadow: '0 12px 28px rgba(80, 36, 50, 0.07)' },
+  spacer: { flexGrow: 1, minHeight: 25 },
+  continueButton: { height: 56, borderRadius: 999, backgroundColor: C.coral, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 24, borderWidth: 1, borderColor: '#FFFFFF', boxShadow: '0 9px 22px rgba(255, 89, 93, 0.25)' },
+  continueText: { color: '#FFFFFF', fontSize: 21, fontWeight: '800', letterSpacing: -0.5 },
 });

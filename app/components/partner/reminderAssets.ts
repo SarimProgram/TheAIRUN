@@ -2,9 +2,11 @@ import type { ImageSourcePropType } from 'react-native';
 import { INTERVENE_ANIMATION_COST } from '@/components/home/InterveneBottomSheet';
 import type { ReminderPhotoAnimation } from '@/components/partner/reminderPhotoAnimations';
 import { encodeCustomReminderMessage } from '@/utils/customReminderMessage';
+import { buildBottleThrowMessage } from '@/utils/bottleThrowMessage';
+import { buildTugReminderMessage } from '@/utils/tugReminderMessage';
 import type { UserCustomReminder } from '@/utils/customReminderStorage';
 
-export type ReminderDelivery = 'fullscreen' | 'notification-card' | 'chat';
+export type ReminderDelivery = 'fullscreen' | 'notification-card' | 'chat' | 'throw' | 'tug';
 
 export type PartnerReminderOption = {
     id: string;
@@ -274,6 +276,16 @@ const SUPPLEMENTAL_REMINDER_OPTIONS: Record<
 > = {
     steps: [
         {
+            id: 'steps-tug',
+            label: 'Tug of war',
+            previewEyebrow: 'TWO PHONES. ONE ROPE.',
+            previewTitle: 'Our steps pull us together',
+            delivery: 'tug',
+            pointsCost: 0,
+            chatTag: 'steps',
+            buildMessage: buildTugReminderMessage,
+        },
+        {
             id: 'steps-encourage',
             label: 'Encourage',
             previewEyebrow: 'CHEER THEM ON',
@@ -368,6 +380,15 @@ const SUPPLEMENTAL_REMINDER_OPTIONS: Record<
     ],
     hydration: [
         {
+            id: 'water-bottle-throw',
+            label: 'Throw a bottle',
+            previewEyebrow: 'HYDRATION',
+            previewTitle: 'Catch!',
+            delivery: 'throw',
+            pointsCost: 0,
+            buildMessage: () => buildBottleThrowMessage(0.5),
+        },
+        {
             id: 'water-note',
             label: 'Water note',
             previewEyebrow: 'HYDRATION',
@@ -399,13 +420,17 @@ export type PartnerReminderCategory = {
 };
 
 export function buildPartnerReminderCategories(): PartnerReminderCategory[] {
-    return (['steps', 'calories', 'hydration', 'custom'] as ReminderCategoryId[]).map((categoryId) => ({
-        ...CATEGORY_META[categoryId],
-        options: [
-            ...getReminderAssetsForCategory(categoryId).map(photoReminderOption),
-            ...SUPPLEMENTAL_REMINDER_OPTIONS[categoryId],
-        ],
-    }));
+    return (['steps', 'calories', 'hydration', 'custom'] as ReminderCategoryId[]).map((categoryId) => {
+        const supplemental = SUPPLEMENTAL_REMINDER_OPTIONS[categoryId];
+        return {
+            ...CATEGORY_META[categoryId],
+            options: [
+                ...supplemental.filter((option) => option.delivery === 'throw' || option.delivery === 'tug'),
+                ...getReminderAssetsForCategory(categoryId).map(photoReminderOption),
+                ...supplemental.filter((option) => option.delivery !== 'throw' && option.delivery !== 'tug'),
+            ],
+        };
+    });
 }
 
 export function mergePartnerReminderCategories(

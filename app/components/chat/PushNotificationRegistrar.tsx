@@ -11,6 +11,7 @@ import {
   getPushPermissionStatus,
   registerForPushNotificationsAsync,
 } from '@/utils/pushNotifications';
+import { subscribeToBottleStartToken } from '@/lib/bottle-live-activity';
 import { refreshPartnerSurfaceFromServer } from '@/lib/partner-surface';
 import { registerBackgroundPartnerSurfaceNotificationTask } from '@/tasks/backgroundPartnerSurfaceNotification';
 import {
@@ -31,6 +32,15 @@ Notifications.setNotificationHandler({
     const title = notification.request.content.title ?? 'Notification';
     const isChatMessage =
       data?.type === 'chat_message' || data?.openChat === '1';
+
+    if (data?.kind === 'water_bottle' || data?.kind === 'step_tug' || data?.kind === 'meal_pass' || data?.kind === 'meal_pass_reply') {
+      return {
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+        shouldShowBanner: false,
+        shouldShowList: false,
+      };
+    }
 
     if (isChatMessage && isInterventionMarkup(rawBody)) {
       const formattedBody = formatChatNotificationBody(rawBody);
@@ -69,6 +79,7 @@ export default function PushNotificationRegistrar() {
   const lastRegisteredTokenRef = useRef<string | null>(null);
   const lastRegisteredDeviceTokenRef = useRef<string | null>(null);
   const lastHandledNotificationIdRef = useRef<string | null>(null);
+  const lastLiveActivityStartTokenRef = useRef<string | null>(null);
 
   const hydrateRaceInviteFromNotification = useCallback((notification: Notifications.Notification) => {
     const data = notification.request.content.data as Record<string, unknown>;
@@ -217,6 +228,25 @@ export default function PushNotificationRegistrar() {
   }, [authFetch, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      lastLiveActivityStartTokenRef.current = null;
+      return;
+    }
+
+    return subscribeToBottleStartToken((token) => {
+      if (token === lastLiveActivityStartTokenRef.current) return;
+      authFetch(`${API_BASE_URL}/profile/live-activity-start-token`, {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      })
+        .then((response) => {
+          if (response.ok) lastLiveActivityStartTokenRef.current = token;
+        })
+        .catch(() => {});
+    });
+  }, [authFetch, isAuthenticated]);
+
+  useEffect(() => {
     Notifications.getLastNotificationResponseAsync()
       .then((response) => {
         if (!response) {
@@ -239,6 +269,16 @@ export default function PushNotificationRegistrar() {
       hydrateRaceInviteFromNotification(response.notification);
 
       const data = response.notification.request.content.data as Record<string, unknown>;
+      if (data?.kind === 'step_tug') return;
+      if (data?.kind === 'water_bottle' || data?.kind === 'meal_pass') {
+        router.push('/(tabs)');
+        return;
+      }
+      if (data?.kind === 'meal_pass_reply') {
+        router.push('/(tabs)/activity');
+        return;
+      }
+
       if (data?.type === 'chat_message' || data?.openChat === '1') {
         router.push({
           pathname: '/(tabs)',
@@ -251,7 +291,12 @@ export default function PushNotificationRegistrar() {
       }
 
       if (data?.type === 'race_invite' || data?.type === 'race_update' || data?.type === 'scheduled_run_reminder') {
-        router.push('/(tabs)/Race');
+        router.push('/race/virtual');
+        return;
+      }
+
+      if (data?.type === 'couple_challenge') {
+        router.push('/race/couple-steps');
         return;
       }
 
@@ -280,7 +325,7 @@ export default function PushNotificationRegistrar() {
         return;
       }
 
-      if (data?.type === 'step_target_reminder') {
+      if (data?.type === 'weekly_prize' || data?.type === 'step_target_reminder') {
         router.push('/(tabs)');
         return;
       }

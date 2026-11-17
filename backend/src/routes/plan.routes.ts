@@ -6,15 +6,24 @@ import prisma from "../db/prisma";
 import { AuthRequest } from "../middleware/auth";
 import { presentPlan } from "./presenters";
 import { syncTodayDailySummaryTargets } from "../lib/dailySummaryTargets";
-import { computeDailyFoodCalorieTarget, computeExpectedWeightsByWeek, resolvePlanDuration, usesSpecificTargetDate } from "../services/planning/planDuration";
-import { applyComputedExpectedWeightsToTable, computeExpectedWeightsForStoredWeeks } from "../services/planning/expectedWeight";
+import { computeDailyFoodCaloriesByWeek, estimateBaseMaintenanceKcal, resolvePlanDuration, usesSpecificTargetDate } from "../services/planning/planDuration";
+import { computeExpectedWeightsForStoredWeeks, computeExpectedWeightsFromWeeklyPlan } from "../services/planning/expectedWeight";
 import { normalizeGeneratedWeeklyDistances } from "../services/planning/weeklyDistance";
+import { buildPlanResetData, resetPlanSchema } from "../services/planning/planReset";
+import { applyTrainingSchedule, buildTrainingSchedule, readTrainingSchedule, selectedActivities, trainingSessionSchema, type TrainingSchedule } from '../services/planning/trainingSchedule';
+import { canIncludeGoalPracticeRuns, enforceRaceGoalRules } from '../services/planning/raceGoalRules';
+import { completedWorkoutDays, projectWorkoutOverview, addOverviewDays } from '../services/planning/workoutOverview';
+import { dayKeyInTimezone } from '../lib/weekBounds';
 
 import { ensurePaceProfile } from '../services/pacePersonalisation';
 
 const router = Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const GOAL_PRACTICE_RUN_TYPE = "Goal Practice Run";
+const WEEKLY_PLAN_AI_SETTINGS = {
+    model: 'gpt-6.1-terra',
+    reasoning: { effort: 'low' as const },
+};
 
 const createPlanSchema = z.object({
     weightKg: z.number().positive(),
@@ -40,11 +49,13 @@ const createPlanSchema = z.object({
     hasRaceGoal: z.boolean().optional().nullable(),
     bodyType: z.string().optional().nullable(),
     trainingStyle: z.string().optional().nullable(),
+    workoutDaysPerWeek: z.number().int().min(1).max(7).optional().nullable(),
+    workoutPreference: z.enum(["strength", "gym", "home"]).optional().nullable(),
     baselinePaceSecPerKm: z.number().int().positive().optional().nullable(),
 });
 
 const updateScheduleDaysSchema = z.object({
-    availableDays: z.array(z.number().int().min(0).max(6)).min(3).max(7),
+    availableDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).refine(days => new Set(days).size === days.length, 'Choose different training days'),
 });
 
 const adjustManualSchema = z.object({
@@ -92,6 +103,8 @@ router.post("/", async (req: AuthRequest, res, next) => {
 
                 bodyType: data.bodyType ?? null,
                 trainingStyle: data.trainingStyle ?? null,
+                workoutDaysPerWeek: data.workoutDaysPerWeek ?? null,
+                workoutPreference: data.workoutPreference ?? null,
             },
             update: {
                 weightKg: data.weightKg,
@@ -117,6 +130,8 @@ router.post("/", async (req: AuthRequest, res, next) => {
 
                 bodyType: data.bodyType ?? null,
                 trainingStyle: data.trainingStyle ?? null,
+                workoutDaysPerWeek: data.workoutDaysPerWeek ?? null,
+                workoutPreference: data.workoutPreference ?? null,
             },
         });
 
@@ -182,6 +197,51 @@ router.get("/", async (req: AuthRequest, res, next) => {
 });
 
 /**
+ * GET /plan/training-schedule
+ * Only newly generated schedules participate; legacy plans remain unchanged.
+ */
+router.get('/training-schedule', async (req: AuthRequest, res, next) => {
+    try {
+        if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+        const plan = await prisma.userPlan.findUnique({ where: { userId: req.user.id }, include: { weeklyPlans: { orderBy: { week: 'asc' } } } });
+        const schedule = readTrainingSchedule(plan?.weeklyPlans.find(week => week.week >= plan.currentWeek)?.weekDailys);
+        return res.json({ schedule, allowedActivities: plan ? selectedActivities(plan) : [], workoutDaysPerWeek: schedule?.sessions.length ?? null,
+            explanation: plan?.goalType === 'weightloss'
+                ? 'Your week balances your chosen activities around your weight goal and recovery. Your daily steps and nutrition continue every day.'
+                : 'Your week gives running priority and balances your other chosen activities on separate days. Daily goals continue on recovery days.' });
+    } catch (err) { return next(err); }
+});
+
+router.patch('/training-schedule', async (req: AuthRequest, res, next) => {
+    try {
+        if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+        const { sessions } = z.object({ sessions: z.array(trainingSessionSchema).min(1).max(7)
+            .refine(value => new Set(value.map(session => session.dayOfWeek)).size === value.length, 'Only one activity is allowed per day') }).parse(req.body);
+        const plan = await prisma.userPlan.findUnique({ where: { userId: req.user.id }, include: { weeklyPlans: { orderBy: { week: 'asc' } } } });
+        const original = readTrainingSchedule(plan?.weeklyPlans.find(week => week.week >= plan.currentWeek)?.weekDailys);
+        if (!plan || !original) return res.status(409).json({ message: 'This plan uses the existing schedule and cannot be customized here.' });
+        if (sessions.length !== original.sessions.length) return res.status(400).json({ message: `Choose exactly ${original.sessions.length} training days.` });
+        const allowed = selectedActivities(plan);
+        if (sessions.some(session => !allowed.includes(session.activity) || (session.activity === 'WORKOUT' && !session.workoutPreference))) {
+            return res.status(400).json({ message: 'Choose an activity from your onboarding preferences and a workout type for workout days.' });
+        }
+        const schedule: TrainingSchedule = { version: 1, customizationCompleted: true, sessions: sessions.sort((a, b) => a.dayOfWeek - b.dayOfWeek) };
+        await prisma.$transaction(async tx => {
+            await tx.userPlan.update({ where: { id: plan.id }, data: { availableDays: schedule.sessions.map(session => session.dayOfWeek) } });
+            for (const week of plan.weeklyPlans) {
+                if (week.week < plan.currentWeek) continue;
+                const row = applyTrainingSchedule({ Week: week.week, 'Run km/week': week.runKmPerWeek, 'Week Dailys': week.weekDailys }, schedule);
+                await tx.generatedWeekPlan.update({ where: { id: week.id }, data: { weekDailys: row['Week Dailys'], runKmPerWeek: row['Run km/week'] } });
+                await tx.dailyTarget.deleteMany({ where: { weekPlanId: week.id } });
+                await tx.dailyTarget.createMany({ data: generateDailyTargets({ ...week, runKmPerWeek: row['Run km/week'] }, row['Week Dailys'], schedule.sessions.map(session => session.dayOfWeek)) });
+            }
+        });
+        await syncTodayDailySummaryTargets(req.user.id);
+        return res.json({ schedule });
+    } catch (err) { return next(err); }
+});
+
+/**
  * PATCH /plan/schedule-days
  * Update only the user's preferred training days
  */
@@ -202,13 +262,22 @@ router.patch("/schedule-days", async (req: AuthRequest, res, next) => {
             });
 
             for (const weekPlan of updatedPlan.weeklyPlans) {
+                const schedule = readTrainingSchedule(weekPlan.weekDailys);
+                if (schedule && availableDays.length !== schedule.sessions.length) {
+                    throw new z.ZodError([{ code: 'custom', path: ['availableDays'], message: `Choose exactly ${schedule.sessions.length} training days. Use plan customization to change the activity split.` }]);
+                }
+                const weekDailys = schedule ? {
+                    ...(weekPlan.weekDailys as any),
+                    trainingSchedule: { ...schedule, sessions: schedule.sessions.map((session, index) => ({ ...session, dayOfWeek: [...availableDays].sort((a, b) => a - b)[index] })) },
+                } : weekPlan.weekDailys;
+                if (schedule) await tx.generatedWeekPlan.update({ where: { id: weekPlan.id }, data: { weekDailys } });
                 await tx.dailyTarget.deleteMany({
                     where: { weekPlanId: weekPlan.id },
                 });
 
                 const dailyTargets = generateDailyTargets(
                     weekPlan,
-                    (weekPlan.weekDailys as WeekDailysInput | null) ?? null,
+                    (weekDailys as WeekDailysInput | null) ?? null,
                     availableDays
                 );
 
@@ -264,6 +333,10 @@ router.patch("/adjust-manual", async (req: AuthRequest, res, next) => {
             weightKg: plan.weightKg,
             targetWeightKg: plan.targetWeightKg,
             weightToLoseKg: plan.weightToLoseKg,
+            heightCm: plan.heightCm,
+            ageYears: plan.ageYears,
+            gender: plan.user?.gender,
+            dailyCalorieTarget: plan.dailyCalorieTarget,
         });
 
         await prisma.$transaction(async (tx) => {
@@ -468,6 +541,7 @@ const WeeklyPlanOutputSchema = {
 };
 
 function buildWeeklyPlanPromptData(plan: {
+    hasRaceGoal?: boolean | null;
     user: { gender: string | null; heightFt: number | null; heightIn: number | null; goalType: string | null } | null;
     heightCm: number | null;
     weightKg: number;
@@ -482,12 +556,14 @@ function buildWeeklyPlanPromptData(plan: {
     targetWeightKg: number | null;
     weightToLoseKg: number | null;
     trainingStyle: string | null;
+    workoutDaysPerWeek?: number | null;
+    workoutPreference?: string | null;
     activityPreference: string | null;
     intensityLevel: string;
     dailyCalorieTarget: number | null;
     availableDays: unknown;
-}) {
-    const isRunningOnlyPlan = (plan.user?.goalType || plan.goalType) === "running";
+}, trainingSchedule?: TrainingSchedule | null) {
+    const isRunningOnlyPlan = plan.goalType === "running";
     const duration = resolvePlanDuration({
         goalType: isRunningOnlyPlan ? "running" : plan.goalType,
         runGoal: plan.runGoal,
@@ -498,6 +574,10 @@ function buildWeeklyPlanPromptData(plan: {
         weightKg: plan.weightKg,
         targetWeightKg: plan.targetWeightKg,
         weightToLoseKg: plan.weightToLoseKg,
+        heightCm: plan.heightCm,
+        ageYears: plan.ageYears,
+        gender: plan.user?.gender,
+        dailyCalorieTarget: plan.dailyCalorieTarget,
     });
     const { numberOfWeeks, targetDeadlineWeeks, derivedWeightToLoseKg, plannedWeeklyLossKg } = duration;
 
@@ -519,7 +599,7 @@ function buildWeeklyPlanPromptData(plan: {
     const bmi = heightMeters && heightMeters > 0
         ? Number((plan.weightKg / (heightMeters * heightMeters)).toFixed(1))
         : null;
-    const normalizedAvailableDays = normalizeAvailableDays(plan.availableDays);
+    const normalizedAvailableDays = trainingSchedule ? trainingSchedule.sessions.map(session => session.dayOfWeek) : normalizeAvailableDays(plan.availableDays);
     const availableDayLabels = normalizedAvailableDays.map((day) => DAY_LABELS[day]).join(", ");
     const hasSpecificTargetDate = usesSpecificTargetDate({
         timeHorizon: plan.timeHorizon,
@@ -529,30 +609,37 @@ function buildWeeklyPlanPromptData(plan: {
         ? plan.timeHorizon
         : null;
     const requiredWeeklyLossKg = hasSpecificTargetDate && derivedWeightToLoseKg !== null && derivedWeightToLoseKg > 0
-        ? Number((derivedWeightToLoseKg / (targetDeadlineWeeks ?? numberOfWeeks)).toFixed(2))
+        ? derivedWeightToLoseKg / (targetDeadlineWeeks ?? numberOfWeeks)
         : null;
-    const targetWeeklyLossKg = plannedWeeklyLossKg ?? requiredWeeklyLossKg;
-    const deterministicExpectedWeights = plan.targetWeightKg !== null && plan.targetWeightKg !== undefined
-        ? computeExpectedWeightsByWeek({
+    const targetWeeklyLossKg = isRunningOnlyPlan
+        ? (plan.runDietFocus === 'weightloss' ? 0.5 : 0)
+        : plannedWeeklyLossKg ?? requiredWeeklyLossKg ?? 0.5;
+    const baseFoodCaloriesByWeek = computeDailyFoodCaloriesByWeek({
+        startWeightKg: plan.weightKg,
+        targetWeightKg: plan.targetWeightKg,
+        heightCm: plan.heightCm,
+        ageYears: plan.ageYears,
+        gender: plan.user?.gender,
+        dailyCalorieTarget: plan.dailyCalorieTarget,
+        targetWeeklyLossKg,
+        numberOfWeeks,
+        targetDeadlineWeeks,
+    });
+    const deterministicExpectedWeights = baseFoodCaloriesByWeek && plan.heightCm
+        ? computeExpectedWeightsFromWeeklyPlan({
             startWeightKg: plan.weightKg,
             targetWeightKg: plan.targetWeightKg,
-            numberOfWeeks,
-            targetDeadlineWeeks,
-        })
-        : null;
-    const anchoredDailyFoodCalories = !isRunningOnlyPlan && hasHeightCm
-        ? computeDailyFoodCalorieTarget({
-            weightKg: plan.weightKg,
             heightCm: plan.heightCm,
             ageYears: plan.ageYears,
             gender: plan.user?.gender,
-            intensityLevel: plan.intensityLevel,
-            dailyCalorieTarget: plan.dailyCalorieTarget,
-            targetWeeklyLossKg,
+            numberOfWeeks,
+            targetDeadlineWeeks,
+            weeks: baseFoodCaloriesByWeek.map((caloriesPerDay) => ({ caloriesPerDay, stepsPerDay: 0, runKmPerWeek: 0 })),
         })
         : null;
+    const anchoredDailyFoodCalories = baseFoodCaloriesByWeek?.[0] ?? null;
 
-    const prompt = isRunningOnlyPlan
+    const trainingPrompt = isRunningOnlyPlan
         ? `You are a running plan assistant.
 
 Create a structured running plan in JSON format only with the following exact columns and order:
@@ -694,13 +781,11 @@ Weekly Plan Table
 Week | Calories/day | Protein/day | Steps/day target | Run km/week | Expected weight | Week name | Week Dailys
 
 Calories/day definition
-Calories/day means daily food intake only.
-It is the maximum food the user should eat that day.
+Calories/day means the BASE daily food allowance before actual tracked activity is credited.
 It is NOT TDEE.
 It is NOT TDEE minus a partial deficit.
-Do NOT add workout burn, steps, or run km on top of Calories/day.
-Do NOT increase Calories/day on run days or after workouts.
-The app tracks food against this fixed daily food target.
+Do NOT include workout burn, steps, or run km inside Calories/day.
+The daily tracker credits actual activity once: remaining = Calories/day + actual active calories - food eaten.
 
 User details
 Gender: ${plan.user?.gender || "unknown"}
@@ -710,8 +795,10 @@ BMI: ${bmi ?? "unknown"}
 Age: ${plan.ageYears} years
 Goal type: ${plan.goalType}
 Training style: ${plan.trainingStyle || "walkAndRun"}
+Requested training frequency: ${plan.workoutDaysPerWeek ? `${plan.workoutDaysPerWeek} days per week` : "not specified"}
+Workout preference: ${plan.workoutPreference || "not specified"}
 Available training days: ${availableDayLabels || "not specified"}
-${anchoredDailyFoodCalories !== null ? `Pace-based food intake anchor: ~${anchoredDailyFoodCalories} kcal/day average across the weight-loss phase (not a fixed value for every week).` : ""}
+${anchoredDailyFoodCalories !== null ? `Computed Week 1 base food target: ${anchoredDailyFoodCalories} kcal/day.` : ""}
 
 Timeline: ${hasSpecificTargetDate && plan.targetWeightKg !== null && plan.targetWeightKg !== undefined
             ? `Target weight: ${plan.targetWeightKg}kg by ${plan.targetDate!.toISOString().split("T")[0]}`
@@ -741,26 +828,25 @@ Make sure values are realistic, not too low or too high, and sustainable.
 If training style is walkAndRun, use more walk types and if you wanna use run then use Interval Run and other run types as part of the plan where appropriate.
 If training style is walkOnly, use walking-based types only.
 If training style is runOnly, prioritize running-based types while keeping the plan realistic for fat loss.
+If training style is workout, the user prefers strength, gym or home workouts. Use walking-based types only as light supporting cardio, usually 2 sessions per week, and keep Run km/week modest.
 You may model fat loss as fast as 2.0 kg per week only when the user's starting point, timeline, BMI, and training load make that suitable and realistic.
 Do not use ranges anywhere.
 Do not include emojis or commentary inside values.
 
 Calorie planning rules
 Calories/day is always food intake only.
-Activity volume does not add extra food allowance.
-Week 1 Calories/day should start conservative and sustainable — do not open with the full aggressive deficit on day one.
-Progress Calories/day gradually week by week as the user adapts. Start slower, then tighten toward the pace-based anchor when appropriate.
-${anchoredDailyFoodCalories !== null ? `Use ~${anchoredDailyFoodCalories} kcal/day as a guide for the average food intake needed across the weight-loss phase, not as an identical fixed value every week.` : "Build a gradual calorie progression that supports the target weight-loss pace."}
+Planned activity must not increase the base food allowance.
+Use the exact computed base food targets supplied below. Do not invent a higher starting intake.
 During maintenance-oriented weeks after the deadline, Calories/day may rise toward realistic maintenance levels.
 Never increase Calories/day because of workouts, run days, or higher step targets.
 
 Planning pipeline
 Follow this planning order internally before writing any JSON:
-1. Set a conservative Week 1 Calories/day, then plan gradual weekly calorie progression.
+1. Copy the computed base food target for each week.
 2. Set protein/day from body weight and training load.
 3. Set steps/day and run volume to realistic sustainable levels for the training style.
 For walkOnly, set steps first, then add modest structured walks. Weight loss should come mainly from Calories/day, not extreme walk volume.
-4. Set Expected weight week by week so it matches the calorie and activity plan for that week.
+4. Expected weight must use the base food deficit; planned activity is credited back and is not an additional deficit.
 5. Validate that Calories/day never increases because of workouts, run days, or higher step targets.
 
 Activity sanity limits
@@ -785,7 +871,7 @@ runDays should usually be 2–3, not necessarily every available day at max dist
 ` : ""}
 Progression rules
 Use gradual changes only.
-Calories/day must progress gradually week by week — start conservative, then adjust as needed.
+Calories/day must follow the supplied computed base targets week by week.
 Steps must change gradually.
 Run volume must change gradually.
 Do not start high and then suddenly drop.
@@ -800,9 +886,9 @@ Safety has higher priority than speed.
 
 
 Consistency and validation rules
-Calories/day must remain food-only targets with gradual weekly progression.
+Calories/day must remain base food targets without any planned activity credit.
 There must be no contradictions between target, timeline, calories, activity, and expected weight.
-Last expected weight should must match target weoight kg target
+Expected weight must follow the computed base deficit, even if the requested target is not reached by the deadline.
 Every numeric output must be derivable from prior calculations or constraints.
 Do not use arbitrary numbers, filler values, or fake run km.
 Do not use inconsistent weekly progression.
@@ -817,8 +903,8 @@ Expected weight must be a number.
 Expected weight must progress logically from current weight (${plan.weightKg}kg) toward the goal weight across the plan.
 When early weeks use higher Calories/day, weekly weight loss in those weeks should be smaller.
 When later weeks tighten Calories/day, weekly weight loss can increase accordingly.
-Expected weight must stay consistent with the calorie and activity plan for that week — do not show the same weekly loss when calories change materially.
-The final loss-phase week must reach the goal weight${plan.targetWeightKg !== null && plan.targetWeightKg !== undefined ? ` (${plan.targetWeightKg}kg)` : ""}.
+Expected weight must stay consistent with the base food deficit. Do not assume planned activity creates extra loss when it is credited back to the daily food allowance.
+Do not force the final loss-phase weight to the requested goal if the computed deficit does not support it.
 Expected weight may stay flat during maintenance-oriented weeks after the deadline.
 After the target deadline week, expected weight should stay flat or move only minimally for maintenance.
 
@@ -859,6 +945,7 @@ Run type guidance
 If training style is walkAndRun, Interval Run should appear first when used and the plan should include other running types where appropriate.
 If training style is walkOnly, most entries should be walking-based types.
 If training style is runOnly, most entries should be running-based types.
+If training style is workout, use Walk, Power Walk or Interval Walk only.
 Goal Practice Run can be used sparingly in the final weeks when race-specific distance rehearsal is appropriate.
 When both walking and running are allowed by the training style, mix the plan across run and walk types instead of repeating the same single mode every week.
 Use variety across the plan where appropriate, so the weekly schedule includes a sensible mix of the allowed run and walk session types.
@@ -879,10 +966,36 @@ No ranges anywhere
 Week name should not have the text week or any week number in it
 Expected weight must be numeric only`;
 
+    const prompt = `${trainingPrompt}
+
+${trainingSchedule ? `Authoritative weekly training schedule (overrides any conflicting activity rules above):
+${JSON.stringify(trainingSchedule.sessions)}
+There are exactly ${trainingSchedule.sessions.length} total training days each week, with one activity per day. Never combine activities on the same day.
+Use the same activity split each week and progress volume gradually for the user's goal, body measurements, age and experience.
+WORKOUT days are separate sessions, never extra walking or running. Gym means a self-directed GYM session with photo proof; home and strength use optional library recommendations.
+Return exactly ${trainingSchedule.sessions.filter(session => session.activity !== 'WORKOUT').length} walking/running sessions in runs. runDays equals that count. runs.sessions must sum to it.
+Only RUN days can contain running types; WALK days contain walking types. Do not add supporting cardio on workout-only plans.
+If there are no RUN or WALK days, return runs: [], runDays: 0 and Run km/week: 0.
+Recovery days have no scheduled training session; continue daily steps, food, protein and hydration goals.
+Do not compensate for fewer sessions by increasing per-session distance. Keep distances realistic and progress consistently.` : ''}
+
+Authoritative calorie accounting (applies to every goal type)
+Calories/day is a base food allowance, not an activity-inclusive allowance.
+Baseline maintenance uses the baseline 1.2 multiplier only; training intensity must not raise it.
+Actual activity is credited exactly once by the daily tracker, never inside the generated base target.
+Do not use planned workouts, steps, running, or walking to increase Calories/day.
+${baseFoodCaloriesByWeek ? `Use these exact Calories/day values in week order: ${JSON.stringify(baseFoodCaloriesByWeek)}.` : ''}
+${deterministicExpectedWeights ? `Computed expected weights in week order: ${JSON.stringify(deterministicExpectedWeights)}. Do not force the goal if calorie safeguards prevent reaching it in time.` : ''}
+
+Authoritative race-goal rule (overrides any conflicting run-type guidance above)
+Race goal explicitly selected: ${plan.hasRaceGoal === true ? 'yes' : 'no'}.
+${canIncludeGoalPracticeRuns(plan)
+    ? `Goal Practice Run is permitted only as preparation for the selected ${plan.runGoal} race distance, subject to the experience and timeline constraints above.`
+    : 'Goal Practice Run is forbidden in every week. A running distance goal alone does not imply a race goal. Use an appropriate ordinary running or walking session instead; never invent a race rehearsal.'}`;
     const aiInput = [{ role: "user" as const, content: [{ type: "input_text" as const, text: prompt }] }];
     const debugAiRequest = {
         generatedAt: new Date().toISOString(),
-        model: "gpt-5.4-mini",
+        ...WEEKLY_PLAN_AI_SETTINGS,
         store: false,
         input: aiInput,
         resolvedValues: {
@@ -903,12 +1016,17 @@ Expected weight must be numeric only`;
             pacePreference: pacePreferenceLabel,
             expectedWeightsByWeek: deterministicExpectedWeights,
             anchoredDailyFoodCalories,
+            calorieAccounting: 'base-plus-actual-activity-v1',
+            baselineMaintenanceCalories: estimateBaseMaintenanceKcal({ weightKg: plan.weightKg, heightCm: plan.heightCm, ageYears: plan.ageYears, gender: plan.user?.gender }),
+            baseFoodCaloriesByWeek,
             availableDays: normalizedAvailableDays,
             availableDayLabels,
             runGoal: plan.runGoal || null,
             runExperience: plan.runExperience || null,
             runDietFocus: plan.runDietFocus || null,
             trainingStyle: plan.trainingStyle || null,
+            hasRaceGoal: plan.hasRaceGoal === true,
+            goalPracticeRunsAllowed: canIncludeGoalPracticeRuns(plan),
             targetDate: plan.targetDate ? plan.targetDate.toISOString().split("T")[0] : null,
             runRaceDate: plan.runRaceDate ? plan.runRaceDate.toISOString().split("T")[0] : null,
             timeHorizon: plan.timeHorizon || null,
@@ -916,7 +1034,7 @@ Expected weight must be numeric only`;
         prompt,
     };
 
-    return { numberOfWeeks, normalizedAvailableDays, prompt, aiInput, debugAiRequest, deterministicExpectedWeights };
+    return { numberOfWeeks, normalizedAvailableDays, prompt, aiInput, debugAiRequest, deterministicExpectedWeights, baseFoodCaloriesByWeek };
 }
 
 /**
@@ -1050,35 +1168,54 @@ router.get("/generate-weekly-preview", async (req: AuthRequest, res, next) => {
  * Response shape (UPDATED):
  * { "Weekly Plan Table": [ ... ], cached: boolean }
  */
-router.post("/generate-weekly", async (req: AuthRequest, res, next) => {
+router.post(["/generate-weekly", "/reset"], async (req: AuthRequest, res, next) => {
     const requestStartedAt = Date.now();
     try {
         if (!req.user) return res.status(401).json({ message: "Unauthorized" });
 
-        const forceRegenerate = req.query.force === "true";
+        const resetInput = req.path === '/reset' ? resetPlanSchema.parse(req.body) : null;
+        const resetData = resetInput ? buildPlanResetData(resetInput) : null;
+        const forceRegenerate = !!resetInput || req.query.force === "true";
 
         // Get user's plan with existing weekly plans
         const planLookupStartedAt = Date.now();
-        const plan = await prisma.userPlan.findUnique({
+        const savedPlan = await prisma.userPlan.findUnique({
             where: { userId: req.user.id },
             include: {
-                user: { select: { gender: true, heightFt: true, heightIn: true, goalType: true } },
+                user: { select: { gender: true, heightFt: true, heightIn: true, goalType: true, weightKg: true } },
                 weeklyPlans: { orderBy: { week: "asc" } },
             },
         });
         const planLookupMs = Date.now() - planLookupStartedAt;
 
-        if (!plan) {
+        if (!savedPlan) {
             return res.status(404).json({ message: "No plan found. Please complete the onboarding first." });
         }
 
+        // Generate against a draft; saved profile details and the active plan remain intact on failure.
+        const plan = resetData ? {
+            ...savedPlan,
+            ...resetData,
+            user: { ...savedPlan.user, goalType: resetData.goalType },
+        } : savedPlan;
+
+        // Every newly generated plan uses separate sessions, including existing users and full resets.
+        // Returning an existing cached plan below still leaves its saved schedule untouched.
+        const trainingSchedule = resetData
+            ? buildTrainingSchedule(plan)
+            : readTrainingSchedule(savedPlan.weeklyPlans.find(week => week.week >= savedPlan.currentWeek)?.weekDailys)
+                ?? buildTrainingSchedule(plan);
+
         const promptStartedAt = Date.now();
-        const promptData = buildWeeklyPlanPromptData(plan);
+        const promptData = buildWeeklyPlanPromptData(plan, trainingSchedule);
         const promptMs = Date.now() - promptStartedAt;
 
         // A saved plan with the old fixed duration is stale and should be regenerated.
         const cachedDurationMatches = plan.weeklyPlans.length === promptData.numberOfWeeks;
-        if (plan.weeklyPlans.length > 0 && cachedDurationMatches && !forceRegenerate) {
+        const cachedBaseTargetsMatch = promptData.baseFoodCaloriesByWeek != null && plan.weeklyPlans.every(
+            (week, index) => week.caloriesPerDay === promptData.baseFoodCaloriesByWeek![index],
+        );
+        if (plan.weeklyPlans.length > 0 && cachedDurationMatches && cachedBaseTargetsMatch && !forceRegenerate) {
             const table = plan.weeklyPlans.map((w) => ({
                 Week: w.week,
                 "Calories/day": w.caloriesPerDay,
@@ -1105,7 +1242,7 @@ router.post("/generate-weekly", async (req: AuthRequest, res, next) => {
 
         const aiStartedAt = Date.now();
         const resp = await openai.responses.create({
-            model: "gpt-5.4-mini",
+            ...WEEKLY_PLAN_AI_SETTINGS,
             store: false,
             input: aiInput,
             text: {
@@ -1121,29 +1258,48 @@ router.post("/generate-weekly", async (req: AuthRequest, res, next) => {
         const postProcessingStartedAt = Date.now();
         const json = JSON.parse(resp.output_text ?? '{"Weekly Plan Table": []}');
         const rawTable = json["Weekly Plan Table"] || [];
-        const normalizedTable = normalizeGeneratedWeeklyDistances(injectGoalPracticeRuns(rawTable, {
+        if (!Array.isArray(rawTable) || rawTable.length !== promptData.numberOfWeeks ||
+            rawTable.some((row: any, index: number) => row?.Week !== index + 1)) {
+            throw new Error('A complete weekly plan could not be generated. Please try again.');
+        }
+        const normalizedTable = normalizeGeneratedWeeklyDistances(injectGoalPracticeRuns(enforceRaceGoalRules(rawTable, plan), {
+            hasRaceGoal: plan.hasRaceGoal,
             runGoal: plan.runGoal,
             runExperience: plan.runExperience,
             totalWeeks: debugAiRequest.resolvedValues.numberOfWeeks,
         }));
-        const table =
-            plan.heightCm && plan.targetWeightKg
-                ? applyComputedExpectedWeightsToTable(normalizedTable, {
-                    startWeightKg: plan.weightKg,
-                    targetWeightKg: plan.targetWeightKg,
-                    heightCm: plan.heightCm,
-                    ageYears: plan.ageYears,
-                    gender: plan.user?.gender,
-                    intensityLevel: plan.intensityLevel,
-                    numberOfWeeks: debugAiRequest.resolvedValues.numberOfWeeks,
-                    targetDeadlineWeeks: debugAiRequest.resolvedValues.targetDeadlineWeeks,
-                })
-                : normalizedTable;
+        // Model text cannot override the computed base allowance or pre-credit exercise.
+        const table = normalizedTable.map((row: any, index: number) => ({
+            ...(trainingSchedule ? applyTrainingSchedule(row, trainingSchedule) : row),
+            'Calories/day': promptData.baseFoodCaloriesByWeek?.[index] ?? row['Calories/day'],
+            'Expected weight': promptData.deterministicExpectedWeights?.[index] ?? row['Expected weight'],
+        }));
         const postProcessingMs = Date.now() - postProcessingStartedAt;
 
         // Replace weekly plans in DB and generate daily targets
         const databaseStartedAt = Date.now();
         const createdWeekPlans = await prisma.$transaction(async (tx) => {
+            if (resetData) {
+                await tx.userPlan.update({
+                    where: { id: plan.id },
+                    data: { ...resetData, currentWeek: 1, weekStartedAt: new Date() },
+                });
+                await tx.user.update({
+                    where: { id: req.user!.id },
+                    data: {
+                        goalType: resetData.goalType,
+                        weightKg: resetData.weightKg,
+                        weightLbs: resetData.weightKg * 2.20462,
+                        goalStart: resetData.weightKg,
+                        goalStartLbs: resetData.weightKg * 2.20462,
+                        goalTarget: resetData.targetWeightKg,
+                        goalTargetLbs: resetData.targetWeightKg == null ? null : resetData.targetWeightKg * 2.20462,
+                    },
+                });
+                if (savedPlan.user.weightKg == null || Math.abs(savedPlan.user.weightKg - resetData.weightKg) >= 0.05) {
+                    await tx.weightHistory.create({ data: { userId: req.user!.id, weightKg: resetData.weightKg } });
+                }
+            }
             // Delete old weekly plans (cascade deletes daily targets)
             await tx.generatedWeekPlan.deleteMany({
                 where: { userPlanId: plan.id },
@@ -1178,13 +1334,12 @@ router.post("/generate-weekly", async (req: AuthRequest, res, next) => {
         });
 
         // Reset currentWeek to 1 when new plan is generated
-        await prisma.userPlan.update({
-            where: { userId: req.user!.id },
-            data: {
-                currentWeek: 1,
-                weekStartedAt: new Date()
-            }
-        });
+        if (!resetData) {
+            await prisma.userPlan.update({
+                where: { userId: req.user!.id },
+                data: { currentWeek: 1, weekStartedAt: new Date(), ...(trainingSchedule ? { availableDays: trainingSchedule.sessions.map(session => session.dayOfWeek) } : {}) },
+            });
+        }
         await syncTodayDailySummaryTargets(req.user!.id);
         const databaseMs = Date.now() - databaseStartedAt;
 
@@ -1219,6 +1374,7 @@ interface WeekDailysInput {
     runDays: number;
     recoveryDays: number;
     runs: Array<{ runType: string; sessions: number; targetKm?: number }>;
+    trainingSchedule?: TrainingSchedule;
 }
 
 const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
@@ -1543,11 +1699,13 @@ function ensureSingleRunWithTarget(
 function injectGoalPracticeRuns(
     table: any[],
     options: {
+        hasRaceGoal?: boolean | null;
         runGoal: string | null | undefined;
         runExperience: string | null | undefined;
         totalWeeks: number;
     }
 ) {
+    if (!canIncludeGoalPracticeRuns(options)) return table;
     const practiceDistanceKm = getGoalPracticeDistance(options.runGoal);
     if (!practiceDistanceKm || !Array.isArray(table) || table.length < 3) {
         return table;
@@ -1683,7 +1841,7 @@ interface DailyTargetData {
     nightSteps: number;
 }
 
-function generateDailyTargets(
+export function generateDailyTargets(
     weekPlan: { id: string; caloriesPerDay: number; proteinPerDay: number; stepsPerDay: number; runKmPerWeek: number },
     weekDailys: WeekDailysInput | null,
     availableDays?: number[] | null
@@ -1710,6 +1868,26 @@ function generateDailyTargets(
         eveningSteps: 0,
         nightSteps: 0,
     }));
+
+    const schedule = readTrainingSchedule(wd);
+    if (schedule) {
+        for (const day of days) {
+            const session = schedule.sessions.find(session => session.dayOfWeek === day.dayOfWeek);
+            if (!session) day.dayType = 'RECOVERY';
+            else if (session.activity !== 'WORKOUT') {
+                const index = runQueue.findIndex(run => /walk/i.test(run.runType) === (session.activity === 'WALK'));
+                const run = runQueue.splice(index >= 0 ? index : 0, 1)[0];
+                if (run) assignRunToDay(days, day.dayOfWeek, run, weekPlan.stepsPerDay);
+            }
+            // Daily movement continues on workout and recovery days too.
+            day.stepsTarget = weekPlan.stepsPerDay;
+            const splits = getTimeOfDaySplits(day.dayType, day.stepsTarget);
+            day.morningSteps = splits.morning;
+            day.eveningSteps = splits.afternoon;
+            day.nightSteps = splits.evening;
+        }
+        return days;
+    }
 
     let recoveryLeft = wd.recoveryDays;
 
@@ -1962,6 +2140,7 @@ router.get("/daily/:weekNumber", async (req: AuthRequest, res, next) => {
             stepsTarget: d.stepsTarget,
             runKm: d.runKm,
             runType: d.runType,
+            trainingSession: readTrainingSchedule(weekPlan.weekDailys)?.sessions.find(session => session.dayOfWeek === d.dayOfWeek) ?? null,
             timeSlots: {
                 morning: { steps: d.morningSteps },
                 afternoon: { steps: d.eveningSteps },
@@ -1977,6 +2156,53 @@ router.get("/daily/:weekNumber", async (req: AuthRequest, res, next) => {
     } catch (err) {
         return next(err);
     }
+});
+
+router.get('/workout-overview', async (req: AuthRequest, res, next) => {
+    try {
+        if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+        const requestedZone = z.string().max(100).refine(value => {
+            try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
+        }).optional().parse(req.query.timezone);
+        const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user.id }, select: { id: true, timezone: true, partnerId: true } });
+        const partner = user.partnerId ? await prisma.user.findFirst({ where: { id: user.partnerId, partnerId: user.id },
+            select: { id: true, timezone: true } }) : null;
+        const now = new Date();
+        const load = async (userId: string, zone: string, own: boolean) => {
+            const plan = await prisma.userPlan.findUnique({ where: { userId }, include: { weeklyPlans: {
+                orderBy: { week: 'asc' }, include: { dailyTargets: true } } } });
+            const projection = projectWorkoutOverview(plan, dayKeyInTimezone(now, zone), zone,
+                (week, days) => generateDailyTargets(week, week.weekDailys as any, days));
+            // Preserve the generated interval/run steps used by the existing Plans launcher.
+            const relevantWeeks = [...new Set([...projection.scheduled, ...(projection.nextSession ? [projection.nextSession] : [])].map(s => s.week))];
+            const training = own && plan && relevantWeeks.length ? await prisma.trainingPlan.findFirst({ where: { userId, createdAt: { gte: plan.weekStartedAt } },
+                orderBy: { createdAt: 'desc' }, select: { sessions: { where: { week: { in: relevantWeeks } },
+                    orderBy: [{ week: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }], select: { id: true, week: true, runType: true, dayOfWeek: true } } } }) : null;
+            if (training) {
+                const used = new Set<string>();
+                const days = [...new Map([...projection.scheduled, ...(projection.nextSession ? [projection.nextSession] : [])].map(s => [s.dayKey, s])).values()];
+                for (const session of days) {
+                    if (session.activity === 'WORKOUT') continue;
+                    const match = training.sessions.find(run => !used.has(run.id) && run.week === session.week && run.runType === session.runType
+                        && (run.dayOfWeek == null || run.dayOfWeek === session.dayOfWeek));
+                    if (match) { session.sessionId = match.id; used.add(match.id); }
+                }
+            }
+            const dayRange = { gte: projection.weekStart, lt: addOverviewDays(projection.weekStart, 7) };
+            const [photos, workouts, summaries] = await Promise.all([
+                prisma.workoutPhoto.findMany({ where: { authorUserId: userId, dayKey: dayRange,
+                    ...(!own ? { recipientUserId: user.id } : {}) }, select: { dayKey: true } }),
+                prisma.workoutSession.findMany({ where: { userId, dayKey: dayRange }, select: { dayKey: true, type: true, endedAt: true, clientId: true, distanceKm: true } }),
+                prisma.dailySummary.findMany({ where: { userId, dayKey: dayRange }, select: { dayKey: true, runStatus: true } }),
+            ]);
+            const completedDays = completedWorkoutDays(projection.scheduled, projection.today, photos.map(p => p.dayKey), workouts, summaries);
+            return { ...projection, userId, completedDays, weeklyCount: completedDays.length,
+                todayCompleted: completedDays.includes(projection.today) };
+        };
+        const [mine, theirs] = await Promise.all([load(user.id, requestedZone || user.timezone || 'UTC', true),
+            partner ? load(partner.id, partner.timezone || 'UTC', false) : null]);
+        return res.json({ mine, partner: theirs, partnerId: partner?.id ?? null });
+    } catch (error) { next(error); }
 });
 
 export default router;

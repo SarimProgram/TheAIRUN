@@ -1,0 +1,613 @@
+diff --git a/node_modules/expo-widgets/ios/LiveActivityFactory.swift b/node_modules/expo-widgets/ios/LiveActivityFactory.swift
+index caf1e05..ebd4063 100644
+--- a/node_modules/expo-widgets/ios/LiveActivityFactory.swift
++++ b/node_modules/expo-widgets/ios/LiveActivityFactory.swift
+@@ -40,10 +40,13 @@ final class LiveActivityFactory: SharedObject {
+   }
+ 
+   func getInstances() throws -> [LiveActivity] {
+-    guard #available(iOS 16.1, *) else { throw LiveActivitiesNotSupportedException() }
++    guard #available(iOS 16.2, *) else { throw LiveActivitiesNotSupportedException() }
+ 
+-    return Activity<LiveActivityAttributes>.activities.map { activity in
+-      LiveActivity(id: activity.id, name: name)
+-    }
++    // Every factory shares one ActivityAttributes type, so only return activities rendered with this layout.
++    return Activity<LiveActivityAttributes>.activities
++      .filter { $0.content.state.name == name }
++      .map { activity in
++        LiveActivity(id: activity.id, name: name)
++      }
+   }
+ }
+diff --git a/node_modules/expo-widgets/ios/Widgets/AppIntent.swift b/node_modules/expo-widgets/ios/Widgets/AppIntent.swift
+index 2c45354..1e5dfd1 100644
+--- a/node_modules/expo-widgets/ios/Widgets/AppIntent.swift
++++ b/node_modules/expo-widgets/ios/Widgets/AppIntent.swift
+@@ -1,3 +1,4 @@
++import ActivityKit
+ import AppIntents
+ import WidgetKit
+ 
+@@ -91,12 +92,86 @@ struct LiveActivityUserInteraction: LiveActivityIntent {
+   }
+ 
+   func perform() async throws -> some IntentResult {
++    let timestamp = Int(Date().timeIntervalSince1970 * 1000)
++
++    if let source, let target {
++      // The JS listener is often not running yet (the intent can cold-launch the app in the background),
++      // so the tap is persisted until JS saves its effects and explicitly acknowledges it.
++      LiveActivityInteractionQueue.append(source: source, target: target, timestamp: timestamp)
++
++      // `end:<action>` buttons resolve the card immediately: the layout gets `lastAction` to render its
++      // confirmation state, then the system removes it a few seconds later.
++      if target.hasPrefix("end:"), #available(iOS 16.2, *) {
++        await LiveActivityInteractionQueue.endActivity(id: source, lastAction: target)
++      }
++    }
++
+     WidgetsEvents.shared.sendNotification(type: .userEvent, data: [
+       "source": source as Any,
+       "target": target as Any,
+-      "timestamp": Int(Date().timeIntervalSince1970 * 1000)
++      "timestamp": timestamp
+     ])
+ 
+     return .result()
+   }
+ }
++
++enum LiveActivityInteractionQueue {
++  static let storageKey = "__expo_widgets_pending_live_activity_interactions"
++  static let maxStored = 50
++  private static let lock = NSLock()
++
++  static func append(source: String, target: String, timestamp: Int) {
++    lock.lock()
++    defer { lock.unlock() }
++    var items = (WidgetsStorage.getArray(forKey: storageKey) as? [[String: Any]]) ?? []
++    items.append(["source": source, "target": target, "timestamp": timestamp])
++    if items.count > maxStored {
++      items.removeFirst(items.count - maxStored)
++    }
++    WidgetsStorage.set(items, forKey: storageKey)
++  }
++
++  static func drain() -> [[String: Any]] {
++    lock.lock()
++    defer { lock.unlock() }
++    let items = (WidgetsStorage.getArray(forKey: storageKey) as? [[String: Any]]) ?? []
++    WidgetsStorage.removeObject(forKey: storageKey)
++    return items
++  }
++
++  static func pending() -> [[String: Any]] {
++    lock.lock()
++    defer { lock.unlock() }
++    return (WidgetsStorage.getArray(forKey: storageKey) as? [[String: Any]]) ?? []
++  }
++
++  static func acknowledge(source: String, target: String, timestamp: Int) {
++    lock.lock()
++    defer { lock.unlock() }
++    let items = (WidgetsStorage.getArray(forKey: storageKey) as? [[String: Any]]) ?? []
++    let remaining = items.filter {
++      !(($0["source"] as? String) == source && ($0["target"] as? String) == target
++        && ($0["timestamp"] as? Int) == timestamp)
++    }
++    WidgetsStorage.set(remaining, forKey: storageKey)
++  }
++
++  @available(iOS 16.2, *)
++  static func endActivity(id: String, lastAction: String) async {
++    guard let activity = Activity<LiveActivityAttributes>.activities.first(where: { $0.id == id }) else {
++      return
++    }
++
++    let state = activity.content.state
++    var props = (try? JSONSerialization.jsonObject(with: Data(state.props.utf8))) as? [String: Any] ?? [:]
++    props["lastAction"] = lastAction
++    let propsString = (try? JSONSerialization.data(withJSONObject: props))
++      .flatMap { String(data: $0, encoding: .utf8) } ?? state.props
++
++    await activity.end(
++      ActivityContent(state: LiveActivityAttributes.ContentState(name: state.name, props: propsString), staleDate: nil),
++      dismissalPolicy: .after(Date().addingTimeInterval(4))
++    )
++  }
++}
+diff --git a/node_modules/expo-widgets/ios/Widgets/DynamicView.swift b/node_modules/expo-widgets/ios/Widgets/DynamicView.swift
+index 05a4d96..0f58fab 100644
+--- a/node_modules/expo-widgets/ios/Widgets/DynamicView.swift
++++ b/node_modules/expo-widgets/ios/Widgets/DynamicView.swift
+@@ -126,7 +126,12 @@ public struct WidgetsDynamicView: View, ExpoSwiftUI.AnyChild {
+         }
+         return AnyView(EmptyView())
+       } catch {
+-        return AnyView(EmptyView())
++        print("[ExpoWidgets] Failed to decode \(node["type"] as? String ?? "?") props: \(error)")
++        return AnyView(
++          Text("⚠️ \(node["type"] as? String ?? "?"): \(error.localizedDescription)")
++            .font(.system(size: 11))
++            .foregroundColor(.red)
++        )
+       }
+     }()
+   }
+diff --git a/node_modules/expo-widgets/ios/Widgets/RemoteFeed.swift b/node_modules/expo-widgets/ios/Widgets/RemoteFeed.swift
+new file mode 100644
+index 0000000..a2b2414
+--- /dev/null
++++ b/node_modules/expo-widgets/ios/Widgets/RemoteFeed.swift
+@@ -0,0 +1,178 @@
++import Foundation
++import WidgetKit
++
++/// A server endpoint the widget extension reads its timeline from when WidgetKit reloads it,
++/// which is what a WidgetKit push (iOS 26+) does: the push carries no data, only "content changed".
++///
++/// Response: `{ "entries": [{ "timestamp": ms, "props": {...} }], "files": [{ "name", "url", "auth" }], "prunePrefix"? }`.
++/// Files are downloaded into the shared app group; any string prop `shared-container:<name>` becomes
++/// that file's URL, or "" when it isn't there.
++enum WidgetsRemoteFeed {
++  static let pushTokenKey = "__expo_widgets_push_token"
++  static let sharedPrefix = "shared-container:"
++
++  struct Feed {
++    let url: URL
++    let token: String
++    let pushTokenUrl: URL?
++  }
++
++  static func feedKey(_ name: String) -> String { "__expo_widgets_\(name)_remote_feed" }
++
++  static func load(name: String) -> Feed? {
++    guard let dict = WidgetsStorage.getDictionary(forKey: feedKey(name)),
++          let url = (dict["url"] as? String).flatMap(URL.init(string:)),
++          let token = dict["token"] as? String, !token.isEmpty
++    else { return nil }
++    return Feed(url: url, token: token, pushTokenUrl: (dict["pushTokenUrl"] as? String).flatMap(URL.init(string:)))
++  }
++
++  static func allFeeds() -> [Feed] {
++    guard let defaults = WidgetsStorage.defaults else { return [] }
++    return defaults.dictionaryRepresentation().keys
++      .filter { $0.hasPrefix("__expo_widgets_") && $0.hasSuffix("_remote_feed") }
++      .compactMap { key in
++        let name = String(key.dropFirst("__expo_widgets_".count).dropLast("_remote_feed".count))
++        return load(name: name)
++      }
++  }
++
++  static var containerURL: URL? {
++    guard let group = WidgetsStorage.appGroupIdentifier else { return nil }
++    return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
++  }
++
++  /// Fetches the feed and stores its entries as the widget's timeline. Always calls `done`;
++  /// on any failure the previously stored timeline stays in place.
++  static func refresh(name: String, feed: Feed, done: @escaping @Sendable () -> Void) {
++    var request = URLRequest(url: feed.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
++    request.setValue("Bearer \(feed.token)", forHTTPHeaderField: "Authorization")
++    URLSession.shared.dataTask(with: request) { data, response, _ in
++      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
++      if status == 401 || status == 410 {
++        // Signed out or the device was unregistered: stop showing someone else's food.
++        WidgetsStorage.removeObject(forKey: feedKey(name))
++        WidgetsStorage.removeObject(forKey: "__expo_widgets_\(name)_timeline")
++        done()
++        return
++      }
++      guard status == 200, let data,
++            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
++            let rawEntries = json["entries"] as? [[String: Any]]
++      else { done(); return }
++
++      let files = (json["files"] as? [[String: Any]]) ?? []
++      download(files: files, feed: feed) {
++        if let prefix = json["prunePrefix"] as? String, !prefix.isEmpty {
++          prune(prefix: prefix, keeping: Set(files.compactMap { $0["name"] as? String }))
++        }
++        let entries: [[String: Any]] = rawEntries.compactMap { entry in
++          guard let timestamp = (entry["timestamp"] as? NSNumber)?.intValue,
++                let props = entry["props"] as? [String: Any] else { return nil }
++          return ["timestamp": timestamp, "props": resolve(sanitize(props) as? [String: Any] ?? [:])]
++        }
++        WidgetsStorage.set(entries, forKey: "__expo_widgets_\(name)_timeline")
++        done()
++      }
++    }.resume()
++  }
++
++  private static func download(files: [[String: Any]], feed: Feed, done: @escaping @Sendable () -> Void) {
++    guard let container = containerURL else { done(); return }
++    let group = DispatchGroup()
++    for file in files {
++      guard let name = file["name"] as? String, isSafeFileName(name),
++            let url = (file["url"] as? String).flatMap(URL.init(string:)) else { continue }
++      let target = container.appendingPathComponent(name)
++      if FileManager.default.fileExists(atPath: target.path) { continue }
++      var request = URLRequest(url: url, timeoutInterval: 12)
++      if file["auth"] as? Bool == true {
++        request.setValue("Bearer \(feed.token)", forHTTPHeaderField: "Authorization")
++      }
++      group.enter()
++      URLSession.shared.downloadTask(with: request) { location, response, _ in
++        defer { group.leave() }
++        guard let location, (response as? HTTPURLResponse)?.statusCode == 200 else { return }
++        try? FileManager.default.removeItem(at: target)
++        try? FileManager.default.moveItem(at: location, to: target)
++      }.resume()
++    }
++    group.notify(queue: .global(), execute: done)
++  }
++
++  private static func prune(prefix: String, keeping: Set<String>) {
++    guard let container = containerURL,
++          let names = try? FileManager.default.contentsOfDirectory(atPath: container.path) else { return }
++    for name in names where name.hasPrefix(prefix) && !keeping.contains(name) {
++      try? FileManager.default.removeItem(at: container.appendingPathComponent(name))
++    }
++  }
++
++  private static func isSafeFileName(_ name: String) -> Bool {
++    !name.isEmpty && !name.contains("/") && !name.contains("..")
++  }
++
++  /// UserDefaults rejects NSNull, so nulls from JSON are dropped before the timeline is stored.
++  private static func sanitize(_ value: Any) -> Any? {
++    switch value {
++    case is NSNull: return nil
++    case let dict as [String: Any]: return dict.compactMapValues { sanitize($0) }
++    case let array as [Any]: return array.compactMap { sanitize($0) }
++    default: return value
++    }
++  }
++
++  private static func resolve(_ props: [String: Any]) -> [String: Any] {
++    props.mapValues { value in
++      guard let string = value as? String, string.hasPrefix(sharedPrefix) else { return value }
++      let name = String(string.dropFirst(sharedPrefix.count))
++      guard isSafeFileName(name), let target = containerURL?.appendingPathComponent(name),
++            FileManager.default.fileExists(atPath: target.path) else { return "" }
++      return target.absoluteString
++    }
++  }
++
++  /// Lets the server learn a rotated push token without waiting for the app to open.
++  static func reportPushToken(_ token: String) {
++    for feed in allFeeds() {
++      guard let url = feed.pushTokenUrl,
++            let body = try? JSONSerialization.data(withJSONObject: ["pushToken": token]) else { continue }
++      var request = URLRequest(url: url, timeoutInterval: 12)
++      request.httpMethod = "POST"
++      request.setValue("Bearer \(feed.token)", forHTTPHeaderField: "Authorization")
++      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
++      request.httpBody = body
++      URLSession.shared.dataTask(with: request).resume()
++    }
++  }
++}
++
++#if compiler(>=6.2)
++@available(iOS 26.0, *)
++public struct ExpoWidgetsPushHandler: WidgetPushHandler {
++  public init() {}
++
++  public func pushTokenDidChange(_ pushInfo: WidgetPushInfo, widgets: [WidgetInfo]) {
++    let token = pushInfo.token.map { String(format: "%02x", $0) }.joined()
++    if WidgetsStorage.getString(forKey: WidgetsRemoteFeed.pushTokenKey) != token {
++      WidgetsStorage.set(token, forKey: WidgetsRemoteFeed.pushTokenKey)
++      WidgetsRemoteFeed.reportPushToken(token)
++    }
++  }
++}
++#endif
++
++public extension WidgetConfiguration {
++  /// Registers the widget for WidgetKit push updates on iOS 26+; a no-op on earlier systems.
++  func expoWidgetsPushHandler() -> some WidgetConfiguration {
++    #if compiler(>=6.2)
++    if #available(iOS 26.0, *) {
++      return self.pushHandler(ExpoWidgetsPushHandler.self)
++    } else {
++      return self
++    }
++    #else
++    return self
++    #endif
++  }
++}
+diff --git a/node_modules/expo-widgets/ios/Widgets/TimelineProvider.swift b/node_modules/expo-widgets/ios/Widgets/TimelineProvider.swift
+index da0010a..0957d40 100644
+--- a/node_modules/expo-widgets/ios/Widgets/TimelineProvider.swift
++++ b/node_modules/expo-widgets/ios/Widgets/TimelineProvider.swift
+@@ -29,10 +29,19 @@ public struct WidgetsTimelineProvider: TimelineProvider {
+       fatalError("Could not get the app group identifier from Info.plist")
+     }
+ 
+-    let entries = parseTimeline(identifier: groupIdentifier, name: name, family: context.family)
++    let name = name
++    let family = context.family
++    let finish: @Sendable () -> Void = {
++      let entries = parseTimeline(identifier: groupIdentifier, name: name, family: family)
++      completion(Timeline<WidgetsTimelineEntry>(entries: entries, policy: .atEnd))
++    }
+ 
+-    let timeline = Timeline<WidgetsTimelineEntry>(entries: entries, policy: .atEnd)
+-    completion(timeline)
++    // Widgets with a server feed refresh from it on every reload, including WidgetKit pushes.
++    if let feed = WidgetsRemoteFeed.load(name: name) {
++      WidgetsRemoteFeed.refresh(name: name, feed: feed, done: finish)
++      return
++    }
++    finish()
+   }
+ 
+   public typealias Entry = WidgetsTimelineEntry
+diff --git a/node_modules/expo-widgets/ios/Widgets/Utils.swift b/node_modules/expo-widgets/ios/Widgets/Utils.swift
+index 1cd5ca9..6242d0f 100644
+--- a/node_modules/expo-widgets/ios/Widgets/Utils.swift
++++ b/node_modules/expo-widgets/ios/Widgets/Utils.swift
+@@ -36,11 +36,18 @@ func evaluateLayout(
+ }
+ 
+ func getLiveActivityNodes(forName name: String, props: String = "{}", environment: [String: Any]) -> [String: Any] {
++  guard WidgetsStorage.defaults != nil, let group = WidgetsStorage.appGroupIdentifier else {
++    return liveActivityDiagnosticNodes("App Group missing in widget extension (ExpoWidgetsAppGroupIdentifier)")
++  }
+   let layout = WidgetsStorage.getString(forKey: "__expo_widgets_live_activity_\(name)_layout") ?? ""
++  if layout.isEmpty {
++    return liveActivityDiagnosticNodes("No layout for \(name) in \(group). Open the app once, then retry.")
++  }
+   let propsData = props.data(using: .utf8)
+   let propsDict = propsData.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] } ?? [:]
+-  guard let context = createWidgetContext(layout: layout) else {
+-    return [:]
++  var jsError: String?
++  guard let context = createWidgetContext(layout: layout, onError: { jsError = jsError ?? $0 }) else {
++    return liveActivityDiagnosticNodes("ExpoWidgets.bundle missing from widget extension")
+   }
+ 
+   var widgetEnvironment = environment
+@@ -49,7 +56,30 @@ func getLiveActivityNodes(forName name: String, props: String = "{}", environmen
+   let result = context.objectForKeyedSubscript("__expoWidgetRender")?.call(
+     withArguments: [propsDict, environment]
+   )
+-  return result?.toObject() as? [String: Any] ?? [:]
++  let nodes = result?.toObject() as? [String: Any] ?? [:]
++  if nodes.isEmpty {
++    return liveActivityDiagnosticNodes("\(name) layout failed: \(jsError ?? "render returned nothing")")
++  }
++  return nodes
++}
++
++private func liveActivityDiagnosticNodes(_ message: String) -> [String: Any] {
++  print("[ExpoWidgets] \(message)")
++  let text: (String) -> [String: Any] = { value in
++    let modifiers: [[String: Any]] = [
++      ["$type": "font", "size": 12, "weight": "bold"],
++      ["$type": "foregroundStyle", "styleType": "color", "color": "#FCA5A5"],
++    ]
++    let props: [String: Any] = ["text": value, "modifiers": modifiers]
++    return ["type": "TextView", "props": props]
++  }
++  return [
++    "banner": text("⚠️ \(message)"),
++    "compactLeading": text("⚠️"),
++    "compactTrailing": text("!"),
++    "minimal": text("⚠️"),
++    "expandedCenter": text(message),
++  ]
+ }
+ 
+ func getLiveActivityUrl(forName name: String) -> URL? {
+diff --git a/node_modules/expo-widgets/ios/Widgets/WidgetContext.swift b/node_modules/expo-widgets/ios/Widgets/WidgetContext.swift
+index 68ff52a..fe60cf2 100644
+--- a/node_modules/expo-widgets/ios/Widgets/WidgetContext.swift
++++ b/node_modules/expo-widgets/ios/Widgets/WidgetContext.swift
+@@ -1,7 +1,7 @@
+ import Foundation
+ import JavaScriptCore
+ 
+-func createWidgetContext(layout: String) -> JSContext? {
++func createWidgetContext(layout: String, onError: ((String) -> Void)? = nil) -> JSContext? {
+   guard let context = JSContext() else {
+     return nil
+   }
+@@ -9,6 +9,7 @@ func createWidgetContext(layout: String) -> JSContext? {
+   context.exceptionHandler = { _, exception in
+     if let exception {
+       print("[ExpoWidgets] Layout evaluation failed: \(exception)")
++      onError?(exception.toString() ?? "unknown JS exception")
+     }
+   }
+ 
+diff --git a/node_modules/expo-widgets/ios/WidgetsModule.swift b/node_modules/expo-widgets/ios/WidgetsModule.swift
+index 9620b9a..74de1d8 100644
+--- a/node_modules/expo-widgets/ios/WidgetsModule.swift
++++ b/node_modules/expo-widgets/ios/WidgetsModule.swift
+@@ -49,6 +49,36 @@ public final class WidgetsModule: Module {
+       WidgetCenter.shared.reloadAllTimelines()
+     }
+ 
++    Function("drainPendingLiveActivityInteractions") { () -> [[String: Any]] in
++      LiveActivityInteractionQueue.drain()
++    }
++
++    Function("getPendingLiveActivityInteractions") { () -> [[String: Any]] in
++      LiveActivityInteractionQueue.pending()
++    }
++
++    Function("acknowledgeLiveActivityInteraction") { (source: String, target: String, timestamp: Int) in
++      LiveActivityInteractionQueue.acknowledge(source: source, target: target, timestamp: timestamp)
++    }
++
++    // WidgetKit push token (iOS 26+), written by the widget extension once a push-enabled widget is placed.
++    Function("getWidgetPushToken") { () -> String? in
++      WidgetsStorage.getString(forKey: WidgetsRemoteFeed.pushTokenKey)
++    }
++
++    Function("setWidgetRemoteFeed") { (name: String, url: String, token: String, pushTokenUrl: String?) in
++      var feed: [String: Any] = ["url": url, "token": token]
++      if let pushTokenUrl { feed["pushTokenUrl"] = pushTokenUrl }
++      WidgetsStorage.set(feed, forKey: WidgetsRemoteFeed.feedKey(name))
++      WidgetCenter.shared.reloadTimelines(ofKind: name)
++    }
++
++    Function("clearWidgetRemoteFeed") { (name: String) in
++      WidgetsStorage.removeObject(forKey: WidgetsRemoteFeed.feedKey(name))
++      WidgetsStorage.removeObject(forKey: "__expo_widgets_\(name)_timeline")
++      WidgetCenter.shared.reloadTimelines(ofKind: name)
++    }
++
+     Class("Widget", WidgetObject.self) {
+       Constructor { (name: String, layout: String) in
+         WidgetObject(name: name, layout: layout)
+diff --git a/node_modules/expo-widgets/plugin/build/index.js b/node_modules/expo-widgets/plugin/build/index.js
+index 39d4918..5ec2d8b 100644
+--- a/node_modules/expo-widgets/plugin/build/index.js
++++ b/node_modules/expo-widgets/plugin/build/index.js
+@@ -52,7 +52,7 @@ const withWidgets = (config, props) => {
+     const getFileUris = () => sharedFiles;
+     plugins = [
+         ...plugins,
+-        [withEasConfig_1.default, { targetName, bundleIdentifier, groupIdentifier }],
++        [withEasConfig_1.default, { targetName, bundleIdentifier, groupIdentifier, pushUpdates: widgets.some((widget) => widget.pushUpdates) }],
+         [withPodsLinking_1.default, { targetName }],
+         [withWidgetSourceFiles_1.default, { targetName, widgets, groupIdentifier, onFilesGenerated: setFiles }],
+         [withAppInfoPlist_1.default, { frequentUpdates, groupIdentifier }],
+diff --git a/node_modules/expo-widgets/plugin/build/withEasConfig.js b/node_modules/expo-widgets/plugin/build/withEasConfig.js
+index 507f4b0..7b8cf2e 100644
+--- a/node_modules/expo-widgets/plugin/build/withEasConfig.js
++++ b/node_modules/expo-widgets/plugin/build/withEasConfig.js
+@@ -1,6 +1,7 @@
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+-const withEasConfig = (config, { targetName, bundleIdentifier, groupIdentifier }) => {
++const withEasConfig = (config, { targetName, bundleIdentifier, groupIdentifier, pushUpdates }) => {
++    const pushEntitlements = pushUpdates ? { 'aps-environment': 'development' } : {};
+     let configIndex = null;
+     config.extra?.eas?.build?.experimental?.ios?.appExtensions?.forEach((ext, index) => {
+         if (ext.targetName === targetName) {
+@@ -25,6 +26,7 @@ const withEasConfig = (config, { targetName, bundleIdentifier, groupIdentifier }
+                                     bundleIdentifier,
+                                     entitlements: {
+                                         'com.apple.security.application-groups': [groupIdentifier],
++                                        ...pushEntitlements,
+                                     },
+                                 },
+                             ],
+@@ -44,6 +46,7 @@ const withEasConfig = (config, { targetName, bundleIdentifier, groupIdentifier }
+                 'com.apple.security.application-groups': [groupIdentifier, ...existingGroups],
+             };
+         }
++        existingEntry.entitlements = { ...existingEntry.entitlements, ...pushEntitlements };
+     }
+     return config;
+ };
+diff --git a/node_modules/expo-widgets/plugin/build/withWidgetSourceFiles.js b/node_modules/expo-widgets/plugin/build/withWidgetSourceFiles.js
+index 4cbe4da..b8a4360 100644
+--- a/node_modules/expo-widgets/plugin/build/withWidgetSourceFiles.js
++++ b/node_modules/expo-widgets/plugin/build/withWidgetSourceFiles.js
+@@ -54,6 +54,8 @@ const withWidgetSourceFiles = (config, { widgets, targetName, onFilesGenerated,
+         const entitlementsPath = path.join(targetDirectory, `${targetName}.entitlements`);
+         const entitlementsContent = {
+             'com.apple.security.application-groups': [groupIdentifier],
++            // WidgetKit push updates need the extension itself to be able to receive APNs.
++            ...(widgets.some((widget) => widget.pushUpdates) ? { 'aps-environment': 'development' } : {}),
+         };
+         fs.writeFileSync(entitlementsPath, plist_1.default.build(entitlementsContent));
+         const infoPlistPath = createInfoPlist(groupIdentifier, targetDirectory);
+@@ -117,7 +119,7 @@ struct ${widget.name}: Widget {
+     }
+     .configurationDisplayName("${widget.displayName}")
+     .description("${widget.description}")
+-    .supportedFamilies([.${widget.supportedFamilies.join(', .')}])${widget.contentMarginsDisabled ? '\n    .contentMarginsDisabled()' : ''}
++    .supportedFamilies([.${widget.supportedFamilies.join(', .')}])${widget.contentMarginsDisabled ? '\n    .contentMarginsDisabled()' : ''}${widget.pushUpdates ? '\n    .expoWidgetsPushHandler()' : ''}
+   }
+ }`;
+ const infoPlist = (groupIdentifier) => `<?xml version="1.0" encoding="UTF-8"?>
+diff --git a/node_modules/expo-widgets/plugin/src/index.ts b/node_modules/expo-widgets/plugin/src/index.ts
+index ca400ba..a07c3a9 100644
+--- a/node_modules/expo-widgets/plugin/src/index.ts
++++ b/node_modules/expo-widgets/plugin/src/index.ts
+@@ -70,7 +70,7 @@ const withWidgets: ConfigPlugin<ExpoWidgetsConfigPluginProps | undefined> = (con
+ 
+   plugins = [
+     ...plugins,
+-    [withEasConfig, { targetName, bundleIdentifier, groupIdentifier }],
++    [withEasConfig, { targetName, bundleIdentifier, groupIdentifier, pushUpdates: widgets.some((widget) => widget.pushUpdates) }],
+     [withPodsLinking, { targetName }],
+     [withWidgetSourceFiles, { targetName, widgets, groupIdentifier, onFilesGenerated: setFiles }],
+     [withAppInfoPlist, { frequentUpdates, groupIdentifier }],
+diff --git a/node_modules/expo-widgets/plugin/src/types/WidgetConfig.type.ts b/node_modules/expo-widgets/plugin/src/types/WidgetConfig.type.ts
+index 3a0365a..b79dee0 100644
+--- a/node_modules/expo-widgets/plugin/src/types/WidgetConfig.type.ts
++++ b/node_modules/expo-widgets/plugin/src/types/WidgetConfig.type.ts
+@@ -6,4 +6,6 @@ export type WidgetConfig = {
+   displayName: string;
+   description: string;
+   contentMarginsDisabled: boolean;
++  /** Reload this widget from WidgetKit pushes (iOS 26+) via its remote feed. */
++  pushUpdates?: boolean;
+ };
+diff --git a/node_modules/expo-widgets/plugin/src/withEasConfig.ts b/node_modules/expo-widgets/plugin/src/withEasConfig.ts
+index 5c913a4..f46ec99 100644
+--- a/node_modules/expo-widgets/plugin/src/withEasConfig.ts
++++ b/node_modules/expo-widgets/plugin/src/withEasConfig.ts
+@@ -4,12 +4,14 @@ type EasConfigProps = {
+   targetName: string;
+   bundleIdentifier: string;
+   groupIdentifier: string;
++  pushUpdates?: boolean;
+ };
+ 
+ const withEasConfig: ConfigPlugin<EasConfigProps> = (
+   config,
+-  { targetName, bundleIdentifier, groupIdentifier }
++  { targetName, bundleIdentifier, groupIdentifier, pushUpdates }
+ ) => {
++  const pushEntitlements = pushUpdates ? { 'aps-environment': 'development' } : {};
+   let configIndex: null | number = null;
+   config.extra?.eas?.build?.experimental?.ios?.appExtensions?.forEach((ext: any, index: number) => {
+     if (ext.targetName === targetName) {
+@@ -35,6 +37,7 @@ const withEasConfig: ConfigPlugin<EasConfigProps> = (
+                   bundleIdentifier,
+                   entitlements: {
+                     'com.apple.security.application-groups': [groupIdentifier],
++                    ...pushEntitlements,
+                   },
+                 },
+               ],
+@@ -54,6 +57,7 @@ const withEasConfig: ConfigPlugin<EasConfigProps> = (
+         'com.apple.security.application-groups': [groupIdentifier, ...existingGroups],
+       };
+     }
++    existingEntry.entitlements = { ...existingEntry.entitlements, ...pushEntitlements };
+   }
+ 
+   return config;
+diff --git a/node_modules/expo-widgets/plugin/src/withWidgetSourceFiles.ts b/node_modules/expo-widgets/plugin/src/withWidgetSourceFiles.ts
+index 450e2c8..78a8bd5 100644
+--- a/node_modules/expo-widgets/plugin/src/withWidgetSourceFiles.ts
++++ b/node_modules/expo-widgets/plugin/src/withWidgetSourceFiles.ts
+@@ -30,6 +30,8 @@ const withWidgetSourceFiles: ConfigPlugin<WidgetSourceFilesProps> = (
+       const entitlementsPath = path.join(targetDirectory, `${targetName}.entitlements`);
+       const entitlementsContent = {
+         'com.apple.security.application-groups': [groupIdentifier],
++        // WidgetKit push updates need the extension itself to be able to receive APNs.
++        ...(widgets.some((widget) => widget.pushUpdates) ? { 'aps-environment': 'development' } : {}),
+       };
+       fs.writeFileSync(entitlementsPath, plist.build(entitlementsContent));
+ 
+@@ -106,7 +108,7 @@ struct ${widget.name}: Widget {
+     }
+     .configurationDisplayName("${widget.displayName}")
+     .description("${widget.description}")
+-    .supportedFamilies([.${widget.supportedFamilies.join(', .')}])${widget.contentMarginsDisabled ? '\n    .contentMarginsDisabled()' : ''}
++    .supportedFamilies([.${widget.supportedFamilies.join(', .')}])${widget.contentMarginsDisabled ? '\n    .contentMarginsDisabled()' : ''}${widget.pushUpdates ? '\n    .expoWidgetsPushHandler()' : ''}
+   }
+ }`;
+ 

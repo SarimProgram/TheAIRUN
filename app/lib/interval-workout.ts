@@ -9,6 +9,21 @@ import type { PaceProfile } from '@/lib/pace-personalization';
 export type { IntervalWalkPaceTargets } from '@/lib/interval-pace-targets';
 
 export type IntervalWorkoutKind = 'interval_run' | 'interval_walk';
+
+/** Gentle run–walk fallback when a legacy plan has no generated session steps. */
+export function buildRunWalkQuickSteps(distanceKm: number): IntervalWorkoutStep[] {
+    const distance = Number.isFinite(distanceKm) && distanceKm > 0 ? distanceKm : 3;
+    const repeats = Math.max(1, Math.floor(distance * 0.8 / 0.4));
+    const block = distance * 0.8 / repeats / 2;
+    return [
+        { type: 'warmup', label: 'Warm Up Walk', distanceKm: distance * 0.1, target: { effort: 'Easy' } },
+        ...Array.from({ length: repeats }, (_, index): IntervalWorkoutStep[] => [
+            { type: 'run', label: `Comfortable Run ${index + 1}`, distanceKm: block, target: { effort: 'Easy' } },
+            { type: 'walk', label: `Walk Break ${index + 1}`, distanceKm: block, target: { effort: 'Easy' } },
+        ]).flat(),
+        { type: 'cooldown', label: 'Cool Down Walk', distanceKm: distance * 0.1, target: { effort: 'Easy' } },
+    ];
+}
 export type IntervalWorkoutRoute = '/runs/interval-run' | '/runs/interval-walk';
 export type IntervalWorkoutStepType = 'run' | 'recover' | 'walk' | 'warmup' | 'cooldown';
 export type IntervalWorkoutEffort = 'Easy' | 'Steady' | 'Hard';

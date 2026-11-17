@@ -115,6 +115,64 @@ export async function upsertLocalMeal(meal: OfflineMealLog): Promise<void> {
   await upsertMealInternal(meal);
 }
 
+const mealListeners = new Set<() => void>();
+/** Lets screens refresh when a meal is logged or re-portioned outside them (e.g. a passed plate). */
+export function subscribeToMealChanges(listener: () => void) {
+  mealListeners.add(listener);
+  return () => { mealListeners.delete(listener); };
+}
+export function notifyMealListeners() {
+  mealListeners.forEach((listener) => listener());
+}
+
+export async function getLocalMeal(userKey: string, clientMealId: string): Promise<OfflineMealLog | null> {
+  await ensureMealTables();
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<Parameters<typeof mapRowsToMeals>[0][number]>(
+    `SELECT * FROM meal_logs_local WHERE userKey = ? AND clientMealId = ? LIMIT 1`, userKey, clientMealId
+  );
+  if (!row) return null;
+  const items = await db.getAllAsync<Parameters<typeof mapRowsToMeals>[1][number]>(
+    `SELECT id, clientMealId, foodName, calories, proteinG, carbsG, fatG FROM meal_items_local WHERE clientMealId = ?`, clientMealId
+  );
+  return mapRowsToMeals([row], items)[0];
+}
+
+/** Saves a portion locally. Server-owned portions can be marked synced to avoid uploading again. */
+export async function saveLocalPortion(params: {
+  userKey: string; dayKey: string; mealType: OfflineMealLog['mealType']; clientMealId: string;
+  hadImage: boolean; inputText?: string | null; loggedAt?: string; synced?: boolean;
+  items: { foodName: string; calories: number; proteinG?: number | null; carbsG?: number | null; fatG?: number | null }[];
+}): Promise<OfflineMealLog> {
+  const now = new Date().toISOString();
+  const items = params.items.map((item, index) => ({
+    id: `${params.clientMealId}-i${index}`, foodName: item.foodName, calories: Math.max(0, Math.round(item.calories)),
+    proteinG: item.proteinG ?? null, carbsG: item.carbsG ?? null, fatG: item.fatG ?? null,
+  }));
+  const sum = (key: 'proteinG' | 'carbsG' | 'fatG') => items.reduce((total, item) => total + (item[key] || 0), 0);
+  const meal: OfflineMealLog = {
+    clientMealId: params.clientMealId, userKey: params.userKey, dayKey: params.dayKey, mealType: params.mealType,
+    inputText: params.inputText ?? null, hadImage: params.hadImage,
+    totalCalories: items.reduce((total, item) => total + item.calories, 0),
+    totalProteinG: sum('proteinG') || null, totalCarbsG: sum('carbsG') || null, totalFatG: sum('fatG') || null,
+    loggedAt: params.loggedAt ?? now, synced: params.synced ?? false, serverMealId: null, createdAt: now, updatedAt: now, items,
+  };
+  await upsertLocalMeal(meal);
+  return meal;
+}
+
+/** Remove one whole cached meal, including its items, scoped to the signed-in user. */
+export async function deleteLocalMeal(userKey: string, clientMealId: string): Promise<void> {
+  await ensureMealTables();
+  const db = await getDatabase();
+  await db.runAsync(
+    `DELETE FROM meal_items_local WHERE clientMealId IN
+      (SELECT clientMealId FROM meal_logs_local WHERE userKey = ? AND clientMealId = ?)`,
+    userKey, clientMealId,
+  );
+  await db.runAsync('DELETE FROM meal_logs_local WHERE userKey = ? AND clientMealId = ?', userKey, clientMealId);
+}
+
 function mapRowsToMeals(
   mealRows: Array<{
     clientMealId: string;

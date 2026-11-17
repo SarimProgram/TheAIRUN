@@ -1,43 +1,19 @@
-import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
-import {
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-  Dimensions,
-  Platform,
-  StatusBar,
-  Animated,
-} from 'react-native';
-import { Bell, CheckCircle2, ChevronRight, Eye, Heart, ShoppingBag, Sparkles, Users } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Linking, Pressable, ScrollView, StatusBar, StyleSheet, Switch, Text, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
+import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Defs, LinearGradient as SvgGradient, Path, Stop } from 'react-native-svg';
+import { ChevronLeft } from 'lucide-react-native';
 import { useAuth } from '@/src/auth/authContext';
 import { useEntitlement } from '@/src/billing';
 import { API_BASE_URL } from '../../config/api';
-import {
-  getPartnerPlanStatusMessage,
-  type PartnerPlanSummary,
-} from '@/utils/partnerPlanStatus';
-
-const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
-const height = Math.min(windowHeight, 800);
-const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
-const isCompactFrame = windowHeight <= 820;
-const useCompactLayout = isAirLayout || isCompactFrame;
-
-const COLORS = {
-  brand: '#FF3B3B', // Vibrant high-energy red
-  brandDark: '#D62F2F',
-  ink: '#121212',
-  white: '#FFFFFF',
-  muted: '#94A3B8',
-  soft: '#F8FAFC',
-  border: '#F1F5F9',
-  success: '#10B981',
-};
+import { getPartnerPlanStatusMessage, type PartnerPlanSummary } from '@/utils/partnerPlanStatus';
+import { C, EASE_OUT, PrimaryButton } from './OnboardingKit';
+import { ensureNotificationPermissionAsync } from '@/utils/pushNotifications';
+import { loadNotificationSettings } from '@/utils/notificationRegistration';
+import { cacheNotificationPreferences, loadCachedNotificationPreferences } from '@/utils/notificationPreferences';
 
 type Props = {
   userName?: string;
@@ -49,773 +25,241 @@ type Props = {
   weightUnit?: string;
   mainGoal?: 'weightloss' | 'running' | 'both' | string | null;
   onBack: () => void;
-  onContinue: (opts?: { skipPaywall?: boolean }) => void;
+  onContinue: (opts?: { skipPaywall?: boolean; deferPaywall?: boolean }) => void | Promise<void>;
 };
 
-export default function Phase19PlanTimeline({
-  userName = 'YOU',
-  userGender,
-  partnerName,
-  joinedWithCode = false,
-  weeklyPlan = [],
-  currentWeight,
-  weightUnit = 'kg',
-  mainGoal,
-  onBack,
-  onContinue,
-}: Props) {
-  const { authFetch } = useAuth();
+export default function Phase19PlanTimeline({ partnerName, onBack, onContinue }: Props) {
+  const { authFetch, isAuthenticated } = useAuth();
   const { access, refreshAccess } = useEntitlement();
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-  const [fetchedPartnerName, setFetchedPartnerName] = useState<string | null>(null);
-  const [partnerPlanSummary, setPartnerPlanSummary] = useState<PartnerPlanSummary | null>(null);
-  const [hasLinkedPartner, setHasLinkedPartner] = useState(false);
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const compact = height < 740;
+  const pageWidth = Math.min(width, 480);
+  const [partnerContext, setPartnerContext] = useState<{
+    name: string | null;
+    plan: PartnerPlanSummary | null;
+    linked: boolean;
+  }>({ name: null, plan: null, linked: false });
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reminderEnabled, setReminderEnabled] = useState(false);
+  const [reminderBusy, setReminderBusy] = useState(true);
+  const [notificationDenied, setNotificationDenied] = useState(false);
 
-  const resolvedPartnerName = partnerName || fetchedPartnerName;
-  const showPartnerName = !!resolvedPartnerName && (joinedWithCode || hasLinkedPartner || !!partnerPlanSummary);
+  useEffect(() => {
+    let active = true;
+    loadNotificationSettings(authFetch, isAuthenticated)
+      .then(({ permissionStatus, preferences }) => {
+        if (active) setReminderEnabled(permissionStatus === 'granted' && preferences.billingReminder);
+      })
+      .catch(() => {})
+      .finally(() => { if (active) setReminderBusy(false); });
+    return () => { active = false; };
+  }, [authFetch, isAuthenticated]);
 
-  const loadPartnerContext = useCallback(async () => {
+  const toggleReminder = async (enabled: boolean) => {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    setError(null);
+    setNotificationDenied(false);
     try {
-      const [partnerRes, pendingRes] = await Promise.all([
-        authFetch(`${API_BASE_URL}/partner`),
-        authFetch(`${API_BASE_URL}/partner/invites/pending`),
-      ]);
-
-      const partnerData = partnerRes.ok ? await partnerRes.json() : null;
-      const pendingData = pendingRes.ok ? await pendingRes.json() : null;
-
-      if (partnerData?.hasPartner && partnerData?.partner) {
-        setHasLinkedPartner(true);
-        setFetchedPartnerName(partnerData.partner.displayName || null);
-        setPartnerPlanSummary(partnerData.partner.planSummary ?? null);
+      if (enabled && await ensureNotificationPermissionAsync() !== 'granted') {
+        setNotificationDenied(true);
         return;
       }
-
-      const invites = Array.isArray(pendingData?.invites) ? pendingData.invites : [];
-      const pendingInvite = invites[0];
-      if (pendingInvite?.fromUser) {
-        setHasLinkedPartner(false);
-        setFetchedPartnerName(pendingInvite.fromUser.displayName || null);
-        setPartnerPlanSummary(pendingInvite.fromUser.planSummary ?? null);
-        return;
+      if (isAuthenticated) {
+        const response = await authFetch(`${API_BASE_URL}/profile/notification-preferences`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preferences: { billingReminder: enabled } }),
+        });
+        if (!response.ok) throw new Error('Could not save your reminder. Please try again.');
       }
-
-      setHasLinkedPartner(false);
-      setPartnerPlanSummary(null);
+      const preferences = await loadCachedNotificationPreferences();
+      await cacheNotificationPreferences({ ...preferences, billingReminder: enabled });
+      setReminderEnabled(enabled);
     } catch {
-      setHasLinkedPartner(false);
-      setPartnerPlanSummary(null);
+      setError('Could not save your reminder. Please try again.');
+    } finally {
+      setReminderBusy(false);
     }
-  }, [authFetch]);
+  };
 
   useEffect(() => {
+    let active = true;
     refreshAccess().catch(() => {});
-    loadPartnerContext();
-  }, [loadPartnerContext, refreshAccess]);
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, tension: 20, useNativeDriver: true }),
-    ]).start();
-  }, []);
-
-  const goalMode = useMemo(() => {
-    const safePlan = Array.isArray(weeklyPlan) ? weeklyPlan : [];
-    const hasRuns = safePlan.some((item) => Number(item?.['Run km/week']) > 0);
-
-    if (mainGoal === 'both') return 'combined';
-    if (mainGoal === 'running') return 'running';
-    if (mainGoal === 'weightloss') return 'weight';
-    return hasRuns ? 'running' : 'weight';
-  }, [mainGoal, weeklyPlan]);
-
-  const planColumnLabel = useMemo(() => {
-    if (goalMode === 'combined') return 'Weight Loss & Running';
-    if (goalMode === 'running') return 'Running Plan';
-    return 'Your Plan';
-  }, [goalMode]);
-
-  const motivationCopy = useMemo(() => {
-    if (goalMode === 'combined') {
-      return {
-        line: 'Lose weight while building your running fitness.',
-        punch: 'Your weight loss & running plan is ready.',
-      };
-    }
-    if (goalMode === 'running') {
-      return {
-        line: 'Build pace, distance, and consistency week by week.',
-        punch: 'Your running plan is ready. No excuses.',
-      };
-    }
-    return {
-      line: "It's easier when you're not doing it alone.",
-      punch: 'Your plan is ready. No excuses.',
-    };
-  }, [goalMode]);
-
-  const roadmapCheckpoints = useMemo(() => {
-    const safePlan = Array.isArray(weeklyPlan) ? weeklyPlan : [];
-    const normalizedPlan = safePlan
-      .map((item) => ({
-        week: Number(item?.Week),
-        weekName: item?.['Week name'],
-        expectedWeight: typeof item?.['Expected weight'] === 'number' ? item['Expected weight'] : null,
-        runKm: typeof item?.['Run km/week'] === 'number' ? item['Run km/week'] : 0,
-        stepsTarget: typeof item?.['Steps/day target'] === 'number' ? item['Steps/day target'] : 0,
-      }))
-      .filter((item) => Number.isFinite(item.week) && item.week > 0)
-      .sort((a, b) => a.week - b.week);
-
-    const totalWeeks = Math.max(1, normalizedPlan[normalizedPlan.length - 1]?.week ?? normalizedPlan.length ?? 1);
-    const currentWeightNum = typeof currentWeight === 'number' ? currentWeight : typeof currentWeight === 'string' ? Number(currentWeight) : NaN;
-
-    const checkpointWeeks = Array.from(
-      new Set([
-        1,
-        Math.max(1, Math.ceil(totalWeeks * 0.33)),
-        Math.max(1, Math.ceil(totalWeeks * 0.66)),
-        totalWeeks,
-      ])
-    );
-
-    const getClosestWeek = (week: number) => {
-      if (!normalizedPlan.length) return null;
-      return normalizedPlan.reduce((closest, item) => {
-        return Math.abs(item.week - week) < Math.abs(closest.week - week) ? item : closest;
-      }, normalizedPlan[0]);
-    };
-
-    const checkpoints = checkpointWeeks.map((week, index) => {
-      const weekData = getClosestWeek(week);
-      const isStart = index === 0;
-      const isFinal = index === checkpointWeeks.length - 1;
-      const expectedWeight = weekData?.expectedWeight;
-      const diff = expectedWeight != null && Number.isFinite(currentWeightNum)
-        ? Number((currentWeightNum - expectedWeight).toFixed(1))
-        : null;
-
-      if (goalMode === 'combined') {
-        const runValue = weekData?.runKm ? `${weekData.runKm.toFixed(1)} km/week` : 'steady weekly training';
-
-        return {
-          key: `checkpoint-${week}`,
-          weekLabel: isStart ? 'Today' : `Week ${week}`,
-          summary: isStart
-            ? 'Your weight loss & running plan starts.'
-            : isFinal
-              ? 'You finish leaner, fitter, and stronger.'
-              : index === 1
-                ? diff && diff > 0
-                  ? `You may lose about ${diff} ${weightUnit} while runs get easier.`
-                  : 'Weight starts shifting as your runs feel smoother.'
-                : `You build toward ${runValue} while staying on track to lose weight.`,
-        };
+    const load = async () => {
+      try {
+        const [partnerRes, pendingRes] = await Promise.all([
+          authFetch(`${API_BASE_URL}/partner`),
+          authFetch(`${API_BASE_URL}/partner/invites/pending`),
+        ]);
+        const partnerData = partnerRes.ok ? await partnerRes.json() : null;
+        const pendingData = pendingRes.ok ? await pendingRes.json() : null;
+        const linked = !!(partnerData?.hasPartner && partnerData?.partner);
+        const person = linked ? partnerData.partner : pendingData?.invites?.[0]?.fromUser;
+        if (active) setPartnerContext({
+          name: person?.displayName || null,
+          plan: person?.planSummary ?? null,
+          linked,
+        });
+      } catch {
+        // Existing entitlement access still applies when partner details are unavailable.
       }
+    };
+    void load();
+    return () => { active = false; };
+  }, [authFetch, refreshAccess]);
 
-      if (goalMode === 'running') {
-        const runValue = weekData?.runKm ? `${weekData.runKm.toFixed(1)} km/week` : 'your running routine';
-        return {
-          key: `checkpoint-${week}`,
-          weekLabel: isStart ? 'Today' : `Week ${week}`,
-          summary: isStart
-            ? 'Your running plan starts now.'
-            : isFinal
-              ? 'You finish with a stronger running base.'
-              : index === 1
-                ? 'Runs should start feeling easier.'
-                : `You build toward ${runValue}.`,
-        };
-      }
+  const coverage = getPartnerPlanStatusMessage({
+    partnerName: partnerName || partnerContext.name,
+    selfAccess: access,
+    partnerPlan: partnerContext.plan,
+    hasLinkedPartner: partnerContext.linked,
+  });
+  const covered = !!coverage?.skipPaywall;
 
-      return {
-        key: `checkpoint-${week}`,
-        weekLabel: isStart ? 'Today' : `Week ${week}`,
-        summary: isStart
-          ? 'Your fat-loss plan starts today.'
-          : isFinal
-            ? expectedWeight != null
-              ? `Target is about ${expectedWeight} ${weightUnit}.`
-              : 'You finish leaner and more consistent.'
-            : index === 1
-              ? diff && diff > 0
-                ? `You may be down about ${diff} ${weightUnit}.`
-                : 'You should start seeing progress.'
-              : 'The routine should feel easier.',
-      };
-    });
 
-    return checkpoints.slice(0, 4);
-  }, [currentWeight, goalMode, weightUnit, weeklyPlan]);
+  const continueToApp = useCallback(async () => {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onContinue({ skipPaywall: covered });
+    } catch {
+      setError('Could not continue. Please try again.');
+      setPending(false);
+    }
+  }, [covered, onContinue, pending]);
 
-  const partnerStatusMessage = useMemo(
-    () =>
-      getPartnerPlanStatusMessage({
-        partnerName: resolvedPartnerName,
-        selfAccess: access,
-        partnerPlan: partnerPlanSummary,
-        hasLinkedPartner,
-      }),
-    [access, hasLinkedPartner, partnerPlanSummary, resolvedPartnerName]
-  );
-
-  const footerNote = partnerStatusMessage?.skipPaywall
-    ? 'Your partner already covered your access.'
-    : 'Invite your partner after you start.';
-  const ctaText = partnerStatusMessage?.skipPaywall ? 'CONTINUE' : 'START MY JOURNEY';
-
-  const userAvatarSource = useMemo(() => {
-    const normalizedGender = String(userGender || '').trim().toLowerCase();
-    return normalizedGender === 'female'
-      ? require('../../assets/pink.png')
-      : require('../../assets/Gree.png');
-  }, [userGender]);
-
-  const partnerAvatarSource = useMemo(() => {
-    const normalizedGender = String(userGender || '').trim().toLowerCase();
-    return normalizedGender === 'female'
-      ? require('../../assets/Gree.png')
-      : require('../../assets/pink.png');
-  }, [userGender]);
-
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
-      
-      {/* 1. Large High-Aesthetic Hero Container */}
-      <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={[styles.hero, useCompactLayout && styles.heroCompact]}>
-        <Text style={styles.watermarkText}>TOGETHER</Text>
-        <SafeAreaView style={styles.heroSafe}>
-          <TouchableOpacity onPress={onBack} style={styles.backBtn}>
-            <ChevronRight color={COLORS.white} size={28} style={{ transform: [{ rotate: '180deg' }] }} />
-          </TouchableOpacity>
-
-          <View style={styles.heroContent}>
-            <View style={styles.avatarsWrapper}>
-                <View style={styles.connectionLine} />
-                
-                <View style={styles.avatarIdGroup}>
-                    <Image 
-                        source={userAvatarSource}
-                        style={styles.mainAvatar} 
-                        contentFit="contain"
-                    />
-                    <Text style={styles.avatarNameLabel}>{userName}</Text>
-                </View>
-
-                <View style={styles.syncRing}>
-                    <Heart size={20} color={COLORS.brand} fill={COLORS.brand} />
-                </View>
-
-                <View style={styles.avatarIdGroup}>
-                    <Image 
-                        source={partnerAvatarSource} 
-                        style={styles.mainAvatar} 
-                        contentFit="contain"
-                    />
-                    <Text style={[styles.avatarNameLabel, { opacity: showPartnerName ? 1 : 0.6 }]}>
-                        {showPartnerName ? resolvedPartnerName : 'AWAITING...'}
-                    </Text>
-                </View>
-            </View>
-            <View style={[styles.heroBadge, useCompactLayout && styles.heroBadgeCompact]}>
-                <Text style={styles.heroBadgeText}>BUILT FOR TWO</Text>
-            </View>
-          </View>
-        </SafeAreaView>
-      </LinearGradient>
-
-      {/* 2. Floating Info Card (The Split Section) */}
-      <Animated.View style={[styles.overlapCard, useCompactLayout && styles.overlapCardCompact, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-        <ScrollView
-          contentContainerStyle={styles.overlapScrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-        {partnerStatusMessage?.skipPaywall && (
-          <View style={[styles.cardHeader, useCompactLayout && styles.cardHeaderCompact]}>
-              <Text style={styles.cardHeaderTitle}>Your Plan, Better Together</Text>
-          </View>
-        )}
-
-        {partnerStatusMessage?.skipPaywall ? (
-          <View style={styles.coverageCard}>
-            <View style={styles.coverageIconWrap}>
-              <CheckCircle2 size={16} color={COLORS.success} strokeWidth={2.4} />
-            </View>
-            <View style={styles.coverageText}>
-              <Text style={styles.coverageTitle}>{partnerStatusMessage.title}</Text>
-              <Text style={styles.coverageSubtitle}>{partnerStatusMessage.subtitle}</Text>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.motivationCard}>
-            <View style={styles.motivationTop}>
-              <Text style={styles.motivationStat}>70%</Text>
-              <Text style={styles.motivationStatLabel}>quit going alone</Text>
-            </View>
-            <Text style={styles.motivationLine}>
-            {motivationCopy.line}
-            </Text>
-            <Text style={styles.motivationPunch}>{motivationCopy.punch}</Text>
-          </View>
-        )}
-
-        <View style={[styles.splitRow, useCompactLayout && styles.splitRowCompact]}>
-            {/* Left: My Blueprint */}
-            <View style={styles.column}>
-                <Text style={styles.columnLabel}>{planColumnLabel}</Text>
-                <View style={[styles.blueprintBulletList, useCompactLayout && styles.blueprintBulletListCompact]}>
-                    {roadmapCheckpoints.slice(0, useCompactLayout ? 3 : 4).map((item) => (
-                        <View key={item.key} style={styles.blueprintBulletRow}>
-                            <View style={styles.blueprintBulletDot} />
-                            <View style={styles.blueprintBulletContent}>
-                                <Text style={styles.blueprintBulletWeek}>{item.weekLabel}</Text>
-                                <Text style={styles.blueprintBulletSummary}>{item.summary}</Text>
-                            </View>
-                        </View>
-                    ))}
-                </View>
-            </View>
-
-            <View style={styles.cardDivider} />
-
-            {/* Right: Partner Sync */}
-            <View style={[styles.column, styles.partnerColumn]}>
-                <Text style={[styles.columnLabel, { color: COLORS.success }]}>WITH A PARTNER</Text>
-                <View style={[styles.perksList, useCompactLayout && styles.perksListCompact]}>
-                    <View style={styles.perk}>
-                        <View style={styles.perkIconWrap}>
-                          <Eye size={14} color={COLORS.brand} strokeWidth={2.2} />
-                        </View>
-                        <Text style={styles.perkText}>See each other’s progress</Text>
-                    </View>
-                    <View style={styles.perk}>
-                        <View style={styles.perkIconWrap}>
-                          <Users size={14} color={COLORS.brand} strokeWidth={2.2} />
-                        </View>
-                        <Text style={styles.perkText}>Stay accountable together</Text>
-                    </View>
-                    <View style={styles.perk}>
-                        <View style={styles.perkIconWrap}>
-                          <Bell size={14} color={COLORS.brand} strokeWidth={2.2} />
-                        </View>
-                        <Text style={styles.perkText}>Send reminders</Text>
-                    </View>
-                    <View style={styles.perk}>
-                        <View style={styles.perkIconWrap}>
-                          <Heart size={14} color={COLORS.brand} strokeWidth={2.2} />
-                        </View>
-                        <Text style={styles.perkText}>Run together in real time</Text>
-                    </View>
-                    {!useCompactLayout && <View style={styles.perk}>
-                        <View style={styles.perkIconWrap}>
-                          <ShoppingBag size={14} color={COLORS.brand} strokeWidth={2.2} />
-                        </View>
-                        <Text style={styles.perkText}>Couple marketplace access</Text>
-                    </View>}
-                    {!useCompactLayout && <View style={styles.perk}>
-                        <View style={styles.perkIconWrap}>
-                          <Sparkles size={14} color={COLORS.brand} strokeWidth={2.2} />
-                        </View>
-                        <Text style={styles.perkText}>Celebrate wins as a team</Text>
-                    </View>}
-                </View>
-            </View>
-        </View>
-        </ScrollView>
-      </Animated.View>
-
-      {/* 3. High-Impact Footer */}
-      <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
-        <TouchableOpacity
-          style={[styles.cta, useCompactLayout && styles.ctaCompact]}
-          onPress={() => onContinue({ skipPaywall: partnerStatusMessage?.skipPaywall })}
-          activeOpacity={0.9}
-        >
-            <LinearGradient 
-                colors={[COLORS.brand, COLORS.brandDark]} 
-                style={styles.ctaGrad}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-            >
-                <Text style={styles.ctaText}>{ctaText}</Text>
-                <ChevronRight color={COLORS.white} size={20} strokeWidth={3} />
-            </LinearGradient>
-        </TouchableOpacity>
-        {!useCompactLayout && <Text style={styles.footerNote}>{footerNote}</Text>}
-      </View>
+  return <View style={styles.root}>
+    <StatusBar barStyle="dark-content" />
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View style={styles.topBlush} />
+      <Svg width="100%" height={140} viewBox="0 0 400 140" preserveAspectRatio="none" style={styles.bottomWaves}>
+        <Path d="M 120 140 C 190 70 260 135 400 30 L 400 140 Z" fill="#FFF0F2" />
+        <Path d="M 210 140 C 290 110 340 120 400 64 L 400 140 Z" fill="#FFE6EC" />
+      </Svg>
     </View>
-  );
+    <ScrollView
+      style={styles.fill}
+      contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16) + (__DEV__ ? 76 : 0) }]}
+      contentInsetAdjustmentBehavior="never"
+      showsVerticalScrollIndicator={false}
+      bounces={false}
+    >
+      <View style={[styles.page, { maxWidth: pageWidth }]}>
+        <View style={styles.header}>
+          <Pressable onPress={onBack} disabled={pending} style={({ pressed }) => [styles.back, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="Back" hitSlop={8}>
+            <ChevronLeft color={C.ink} size={30} strokeWidth={2.5} />
+          </Pressable>
+        </View>
+        <View style={styles.topSpace} />
+        <View style={styles.hero}>
+          <Reveal delay={0} style={[styles.crownTile, compact && styles.crownTileCompact]}>
+            <CrownArtwork />
+          </Reveal>
+          <Reveal delay={80} style={styles.titleWrap}>
+            <AccentRays mirrored />
+            <Text accessibilityRole="header" style={[styles.title, { fontSize: Math.min(compact ? 35 : 38, (pageWidth - 48) / 8.5) }]}>
+              {covered ? 'You\u2019re ' : 'It\u2019s Free '}<Text style={styles.accent}>{covered ? 'Covered!' : 'Today!'}</Text>
+            </Text>
+            <AccentRays />
+          </Reveal>
+          <Reveal delay={160}><Text style={[styles.subtitle, compact && styles.subtitleCompact]}>
+            {covered ? coverage?.subtitle : 'Get full access to all features and\nstart your journey with your partner.'}
+          </Text></Reveal>
+          <Reveal delay={240} style={[styles.artwork, { height: (pageWidth - 24) * 0.64, marginTop: compact ? 24 : 36 }]}>
+            <View style={styles.mintSplash} />
+            <View style={styles.pinkSplash} />
+            <Image source={require('../../assets/onboarding/together-fist-bump.png')} style={StyleSheet.absoluteFill} contentFit="contain" accessibilityLabel="Two fitness partners fist bumping" />
+            <Svg pointerEvents="none" width={46} height={34} viewBox="0 0 46 34" style={styles.fistRays}>
+              <Path d="M 12 27 L 5 16 M 23 19 L 23 4 M 34 27 L 42 16" stroke="#FFCD50" strokeWidth={5} strokeLinecap="round" fill="none" />
+            </Svg>
+            <LinearGradient pointerEvents="none" colors={['rgba(255,252,252,0)', C.bg]} locations={[0, 0.9]} style={styles.artFade} />
+          </Reveal>
+        </View>
+        <View style={styles.bottomSpace} />
+        <Reveal delay={360} style={styles.footer}>
+          {!covered && <View style={styles.reminderRow}>
+            <Text style={styles.reminderLabel}>Remind me one day before my trial ends</Text>
+            <Switch value={reminderEnabled} onValueChange={value => { void toggleReminder(value); }} disabled={reminderBusy || pending} accessibilityLabel="Remind me one day before my trial ends" trackColor={{ true: C.coral }} />
+          </View>}
+          {notificationDenied && <Pressable onPress={() => { void Linking.openSettings(); }} accessibilityRole="button" style={styles.settingsLink}><Text style={styles.error}>Enable notifications in Settings to receive your reminder.</Text></Pressable>}
+          {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+          <PrimaryButton label={covered ? 'Continue with full access' : 'Get Full Access for $0.00'} onPress={() => { void continueToApp(); }} loading={pending} disabled={reminderBusy} style={styles.cta} />
+        </Reveal>
+      </View>
+    </ScrollView>
+  </View>;
+}
+
+function Reveal({ delay, style, children }: { delay: number; style?: StyleProp<ViewStyle>; children: React.ReactNode }) {
+  const reduceMotion = useReducedMotion();
+  const progress = useSharedValue(0);
+  useEffect(() => {
+    progress.set(withDelay(reduceMotion ? 0 : delay, withTiming(1, { duration: 280, easing: EASE_OUT })));
+    return () => cancelAnimation(progress);
+  }, [delay, progress, reduceMotion]);
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: progress.get(),
+    transform: [{ translateY: reduceMotion ? 0 : 16 * (1 - progress.get()) }],
+  }));
+  return <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>;
+}
+
+function AccentRays({ mirrored = false }: { mirrored?: boolean }) {
+  return <Svg pointerEvents="none" width={28} height={36} viewBox="0 0 28 36" style={[styles.titleRays, mirrored ? styles.leftRays : styles.rightRays]}>
+    <Path d="M 5 15 L 11 3 M 13 24 L 25 15 M 17 33 L 27 32" stroke={C.coral} strokeWidth={4} strokeLinecap="round" fill="none" />
+  </Svg>;
+}
+
+function CrownArtwork() {
+  return <Svg width={56} height={48} viewBox="0 0 64 56" accessible={false}>
+    <Defs>
+      <SvgGradient id="crownGold" x1="0" y1="0" x2="1" y2="1">
+        <Stop offset="0" stopColor="#FFE57B" /><Stop offset="0.5" stopColor="#FFC52E" /><Stop offset="1" stopColor="#FF9D00" />
+      </SvgGradient>
+    </Defs>
+    <Path d="M 7 17 L 13 43 Q 32 47 51 43 L 57 17 L 44 27 L 32 6 L 20 27 Z" fill="url(#crownGold)" stroke="#FFBF22" strokeWidth={1.5} strokeLinejoin="round" />
+    <Path d="M 32 12 L 31 37" stroke="#FFE989" strokeWidth={3} strokeLinecap="round" />
+    <Path d="M 15 49 Q 32 47 49 49" stroke="#FFAE00" strokeWidth={6} strokeLinecap="round" />
+    <Path d="M 6 17 h 0 M 32 6 h 0 M 58 17 h 0" stroke="#FFD756" strokeWidth={8} strokeLinecap="round" />
+  </Svg>;
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-  },
-  hero: {
-    height: height * 0.32,
-  },
-  heroCompact: {
-    height: height * 0.26,
-  },
-  heroSafe: {
-    flex: 1,
-  },
-  watermarkText: {
-    position: 'absolute',
-    top: height * 0.06,
-    left: 0,
-    right: 0,
-    fontSize: 90,
-    fontWeight: '900',
-    color: 'rgba(255,255,255,0.06)',
-    letterSpacing: -5,
-    textAlign: 'center',
-    zIndex: 0,
-  },
-  backBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 20,
-    marginTop: 10,
-  },
-  heroContent: {
-    flex: 1,
-    paddingTop: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarsWrapper: {
-    flex: 1,
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 5,
-    marginTop: -10,
-    marginBottom: 0,
-  },
-  connectionLine: {
-    position: 'absolute',
-    top: '50%',
-    left: '20%',
-    right: '20%',
-    height: 2,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    zIndex: 0,
-    transform: [{ translateY: -15 }],
-  },
-  avatarIdGroup: {
-    width: '50%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mainAvatar: {
-    width: '100%', 
-    flex: 1,
-    transform: [{ scale: 1.3 }],
-  },
-  avatarNameLabel: {
-    color: COLORS.white,
-    fontSize: 13,
-    fontWeight: '900',
-    letterSpacing: 1.2,
-    marginTop: 8,
-    textTransform: 'uppercase',
-  },
-  syncRing: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 15,
-    marginHorizontal: -10,
-    transform: [{ translateY: -15 }], 
-  },
-  heroTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: COLORS.white,
-    letterSpacing: -0.5,
-    marginTop: 15,
-  },
-  heroBadge: {
-    backgroundColor: 'rgba(0,0,0,0.12)',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    marginTop: 2,
-    marginBottom: 22,
-  },
-  heroBadgeCompact: {
-    paddingVertical: 5,
-    marginBottom: 12,
-  },
-  heroBadgeText: {
-    color: COLORS.white,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 2,
-  },
-  overlapCard: {
-    flex: 1,
-    marginTop: 0, // Removed negative margin to keep hero content clear
-    backgroundColor: COLORS.white,
-    borderTopLeftRadius: 40,
-    borderTopRightRadius: 40,
-    paddingHorizontal: 25,
-    paddingTop: 18,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 8,
-  },
-  overlapCardCompact: {
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    paddingHorizontal: 18,
-    paddingTop: 12,
-  },
-  overlapScrollContent: {
-    paddingBottom: 12,
-    flexGrow: 1,
-  },
-  cardHeader: {
-    marginBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    paddingBottom: 12,
-  },
-  cardHeaderCompact: {
-    marginBottom: 10,
-    paddingBottom: 8,
-  },
-  cardHeaderTitle: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: COLORS.brand,
-    letterSpacing: 2,
-    textAlign: 'center',
-    textTransform: 'uppercase',
-  },
-  coverageCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginBottom: 12,
-    borderRadius: 10,
-    backgroundColor: '#F6FDFA',
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-  },
-  coverageIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
-  },
-  coverageText: {
-    flex: 1,
-  },
-  coverageTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.ink,
-    marginBottom: 1,
-    lineHeight: 16,
-    letterSpacing: -0.1,
-  },
-  coverageSubtitle: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: COLORS.muted,
-    fontWeight: '500',
-  },
-  motivationCard: {
-    marginBottom: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 6,
-  },
-  motivationTop: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 8,
-  },
-  motivationStat: {
-    fontSize: 42,
-    fontWeight: '900',
-    color: COLORS.brand,
-    letterSpacing: -2,
-    lineHeight: 44,
-  },
-  motivationStatLabel: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.ink,
-    letterSpacing: -0.3,
-    lineHeight: 18,
-  },
-  motivationLine: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '600',
-    color: COLORS.muted,
-  },
-  motivationPunch: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '800',
-    color: COLORS.ink,
-  },
-  splitRow: {
-    flexDirection: 'row',
-  },
-  splitRowCompact: {
-    flexShrink: 1,
-  },
-  column: {
-    flex: 1,
-  },
-  partnerColumn: {
-    paddingRight: 0,
-  },
-  columnLabel: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: COLORS.ink,
-    letterSpacing: 1,
-    marginBottom: 16,
-    textAlign: 'center',
-    opacity: 0.4,
-  },
-  cardDivider: {
-    width: 1.5,
-    backgroundColor: COLORS.border,
-    marginHorizontal: 15,
-  },
-  blueprintBulletList: {
-    gap: 10,
-  },
-  blueprintBulletListCompact: {
-    gap: 7,
-  },
-  blueprintBulletRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  blueprintBulletDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.brand,
-    marginTop: 6,
-  },
-  blueprintBulletContent: {
-    flex: 1,
-  },
-  blueprintBulletWeek: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: COLORS.brand,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginBottom: 3,
-  },
-  blueprintBulletSummary: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: COLORS.ink,
-    fontWeight: '700',
-  },
-  perksList: {
-    gap: 9,
-  },
-  perksListCompact: {
-    gap: 7,
-  },
-  perk: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  perkIconWrap: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 59, 59, 0.08)',
-    marginTop: 1,
-  },
-  perkText: {
-    flex: 1,
-    flexShrink: 1,
-    fontSize: 11,
-    lineHeight: 12,
-    fontWeight: '700',
-    color: COLORS.ink,
-  },
-  footer: {
-    marginTop: 'auto',
-    paddingHorizontal: 25,
-    paddingBottom: Platform.OS === 'ios' ? 45 : 30,
-  },
-  footerCompact: {
-    paddingHorizontal: 25,
-    paddingBottom: Platform.OS === 'ios' ? 12 : 20,
-  },
-  cta: {
-    height: 70,
-    borderRadius: 24,
-    overflow: 'hidden',
-    shadowColor: COLORS.brand,
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
-    elevation: 10,
-  },
-  ctaCompact: {
-    height: 58,
-    borderRadius: 20,
-  },
-  ctaGrad: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  ctaText: {
-    color: COLORS.white,
-    fontSize: 17,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  footerNote: {
-    fontSize: 12,
-    color: COLORS.muted,
-    textAlign: 'center',
-    marginTop: 15,
-    fontWeight: '500',
-  },
+  root: { flex: 1, backgroundColor: C.bg, overflow: 'hidden' },
+  fill: { flex: 1 },
+  scrollContent: { flexGrow: 1 },
+  page: { width: '100%', flexGrow: 1, alignSelf: 'center', paddingHorizontal: 24 },
+  topBlush: { position: 'absolute', width: 300, height: 240, top: -188, left: -100, borderRadius: 999, backgroundColor: '#FFEAF0', transform: [{ rotate: '-25deg' }] },
+  bottomWaves: { position: 'absolute', bottom: 0 },
+  header: { height: 44, alignItems: 'center', justifyContent: 'center' },
+  back: { position: 'absolute', left: -8, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  pressed: { opacity: 0.5 },
+  reminderRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 20, minHeight: 44 },
+  reminderLabel: { flex: 1, color: C.ink, fontSize: 15, lineHeight: 21, fontWeight: '600' },
+  settingsLink: { minHeight: 44, justifyContent: 'center' },
+  topSpace: { flexGrow: 1, minHeight: 36, maxHeight: 92 },
+  hero: { alignItems: 'center' },
+  crownTile: { width: 68, height: 64, borderRadius: 20, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFECF0' },
+  crownTileCompact: { width: 60, height: 56, borderRadius: 16 },
+  titleWrap: { alignSelf: 'stretch', marginTop: 16 },
+  title: { color: C.ink, fontWeight: '900', letterSpacing: -1.6, textAlign: 'center' },
+  accent: { color: C.coral },
+  titleRays: { position: 'absolute', top: -21 },
+  leftRays: { left: -8, transform: [{ scaleX: -1 }] },
+  rightRays: { right: -8 },
+  subtitle: { marginTop: 16, color: '#788395', fontSize: 17, lineHeight: 23, fontWeight: '600', textAlign: 'center' },
+  subtitleCompact: { fontSize: 16, lineHeight: 22 },
+  artwork: { alignSelf: 'stretch', marginHorizontal: -12 },
+  mintSplash: { position: 'absolute', left: 8, top: 48, width: 64, height: 120, borderRadius: 999, backgroundColor: '#C8F0EE', transform: [{ rotate: '-32deg' }] },
+  pinkSplash: { position: 'absolute', right: 8, top: 44, width: 64, height: 120, borderRadius: 999, backgroundColor: '#FFC9D6', transform: [{ rotate: '32deg' }] },
+  fistRays: { position: 'absolute', top: '32%', left: '50%', marginLeft: -23 },
+  artFade: { position: 'absolute', bottom: -1, left: 0, right: 0, height: 48 },
+  bottomSpace: { flexGrow: 1.2, minHeight: 32, maxHeight: 100 },
+  footer: { paddingBottom: 24 },
+  cta: { height: 54, marginBottom: 0 },
+  error: { color: C.coral, fontSize: 14, textAlign: 'center', marginBottom: 12 },
 });

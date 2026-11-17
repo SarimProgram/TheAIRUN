@@ -12,6 +12,7 @@ import {
 import { promoteToPairOnboardingRewards } from '../services/onboardingRewards';
 import { sendPartnerInviteAcceptedPush } from '../lib/pushNotifications';
 import { pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
+import { notifyPartnerFoodWidgets } from '../lib/partnerFoodWidget';
 import {
     normalizeRecipientEmail,
     partnerInvitationEmailService,
@@ -21,8 +22,47 @@ import {
     toInviteCode,
 } from '../services/partnerInvites';
 import partnerMemoriesRouter from './partnerMemories.routes';
+import { createGuestPartnerInvite, claimGuestPartnerInvite, GuestInviteError } from '../services/guestPartnerInvites';
 
 const publicPartnerRouter = Router();
+
+const GuestInviteSchema = z.object({
+    ownerToken: z.string().regex(/^[a-f0-9]{64}$/),
+    displayName: z.string().trim().min(1).max(120).default('Your partner'),
+});
+const guestCreationAttempts = new Map<string, { count: number; until: number }>();
+
+publicPartnerRouter.post('/invites/guest', async (req, res, next) => {
+    try {
+        const input = GuestInviteSchema.parse(req.body);
+        const now = Date.now();
+        for (const [key, entry] of guestCreationAttempts) if (entry.until <= now) guestCreationAttempts.delete(key);
+        const key = req.ip || 'unknown';
+        const attempts = guestCreationAttempts.get(key) || { count: 0, until: now + 15 * 60 * 1000 };
+        if (attempts.count >= 20 || guestCreationAttempts.size >= 10000) {
+            return res.status(429).json({ error: 'Too many invite requests. Please try again shortly.' });
+        }
+        attempts.count++;
+        guestCreationAttempts.set(key, attempts);
+        const invite = await createGuestPartnerInvite(input.ownerToken, input.displayName);
+        return res.json({ invite });
+    } catch (err) {
+        if (err instanceof GuestInviteError) return res.status(err.status).json({ error: err.message });
+        next(err);
+    }
+});
+
+// Claiming is authenticated, but does not require a premium subscription.
+publicPartnerRouter.post('/invites/guest/claim', authMiddleware, async (req, res, next) => {
+    try {
+        const { ownerToken } = GuestInviteSchema.pick({ ownerToken: true }).parse(req.body);
+        const invite = await claimGuestPartnerInvite(ownerToken, (req as AuthRequest).user!.id);
+        return res.json({ invite });
+    } catch (err) {
+        if (err instanceof GuestInviteError) return res.status(err.status).json({ error: err.message });
+        next(err);
+    }
+});
 
 const LookupInviteCodeSchema = z.object({
     code: z.string().trim().min(1).transform(normalizeInviteCode),
@@ -194,8 +234,9 @@ const InviteSchema = z.object({
 
 async function deliverPartnerInvitationEmail(invite: {
     id: string;
-    toEmail: string;
+    toEmail: string | null;
 }, inviterDisplayName: string) {
+    if (!invite.toEmail) throw new Error('An email recipient is required for email delivery');
     return partnerInvitationEmailService.sendInvitation({
         invitationId: invite.id,
         toEmail: invite.toEmail,
@@ -229,6 +270,33 @@ async function findBlockRelationship(userId: string, otherUserId: string) {
         },
     });
 }
+
+// Generate a reusable, recipient-free code without sending an email.
+router.post('/invite/code', async (req, res, next) => {
+    try {
+        const userId = (req as AuthRequest).user!.id;
+        const user = await prisma.user.findUnique({
+            where: { id: userId }, select: { partnerId: true },
+        });
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        if (user.partnerId) return res.status(400).json({ error: 'You already have a partner' });
+
+        // Serializing on the sender makes simultaneous taps reuse the same code.
+        const invite = await prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+            const existing = await tx.partnerInvite.findFirst({
+                where: { fromUserId: userId, toEmail: null, status: 'PENDING' },
+                orderBy: { createdAt: 'desc' },
+            });
+            return existing ?? tx.partnerInvite.create({
+                data: { fromUserId: userId, toEmail: null, status: 'PENDING' },
+            });
+        });
+        return res.json({ success: true, invite: { ...invite, code: toInviteCode(invite.id) } });
+    } catch (err) {
+        next(err);
+    }
+});
 
 router.post('/invite', async (req, res, next) => {
     try {
@@ -523,6 +591,14 @@ publicPartnerRouter.post('/invites/lookup', async (req, res, next) => {
         });
 
         if (!invite) {
+            const guest = await prisma.guestPartnerInvite.findFirst({
+                where: { id: { startsWith: code.toLowerCase() }, claimedByUserId: null, expiresAt: { gt: new Date() } },
+                select: { displayName: true },
+            });
+            if (guest) return res.status(409).json({
+                code: 'INVITER_SETUP_PENDING',
+                error: `${guest.displayName} invited you! They're finishing setup. Try this code again once they've created their account.`,
+            });
             return res.status(404).json({ error: 'No invite found for this code.' });
         }
 
@@ -551,21 +627,31 @@ publicPartnerRouter.post('/invites/lookup', async (req, res, next) => {
 
 /**
  * GET /partner/invites/sent
- * List invitations sent by the current user
+ * List invitations and basic connection details, including before subscribing.
  */
 router.get('/invites/sent', async (req, res, next) => {
     try {
         const userId = (req as AuthRequest).user!.id;
 
-        const invites = await prisma.partnerInvite.findMany({
-            where: { fromUserId: userId },
-            include: {
-                toUser: { select: { id: true, displayName: true, email: true } },
-            },
-            orderBy: { createdAt: 'desc' },
-        });
+        const [invites, user] = await Promise.all([
+            prisma.partnerInvite.findMany({
+                where: { fromUserId: userId },
+                include: {
+                    toUser: { select: { id: true, displayName: true, email: true } },
+                },
+                orderBy: { createdAt: 'desc' },
+            }),
+            prisma.user.findUnique({
+                where: { id: userId },
+                select: {
+                    partner: { select: { id: true, displayName: true, email: true } },
+                },
+            }),
+        ]);
 
         res.json({
+            hasPartner: !!user?.partner,
+            partner: user?.partner ?? null,
             invites: invites.map((invite) => ({
                 ...invite,
                 code: toInviteCode(invite.id),
@@ -595,7 +681,31 @@ router.post('/invites/:id/accept', async (req, res, next) => {
         }
 
         if (user.partnerId) {
-            return res.status(400).json({ error: 'You already have a partner' });
+            // A login or network retry can replay an invite that already linked this pair.
+            const acceptedInvite = await prisma.partnerInvite.findFirst({
+                where: {
+                    id: inviteId,
+                    status: 'ACCEPTED',
+                    toUserId: userId,
+                    fromUserId: user.partnerId,
+                },
+                include: {
+                    fromUser: { select: { partnerId: true, displayName: true } },
+                },
+            });
+
+            if (acceptedInvite?.fromUser.partnerId === userId) {
+                return res.json({
+                    success: true,
+                    partnerId: user.partnerId,
+                    partnerName: acceptedInvite.fromUser.displayName,
+                });
+            }
+
+            return res.status(400).json({
+                error: 'You already have a partner',
+                code: 'PARTNER_ALREADY_CONNECTED',
+            });
         }
 
         // Find the invite
@@ -1210,6 +1320,8 @@ router.post('/chat/block', async (req, res, next) => {
         void Promise.allSettled([
             pushPartnerSurfaceUpdateForChangedUser(userId, 'partner_blocked'),
             pushPartnerSurfaceUpdateForChangedUser(partnerId, 'partner_blocked'),
+            notifyPartnerFoodWidgets(userId),
+            notifyPartnerFoodWidgets(partnerId),
         ]);
     } catch (err) {
         next(err);
@@ -1257,6 +1369,8 @@ router.post('/disconnect', async (req, res, next) => {
         void Promise.allSettled([
             pushPartnerSurfaceUpdateForChangedUser(userId, 'partner_disconnected'),
             pushPartnerSurfaceUpdateForChangedUser(partnerId, 'partner_disconnected'),
+            notifyPartnerFoodWidgets(userId),
+            notifyPartnerFoodWidgets(partnerId),
         ]);
     } catch (err) {
         next(err);

@@ -48,7 +48,7 @@ const COLORS = {
 export type PartnerLookupInvite = {
     id: string;
     code?: string;
-    toEmail: string;
+    toEmail: string | null;
     status?: string;
     fromUser?: {
         id: string;
@@ -135,6 +135,7 @@ export default function Phase4PartnerCode({ onBack, onConnect, onLoginWithInvite
     const [matchLoading, setMatchLoading] = useState(false);
     const [matchedInvite, setMatchedInvite] = useState<PartnerLookupInvite | null>(null);
     const [errorMessage, setErrorMessage] = useState('');
+    const [setupPending, setSetupPending] = useState(false);
 
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const slideAnim = useRef(new Animated.Value(20)).current;
@@ -168,6 +169,7 @@ export default function Phase4PartnerCode({ onBack, onConnect, onLoginWithInvite
         }
 
         setErrorMessage('');
+        setSetupPending(false);
         setMatchLoading(true);
 
         try {
@@ -180,6 +182,11 @@ export default function Phase4PartnerCode({ onBack, onConnect, onLoginWithInvite
                 body: JSON.stringify({ code: normalizedCode }),
             });
             const data = await res.json();
+            if (res.status === 409 && data?.code === 'INVITER_SETUP_PENDING') {
+                setSetupPending(true);
+                setErrorMessage(data.error);
+                return;
+            }
             if (!res.ok) {
                 throw new Error(data?.error || data?.message || 'Verification failed.');
             }
@@ -256,7 +263,7 @@ export default function Phase4PartnerCode({ onBack, onConnect, onLoginWithInvite
                                     </View>
                                     <TextInput
                                         value={normalizedCode}
-                                        onChangeText={setCode}
+                                        onChangeText={(value) => { setCode(value); setSetupPending(false); setErrorMessage(''); }}
                                         autoCapitalize="characters"
                                         placeholder="ABC12345"
                                         placeholderTextColor="rgba(26, 26, 26, 0.2)"
@@ -264,7 +271,7 @@ export default function Phase4PartnerCode({ onBack, onConnect, onLoginWithInvite
                                         maxLength={8}
                                         selectionColor={COLORS.coral}
                                     />
-                                    {!!errorMessage && <Text style={styles.error}>{errorMessage}</Text>}
+                                    {!!errorMessage && <Text accessibilityLiveRegion="polite" style={[styles.error, setupPending && { color: COLORS.inkMuted }]}>{errorMessage}</Text>}
                                 </View>
 
                                 <TouchableOpacity
@@ -274,7 +281,7 @@ export default function Phase4PartnerCode({ onBack, onConnect, onLoginWithInvite
                                     activeOpacity={0.8}
                                 >
                                     <Text style={styles.actionBtnText}>
-                                        {matchLoading ? 'Checking code...' : 'Find my partner'}
+                                        {matchLoading ? 'Checking code...' : setupPending ? 'Check again' : 'Find my partner'}
                                     </Text>
                                     <ArrowRight color={COLORS.white} size={20} strokeWidth={2.5} />
                                 </TouchableOpacity>

@@ -1,11 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import { Asset } from 'expo-asset';
+import { File, Paths } from 'expo-file-system';
 
 import { API_BASE_URL } from '@/config/api';
+import { normalizeWidgetGender, selectPartnerWidgetPortraits } from './partner-widget-portraits';
 
 export type PartnerSurfaceStatus = 'connected' | 'no_partner' | 'stale';
 
 export type PartnerLivePayload = {
+  userGender?: string | null;
+  partnerGender?: string | null;
   userName: string;
   userKcal: number;
   userGoal: number;
@@ -27,14 +32,32 @@ const LAST_PARTNER_SURFACE_KEY = 'partner.surface.payload.v1';
 const DEFAULT_USER_NAME = 'You';
 const DEFAULT_PARTNER_NAME = 'Partner';
 const LIVE_ACTIVITY_TYPE = 'partner_surface';
-type PartnerKcalsWidgetSnapshot = {
+
+export type PartnerKcalsWidgetSnapshot = {
+  userGender?: string | null;
+  partnerGender?: string | null;
+  userName?: string;
+  userKcal?: number;
+  userGoal?: number;
+  partnerName?: string;
+  partnerKcal?: number;
+  partnerGoal?: number;
+  artworkUri?: string;
+  userPortraitUri?: string;
+  partnerPortraitUri?: string;
   title: string;
   subtitle: string;
   primaryLine: string;
   secondaryLine: string;
   status: string;
   staleReason: string;
+  // Older stored timelines may include these fields; the calorie widget ignores them.
+  motivationEyebrow?: string;
+  motivationTitle?: string;
+  motivationSentAt?: string;
+  motivationVariant?: string;
 };
+
 type PartnerKcalsWidgetController = {
   reload: () => void;
   updateSnapshot: (payload: PartnerKcalsWidgetSnapshot) => void;
@@ -137,6 +160,8 @@ export function buildPartnerLivePayload(
 ): PartnerLivePayload {
   return {
     userName: payload.userName?.trim() || DEFAULT_USER_NAME,
+    userGender: normalizeWidgetGender(payload.userGender),
+    partnerGender: normalizeWidgetGender(payload.partnerGender),
     userKcal: clampInt(payload.userKcal),
     userGoal: clampInt(payload.userGoal),
     userSteps: clampInt(payload.userSteps),
@@ -160,6 +185,8 @@ function mergePartnerLivePayload(
 
   return {
     ...next,
+    userGender: next.userGender === undefined ? current.userGender : next.userGender,
+    partnerGender: next.partnerGender === undefined ? current.partnerGender : next.partnerGender,
     userKcal: shouldPreferCurrentValue(current.userKcal, next.userKcal) ? current.userKcal : next.userKcal,
     userGoal: shouldPreferCurrentValue(current.userGoal, next.userGoal) ? current.userGoal : next.userGoal,
     userSteps: shouldPreferCurrentValue(current.userSteps, next.userSteps) ? current.userSteps : next.userSteps,
@@ -175,7 +202,15 @@ function mergePartnerLivePayload(
 }
 
 function toWidgetSnapshot(payload: PartnerLivePayload): PartnerKcalsWidgetSnapshot {
-  return {
+  const base: PartnerKcalsWidgetSnapshot = {
+    userName: payload.userName,
+    userGender: payload.userGender,
+    partnerGender: payload.partnerGender,
+    userKcal: payload.userKcal,
+    userGoal: payload.userGoal,
+    partnerName: payload.partnerName,
+    partnerKcal: payload.partnerKcal,
+    partnerGoal: payload.partnerGoal,
     title: 'Partner Kcals',
     subtitle: `Updated ${formatUpdatedAt(payload.updatedAt)}`,
     primaryLine: formatWidgetLine(payload.userName, payload.userKcal, payload.userGoal, payload.userSteps),
@@ -183,6 +218,53 @@ function toWidgetSnapshot(payload: PartnerLivePayload): PartnerKcalsWidgetSnapsh
     status: payload.status ?? 'connected',
     staleReason: payload.staleReason ?? '',
   };
+  return base;
+}
+
+type PartnerWidgetArtwork = { male?: string; female?: string };
+let partnerWidgetArtwork: Promise<PartnerWidgetArtwork> | undefined;
+
+export function getPartnerWidgetArtwork(): Promise<PartnerWidgetArtwork> {
+  if (!partnerWidgetArtwork) {
+    partnerWidgetArtwork = (async () => {
+      if (Platform.OS !== 'ios') return {};
+      // The extension cannot read the app sandbox. Keep its illustration in the shared group.
+      const shared = Paths.appleSharedContainers['group.au.com.msarim.theaicoach.widgets'];
+      if (!shared) return {};
+      const sources = [
+        { key: 'male' as const, name: 'partner-kcals-man-v2.png', module: require('../assets/widgets/partner-kcals-man-v2.png') },
+        { key: 'female' as const, name: 'partner-kcals-woman-v2.png', module: require('../assets/widgets/partner-kcals-woman-v2.png') },
+      ];
+      const portraits: PartnerWidgetArtwork = {};
+      for (const source of sources) {
+        const target = new File(shared, source.name);
+        if (!target.exists) {
+          const asset = await Asset.fromModule(source.module).downloadAsync();
+          if (!asset.localUri) continue;
+          new File(asset.localUri).copy(target);
+        }
+        portraits[source.key] = target.uri;
+      }
+      return portraits;
+    })().catch((error) => {
+      partnerWidgetArtwork = undefined;
+      console.warn('[PartnerSurface] Widget artwork unavailable:', error);
+      return {};
+    });
+  }
+  return partnerWidgetArtwork;
+}
+
+async function pushWidgetSnapshot(snapshot: PartnerKcalsWidgetSnapshot) {
+  const widget = getPartnerKcalsWidgetController();
+  if (!widget) return;
+  const portraits = await getPartnerWidgetArtwork();
+  try {
+    widget.updateSnapshot({ ...snapshot, ...selectPartnerWidgetPortraits(snapshot, portraits) });
+    widget.reload();
+  } catch (error) {
+    console.warn('[PartnerSurface] Failed to update widget snapshot:', error);
+  }
 }
 
 async function cachePayload(payload: PartnerLivePayload) {
@@ -291,15 +373,9 @@ export async function applyPartnerSurfacePayload(
   const normalized = options?.replaceExisting
     ? buildPartnerLivePayload(payload)
     : mergePartnerLivePayload(current, buildPartnerLivePayload(payload));
-  const widget = getPartnerKcalsWidgetController();
   const widgetSnapshot = toWidgetSnapshot(normalized);
 
-  try {
-    widget?.updateSnapshot(widgetSnapshot);
-    widget?.reload();
-  } catch (error) {
-    console.warn('[PartnerSurface] Failed to update widget snapshot:', error);
-  }
+  await pushWidgetSnapshot(widgetSnapshot);
   await cachePayload(normalized);
   await upsertLiveActivity(normalized, options?.accessToken);
 }

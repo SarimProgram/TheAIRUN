@@ -1,192 +1,48 @@
-import React, { useCallback, useState } from 'react';
-import {
-    ActivityIndicator,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
-} from 'react-native';
+import React, { useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Mail, MessageCircle, Send, Share2 } from 'lucide-react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { MessageCircle, Share2 } from 'lucide-react-native';
-import {
-    sharePartnerInviteVia,
-    type PartnerInviteShareChannel,
-} from '@/utils/partnerInviteShare';
+import { usePassColors } from '@/components/mealpass/passTheme';
+import { sharePartnerInviteVia, type PartnerInviteShareChannel } from '@/utils/partnerInviteShare';
 
-type ShareOption = {
-    channel: PartnerInviteShareChannel;
-    label: string;
-    icon: React.ReactNode;
-    iconBackground: string;
-};
+const OPTIONS = [
+  { channel: 'whatsapp', label: 'WhatsApp' },
+  { channel: 'sms', label: 'Messages' },
+  { channel: 'email', label: 'Email' },
+  { channel: 'telegram', label: 'Telegram' },
+  { channel: 'native', label: 'More' },
+] as const;
 
-type Props = {
-    message: string;
-    disabled?: boolean;
-};
-
-const SECONDARY_OPTIONS: ShareOption[] = [
-    {
-        channel: 'sms',
-        label: 'Messages',
-        icon: <MessageCircle size={20} color="#2563EB" strokeWidth={2.2} />,
-        iconBackground: '#EFF6FF',
-    },
-    {
-        channel: 'telegram',
-        label: 'Telegram',
-        icon: <Ionicons name="paper-plane-outline" size={19} color="#0088CC" />,
-        iconBackground: '#F0F9FF',
-    },
-    {
-        channel: 'native',
-        label: 'More',
-        icon: <Share2 size={20} color="#111827" strokeWidth={2.2} />,
-        iconBackground: '#F8FAFC',
-    },
-];
-
-export function PartnerInviteShareOptions({ message, disabled = false }: Props) {
-    const [activeChannel, setActiveChannel] = useState<PartnerInviteShareChannel | null>(null);
-    const isBusy = disabled || !!activeChannel || !message.trim();
-
-    const handleShare = useCallback(async (channel: PartnerInviteShareChannel) => {
-        if (!message.trim() || disabled || activeChannel) return;
-
-        setActiveChannel(channel);
-        try {
-            await sharePartnerInviteVia(channel, message);
-        } finally {
-            setActiveChannel(null);
-        }
-    }, [activeChannel, disabled, message]);
-
-    const whatsAppLoading = activeChannel === 'whatsapp';
-
-    return (
-        <View style={styles.container}>
-            <Text style={styles.sectionLabel}>Share via</Text>
-
-            <TouchableOpacity
-                style={[styles.primaryButton, isBusy && !whatsAppLoading && styles.optionDisabled]}
-                onPress={() => handleShare('whatsapp')}
-                disabled={isBusy}
-                activeOpacity={0.9}
-            >
-                <LinearGradient
-                    colors={['#25D366', '#128C7E']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.primaryGradient}
-                >
-                    {whatsAppLoading ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                        <>
-                            <Ionicons name="logo-whatsapp" size={22} color="#FFFFFF" />
-                            <Text style={styles.primaryText}>WhatsApp</Text>
-                        </>
-                    )}
-                </LinearGradient>
-            </TouchableOpacity>
-
-            <View style={styles.secondaryRow}>
-                {SECONDARY_OPTIONS.map((option) => {
-                    const isLoading = activeChannel === option.channel;
-
-                    return (
-                        <TouchableOpacity
-                            key={option.channel}
-                            style={[styles.secondaryTile, isBusy && styles.optionDisabled]}
-                            onPress={() => handleShare(option.channel)}
-                            disabled={isBusy}
-                            activeOpacity={0.85}
-                        >
-                            <View style={[styles.secondaryIconShell, { backgroundColor: option.iconBackground }]}>
-                                {isLoading ? (
-                                    <ActivityIndicator size="small" color="#64748B" />
-                                ) : (
-                                    option.icon
-                                )}
-                            </View>
-                            <Text style={styles.secondaryLabel}>{option.label}</Text>
-                        </TouchableOpacity>
-                    );
-                })}
-            </View>
-        </View>
-    );
+export function PartnerInviteShareOptions({ message, disabled = false }: { message: string; disabled?: boolean }) {
+  const c = usePassColors();
+  const [active, setActive] = useState<PartnerInviteShareChannel | null>(null);
+  const busy = disabled || !!active || !message.trim();
+  const share = async (channel: PartnerInviteShareChannel) => {
+    if (busy) return;
+    setActive(channel);
+    try { await sharePartnerInviteVia(channel, message); }
+    catch { Alert.alert('Unable to share', 'Please try another sharing option.'); }
+    finally { setActive(null); }
+  };
+  return <View style={s.root}>
+    <Text style={[s.heading, { color: c.muted }]}>Share your invitation</Text>
+    <View style={s.options}>
+      {OPTIONS.map(({ channel, label }) => {
+        const Icon = channel === 'sms' ? MessageCircle : channel === 'email' ? Mail : channel === 'telegram' ? Send : Share2;
+        return <Pressable key={channel} accessibilityRole="button" accessibilityLabel={`Share via ${label}`} accessibilityState={{ disabled: busy }}
+          onPress={() => { void share(channel); }} disabled={busy}
+          style={({ pressed }) => [s.option, { backgroundColor: c.soft, opacity: busy ? 0.5 : pressed ? 0.65 : 1 }]}>
+          {active === channel ? <ActivityIndicator color={c.ink} size="small" />
+            : channel === 'whatsapp' ? <Ionicons name="logo-whatsapp" size={21} color={c.ink} /> : <Icon size={20} color={c.ink} />}
+          <Text style={[s.label, { color: c.ink }]}>{label}</Text>
+        </Pressable>;
+      })}
+    </View>
+  </View>;
 }
-
-const styles = StyleSheet.create({
-    container: {
-        width: '100%',
-        gap: 12,
-    },
-    sectionLabel: {
-        fontSize: 12,
-        fontWeight: '800',
-        color: '#94A3B8',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-        textAlign: 'center',
-    },
-    primaryButton: {
-        borderRadius: 18,
-        borderCurve: 'continuous',
-        overflow: 'hidden',
-        shadowColor: '#128C7E',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.18,
-        shadowRadius: 14,
-        elevation: 4,
-    },
-    primaryGradient: {
-        minHeight: 56,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-        paddingHorizontal: 20,
-    },
-    primaryText: {
-        fontSize: 16,
-        fontWeight: '800',
-        color: '#FFFFFF',
-        letterSpacing: -0.2,
-    },
-    secondaryRow: {
-        flexDirection: 'row',
-        gap: 10,
-    },
-    secondaryTile: {
-        flex: 1,
-        alignItems: 'center',
-        gap: 8,
-        paddingVertical: 12,
-        paddingHorizontal: 8,
-        borderRadius: 18,
-        borderCurve: 'continuous',
-        backgroundColor: '#FFFFFF',
-        borderWidth: 1,
-        borderColor: '#F1F5F9',
-    },
-    secondaryIconShell: {
-        width: 44,
-        height: 44,
-        borderRadius: 14,
-        borderCurve: 'continuous',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    secondaryLabel: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#475569',
-        textAlign: 'center',
-    },
-    optionDisabled: {
-        opacity: 0.6,
-    },
+const s = StyleSheet.create({
+  root: { width: '100%', gap: 12 }, heading: { fontSize: 13, fontWeight: '600' },
+  options: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  option: { flexGrow: 1, flexBasis: '28%', minHeight: 72, padding: 12, gap: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 16, borderCurve: 'continuous' },
+  label: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
 });

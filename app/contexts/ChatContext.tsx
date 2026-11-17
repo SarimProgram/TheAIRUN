@@ -3,6 +3,9 @@ import { useAuth } from '@/src/auth/authContext';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config/api';
 import { getAccessToken } from '@/utils/authstorage';
+import { isBottleThrowMessage } from '@/utils/bottleThrowMessage';
+import { isMealPassMessage } from '@/utils/mealPassMessage';
+import { parseTugReminderMessage } from '@/utils/tugReminderMessage';
 
 export type ChatMessage = {
     id: string;
@@ -17,6 +20,7 @@ export type ChatMessage = {
 
 interface ChatContextType {
     connected: boolean;
+    historyLoaded: boolean;
     messages: ChatMessage[];
     sendMessage: (content: string) => void;
     chatError: string | null;
@@ -33,6 +37,7 @@ const ChatContext = createContext<ChatContextType | undefined>(undefined);
 export function ChatProvider({ children }: { children: React.ReactNode }) {
     const { isAuthenticated, authFetch } = useAuth();
     const [connected, setConnected] = useState(false);
+    const [historyLoaded, setHistoryLoaded] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [chatError, setChatError] = useState<string | null>(null);
     const [unreadCount, setUnreadCount] = useState(0);
@@ -134,6 +139,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             socket.on('disconnect', () => {
                 console.log('[ChatContext] Socket disconnected');
                 setConnected(false);
+                setHistoryLoaded(false);
             });
             
             socket.on('chat:message', (msg: ChatMessage) => {
@@ -195,6 +201,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             socket.on('chat:history:response', (data: { messages: ChatMessage[] }) => {
                 console.log('[ChatContext] History received:', data.messages.length);
                 setMessages(data.messages);
+                setHistoryLoaded(true);
                 if (isViewingChatRef.current) {
                     requestMessageViews(data.messages, currentUserIdRef.current);
                 }
@@ -212,6 +219,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             requestedViewIds.clear();
             if (cleanupTimerRef.current) clearInterval(cleanupTimerRef.current);
             setConnected(false);
+            setHistoryLoaded(false);
             setMessages([]);
         };
     }, [isAuthenticated, cleanExpiredMessages, requestMessageViews]);
@@ -224,6 +232,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         // Prevent notifying for self or already notified messages
         if (latest.id !== lastNotifiedMsgId.current && latest.fromUserId !== currentUserId) {
             lastNotifiedMsgId.current = latest.id;
+
+            // The flying bottle overlay is this message's notification.
+            if (isBottleThrowMessage(latest.content) || parseTugReminderMessage(latest.content) || isMealPassMessage(latest.content)) return;
             
             // Only notify if we aren't already looking at the chat
             if (!isViewingChat) {
@@ -275,6 +286,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return (
         <ChatContext.Provider value={{
             connected,
+            historyLoaded,
             messages,
             sendMessage,
             chatError,

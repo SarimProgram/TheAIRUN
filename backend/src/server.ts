@@ -3,11 +3,13 @@ import app from './app';
 import { env } from './config/env';
 import prisma from './db/prisma';
 import { initializeSocket } from './socket';
+import { startWorkoutPhotoMaintenance } from './services/workoutPhotoMaintenance';
 
 async function start() {
   try {
     await prisma.$queryRaw`SELECT 1`;
     console.log('Database connection successful');
+    startWorkoutPhotoMaintenance();
   } catch (err) {
     console.error('Database connection failed:', err);
     process.exit(1);

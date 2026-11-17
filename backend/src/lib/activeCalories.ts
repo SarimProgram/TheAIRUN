@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import prisma from '../db/prisma';
 import { estimateBmrKcal } from '../services/planning/planDuration';
+import { calculateCaloriesRemaining } from './energyBalance';
 
 export const REFERENCE_WEIGHT_KG = 70;
 /** ~40 kcal per 1,000 steps at 70 kg */
@@ -235,6 +236,7 @@ export async function refreshDailyActiveCalories(
             where: { id: summary.id },
             data: {
                 netCalories: summary.consumedCalories - (restingCalories + breakdown.activeCalories),
+                caloriesRemaining: calculateCaloriesRemaining(summary.calorieTarget, breakdown.activeCalories, summary.consumedCalories),
             },
         });
     }

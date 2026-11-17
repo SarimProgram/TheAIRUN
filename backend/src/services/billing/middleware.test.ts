@@ -10,6 +10,7 @@ test('allows authenticated unpaid users only through invitation routes', () => {
 
   assert.equal(isUnpaidPartnerInvitationRoute('POST', '/invite'), true);
   assert.equal(isUnpaidPartnerInvitationRoute('POST', '/invite/'), true);
+  assert.equal(isUnpaidPartnerInvitationRoute('POST', '/invite/code'), true);
   assert.equal(isUnpaidPartnerInvitationRoute('DELETE', '/invites/abc'), false);
   assert.equal(isUnpaidPartnerInvitationRoute('GET', '/'), false);
   assert.equal(isUnpaidPartnerInvitationRoute('POST', '/disconnect'), false);

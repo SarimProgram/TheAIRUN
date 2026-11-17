@@ -29,6 +29,8 @@ const WEEK_POINTS = {
 } as const;
 
 const REWARD_MAP: Record<string, RewardSeed> = {
+  massage: { title: 'Massage', category: 'Romantic', emoji: '\u{1F486}', colorFrom: '#FFE4E6', colorTo: '#FF6B6B' },
+  cook: { title: 'Cook a treat', category: 'Fun', emoji: '\u{1F468}\u200D\u{1F373}', colorFrom: '#FFE4E6', colorTo: '#FF6B6B' },
   coffee: { title: 'Coffee / Treat', category: 'Fun', emoji: '\u2615', colorFrom: '#FDE68A', colorTo: '#F59E0B' },
   movie: { title: 'Movie Night', category: 'Fun', emoji: '\u{1F3AC}', colorFrom: '#C4B5FD', colorTo: '#8B5CF6' },
   gift: { title: 'Surprise Gift', category: 'Romantic', emoji: '\u{1F381}', colorFrom: '#FBCFE8', colorTo: '#F472B6' },
@@ -37,6 +39,22 @@ const REWARD_MAP: Record<string, RewardSeed> = {
   trophy: { title: 'Bigger Prize', category: 'Fun', emoji: '\u{1F3C6}', colorFrom: '#BFDBFE', colorTo: '#3B82F6' },
   custom: { title: 'Custom Reward', category: 'Fun', emoji: '\u2728', colorFrom: '#E0E7FF', colorTo: '#6366F1' },
 };
+
+function resolveReward(rewardId: string): RewardSeed | null {
+  if (Object.prototype.hasOwnProperty.call(REWARD_MAP, rewardId)) return REWARD_MAP[rewardId];
+  if (rewardId.startsWith('custom:')) {
+    const title = rewardId.slice(7).trim();
+    if (!title || title.length > 40) return null;
+    return { ...REWARD_MAP.custom, title, colorFrom: '#FFE4E6', colorTo: '#FF6B6B' };
+  }
+  if (rewardId.startsWith('money:')) {
+    const amount = rewardId.slice(6);
+    const value = Number(amount);
+    if (!/^\d+(\.\d{1,2})?$/.test(amount) || value <= 0 || value > 99999) return null;
+    return { title: `$${value.toLocaleString('en-AU', { minimumFractionDigits: value % 1 ? 2 : 0, maximumFractionDigits: 2 })} money reward`, category: 'Fun', emoji: '\u{1F4B5}', colorFrom: '#FFE4E6', colorTo: '#FF6B6B' };
+  }
+  return null;
+}
 
 function getPairKey(userAId: string, userBId: string): string {
   return [userAId, userBId].sort((a, b) => a.localeCompare(b)).join(':');
@@ -48,7 +66,7 @@ export function normalizePhase16Selections(selections: Phase16Selections): Norma
   const costsByReward = new Map<string, number>();
   (Object.keys(WEEK_POINTS) as Array<keyof typeof WEEK_POINTS>).forEach((weekKey) => {
     const rewardId = selections[weekKey];
-    if (!rewardId || !REWARD_MAP[rewardId]) return;
+    if (!rewardId || !resolveReward(rewardId)) return;
 
     const points = WEEK_POINTS[weekKey];
     const existing = costsByReward.get(rewardId);
@@ -61,7 +79,7 @@ export function normalizePhase16Selections(selections: Phase16Selections): Norma
 }
 
 export function rewardIdToMarketplaceSeed(rewardId: string, cost: number) {
-  const reward = REWARD_MAP[rewardId];
+  const reward = resolveReward(rewardId);
   if (!reward) return null;
 
   return {

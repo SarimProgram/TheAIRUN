@@ -12,6 +12,7 @@ import {
 import { buildPartnerLivePayloadForUser, pushPartnerSurfaceUpdateForChangedUser } from '../lib/partnerSurface';
 import { requireStringParam } from '../utils/params';
 import { z } from 'zod';
+import { calculateCaloriesRemaining } from '../lib/energyBalance';
 import { applyWorkoutPaceSample } from '../services/pacePersonalisation';
 import {
     computeActiveCalories,
@@ -25,6 +26,9 @@ const router = Router();
 import { prisma } from '../db/prisma';
 
 const createWorkoutSchema = z.object({
+    timezone: z.string().max(100).refine(value => {
+        try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
+    }).optional(),
     clientId: z.string().min(1).max(100).optional(),
     type: z.enum(['RUN', 'WALK', 'INTERVAL', 'GYM', 'CYCLING', 'SWIMMING', 'OTHER']),
     source: z.enum(['MANUAL', 'APP_TRACKED', 'APPLE_HEALTH', 'GOOGLE_FIT']).default('MANUAL'),
@@ -175,7 +179,10 @@ router.get('/today', authMiddleware, async (req: AuthRequest, res: Response) => 
             summary = await syncDailySummaryTargetsFromPlan(userId, dayKey) ?? summary;
         }
 
-        res.json(summary);
+        res.json({
+            ...summary,
+            caloriesRemaining: calculateCaloriesRemaining(summary.calorieTarget, summary.activeCalories, summary.consumedCalories),
+        });
     } catch (error) {
         console.error('Error fetching daily summary:', error);
         res.status(500).json({ error: 'Failed to fetch daily summary', details: String(error) });
@@ -231,7 +238,7 @@ router.patch('/today', authMiddleware, async (req: AuthRequest, res: Response) =
             where: { id: summary.id },
             data: {
                 totalBurnedCalories: summary.restingCalories + summary.activeCalories,
-                caloriesRemaining: summary.calorieTarget - summary.consumedCalories,
+                caloriesRemaining: calculateCaloriesRemaining(summary.calorieTarget, summary.activeCalories, summary.consumedCalories),
                 netCalories: summary.consumedCalories - (summary.restingCalories + summary.activeCalories)
             }
         });
@@ -883,7 +890,7 @@ router.post('/recalculate', authMiddleware, async (req: AuthRequest, res: Respon
             where: { id: summary.id },
             data: {
                 totalBurnedCalories: restingCalories + activeCalories,
-                caloriesRemaining: calorieTarget - consumedCalories,
+                caloriesRemaining: calculateCaloriesRemaining(calorieTarget, activeCalories, consumedCalories),
                 netCalories: consumedCalories - (restingCalories + activeCalories)
             }
         });
@@ -1103,8 +1110,9 @@ router.post('/workouts', authMiddleware, async (req: AuthRequest, res: Response)
             burnProfile.weightKg,
         );
 
+        const workoutTimezone = body.timezone || await getUserTimezone(userId);
         const result = await prisma.$transaction(async (tx) => {
-            const dayKey = getDayKey(body.startedAt);
+            const dayKey = getDayKey(body.startedAt, workoutTimezone);
             const workout = await (tx as any).workoutSession.create({
                 data: {
                     userId,
@@ -1634,7 +1642,10 @@ router.patch('/run-status', authMiddleware, async (req: AuthRequest, res: Respon
             create: { userId, dayKey, runStatus }
         });
 
-        res.json(summary);
+        res.json({
+            ...summary,
+            caloriesRemaining: calculateCaloriesRemaining(summary.calorieTarget, summary.activeCalories, summary.consumedCalories),
+        });
     } catch (error) {
         console.error('Error updating run status:', error);
         res.status(500).json({ error: 'Failed to update run status' });
@@ -1678,7 +1689,15 @@ router.get('/nutrition-history', authMiddleware, async (req: AuthRequest, res: R
             caloriesByDay.set(dayKey, (caloriesByDay.get(dayKey) || 0) + (meal.totalCalories || 0));
         }
 
-        const history: { day: string; calories: number }[] = [];
+        const summaries = await prisma.dailySummary.findMany({
+            where: {
+                userId,
+                dayKey: { gte: formatDayKeyUTC(weekStart), lt: formatDayKeyUTC(weekEndExclusive) },
+            },
+            select: { dayKey: true, calorieTarget: true },
+        });
+        const targetsByDay = new Map(summaries.map(summary => [summary.dayKey, summary.calorieTarget]));
+        const history: { day: string; calories: number; calorieTarget: number | null }[] = [];
         for (let i = 0; i < 7; i++) {
             const date = new Date(weekStart);
             date.setUTCDate(weekStart.getUTCDate() + i);
@@ -1686,7 +1705,8 @@ router.get('/nutrition-history', authMiddleware, async (req: AuthRequest, res: R
 
             history.push({
                 day: dayKey,
-                calories: caloriesByDay.get(dayKey) ?? 0
+                calories: caloriesByDay.get(dayKey) ?? 0,
+                calorieTarget: targetsByDay.get(dayKey) ?? null,
             });
         }
         
@@ -1718,7 +1738,10 @@ router.get('/:dayKey', authMiddleware, async (req: AuthRequest, res: Response) =
             return res.status(404).json({ error: 'No summary found for this date' });
         }
 
-        res.json(summary);
+        res.json({
+            ...summary,
+            caloriesRemaining: calculateCaloriesRemaining(summary.calorieTarget, summary.activeCalories, summary.consumedCalories),
+        });
     } catch (error) {
         console.error('Error fetching summary:', error);
         res.status(500).json({ error: 'Failed to fetch summary' });

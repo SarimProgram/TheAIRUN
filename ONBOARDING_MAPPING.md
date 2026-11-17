@@ -24,8 +24,8 @@ This document outlines how the user selections in the **Running** and **Weight L
 | `timeline` | `moderate` | `timeHorizon` / `targetDate` | `timeHorizon`: "STANDARD" <br> `targetDate`: Current + calculated weeks |
 | `timeline` | `aggressive` | `timeHorizon` / `targetDate` | `timeHorizon`: "AGGRESSIVE" <br> `targetDate`: Current + calculated weeks |
 | `timeline` | `custom` | `timeHorizon` / `targetDate` | `timeHorizon`: "SPECIFIC_DATE" <br> `targetDate`: Specific user selection |
-| `trainingStyle` | `walkOnly`, `runOnly`, `walkAndRun` | `trainingStyle` | Direct string ID |
-| `raceTraining` | `yes`, `no` | `hasRaceGoal` | Boolean: `true` if "yes" |
+| `trainingStyle` | `workout`, `runOnly`, `walkOnly`, `walkAndRun` | `trainingStyle` | Direct string ID |
+| `raceTraining` | `yes`, `no` | `hasRaceGoal` | Boolean: `true` if "yes". Skipped for `walkOnly` and `workout` |
 | `bodyType` | `hourglass`, `pear`, `apple`, `athletic` | `bodyType` | Direct string ID |
 
 ---

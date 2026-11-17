@@ -1,15 +1,12 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Platform } from 'react-native';
+import { Appearance, Platform } from 'react-native';
 import { enableFreeze } from 'react-native-screens';
 
-enableFreeze(true);
-
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthProvider, useAuth } from '@/src/auth/authContext'; // adjust if your path differs
 import { syncPendingRuns } from '@/lib/run-storage';
 import { TabBarProvider } from '@/contexts/TabBarContext';
@@ -19,6 +16,12 @@ import PushNotificationRegistrar from '@/components/chat/PushNotificationRegistr
 import LocalNotificationScheduler from '@/components/notifications/LocalNotificationScheduler';
 import NotificationPermissionBootstrap from '@/components/notifications/NotificationPermissionBootstrap';
 import PartnerSurfaceRegistrar from '@/components/partner/PartnerSurfaceRegistrar';
+import WaterWidgetRegistrar from '@/components/home/WaterWidgetRegistrar';
+import DailyRewardCelebration from '@/components/home/DailyRewardCelebration';
+import BottleCatchOverlay from '@/components/partner/BottleCatchOverlay';
+import MealPassOverlay from '@/components/mealpass/MealPassOverlay';
+import { PendingTrainingScheduleRedirect } from '@/components/plan/PendingTrainingScheduleRedirect';
+import TugReminderOverlay from '@/components/partner/TugReminderOverlay';
 import { EntitlementProvider, useEntitlement } from '@/src/billing';
 import { RaceSocketProvider } from '@/contexts/RaceSocketContext';
 import GlobalRaceInviteOverlay from '@/components/race/GlobalRaceInviteOverlay';
@@ -32,6 +35,12 @@ import {
 } from '@/src/onboarding/checkpoint';
 
 import { registerBackgroundStepSync } from '../tasks/backgroundStepSync';
+
+enableFreeze(true);
+
+if (Platform.OS !== 'web') {
+  Appearance.setColorScheme('light');
+}
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -183,8 +192,6 @@ function ScreenAnalytics() {
 }
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
-
   // Register background step sync task on app start
   useEffect(() => {
     let cancelled = false;
@@ -201,6 +208,15 @@ export default function RootLayout() {
         require('../widgets/PartnerLiveActivity');
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         require('../widgets/LogActionWidget');
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('../widgets/WaterWidget');
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('../widgets/PlaceholderWidgets');
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('../widgets/WhiteboardWidget');
+        // Registers the layout the widget extension renders when the server push-starts a bottle card.
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('../widgets/BottleLiveActivity');
       } catch (error) {
         console.warn('[RootLayout] Native widgets unavailable in this runtime:', error);
       }
@@ -242,16 +258,24 @@ export default function RootLayout() {
               <TabBarProvider>
                 <SyncRunsOnAppOpen />
                 <PaywallRouteGuard />
+                <PendingTrainingScheduleRedirect />
                 <UnauthenticatedEntryRedirect />
                 <ScreenAnalytics />
-                <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+                <ThemeProvider value={DefaultTheme}>
                   <Stack>
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                     <Stack.Screen name="paywall" options={{ headerShown: false }} />
                     <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+                    <Stack.Screen name="reset-plan" options={{ presentation: 'modal', title: 'Reset plan', headerShown: true }} />
+                    <Stack.Screen name="workout" options={{ headerShown: true, title: 'Workout' }} />
+                    <Stack.Screen name="workout-schedule" options={{ presentation: 'formSheet', sheetAllowedDetents: [0.85, 1], sheetGrabberVisible: true, title: 'Workout days', headerShown: true }} />
+                    <Stack.Screen name="home" options={{ headerShown: false }} />
                     <Stack.Screen name="welcome" options={{ headerShown: false }} />
+                    <Stack.Screen name="customize-plan" options={{ headerShown: true, title: 'Your training week' }} />
                     <Stack.Screen name="runs/allruns" options={{ headerShown: false }} />
                     <Stack.Screen name="runs/easyrun" options={{ headerShown: false }} />
+                    <Stack.Screen name="race/virtual" options={{ headerShown: false }} />
+                    <Stack.Screen name="race/couple-steps" options={{ headerShown: false }} />
                     <Stack.Screen name="race/history" options={{ headerShown: false }} />
                     <Stack.Screen name="chat-fullscreen" options={{ headerShown: false }} />
                     <Stack.Screen name="remaining-steps" options={{ headerShown: false }} />
@@ -265,10 +289,15 @@ export default function RootLayout() {
                   <PushNotificationRegistrar />
                   <NotificationPermissionBootstrap />
                   <PartnerSurfaceRegistrar />
+                  <WaterWidgetRegistrar />
+                  <BottleCatchOverlay />
+                  <MealPassOverlay />
+                  <TugReminderOverlay />
                   <LocalNotificationScheduler />
                   <GlobalChatNotification />
                   <GlobalRaceInviteOverlay />
-                  <StatusBar style="auto" />
+                  <DailyRewardCelebration />
+                  <StatusBar style="dark" />
                 </ThemeProvider>
               </TabBarProvider>
             </ChatProvider>

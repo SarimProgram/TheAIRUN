@@ -4,6 +4,7 @@ import prisma from '../db/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { presentUser } from './presenters';
 import { mergeNotificationPreferences, normalizeNotificationPreferences } from '../lib/notificationPreferences';
+import { createFeedToken, hashFeedToken, PARTNER_FOOD_WIDGET_KIND } from '../lib/partnerFoodWidget';
 import {
   ensurePaceProfile,
   presentPaceProfile,
@@ -45,6 +46,9 @@ const liveActivityTokenSchema = z.object({
   pushToken: z.string().min(1).max(512),
   activityInstanceId: z.string().min(1).max(255).optional().nullable(),
   partnerId: z.string().uuid().optional().nullable(),
+});
+const liveActivityStartTokenSchema = z.object({
+  token: z.string().min(1).max(512),
 });
 const deleteLiveActivityTokenSchema = z.object({
   activityType: z.string().min(1).max(64).optional(),
@@ -322,6 +326,82 @@ router.delete('/live-activity-token', async (req: AuthRequest, res, next) => {
       data: {
         endedAt: new Date(),
       },
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/live-activity-start-token', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+
+    const { token } = liveActivityStartTokenSchema.parse(req.body);
+
+    // A push-to-start token belongs to one device; drop it from any other account that signed in there before.
+    await (prisma as any).user.updateMany({
+      where: { liveActivityStartToken: token, NOT: { id: req.user.id } },
+      data: { liveActivityStartToken: null, liveActivityStartTokenUpdatedAt: null },
+    });
+    await (prisma as any).user.update({
+      where: { id: req.user.id },
+      data: { liveActivityStartToken: token, liveActivityStartTokenUpdatedAt: new Date() },
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.delete('/live-activity-start-token', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+
+    await (prisma as any).user.update({
+      where: { id: req.user.id },
+      data: { liveActivityStartToken: null, liveActivityStartTokenUpdatedAt: null },
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const widgetPushTokenSchema = z.object({
+  kind: z.literal(PARTNER_FOOD_WIDGET_KIND),
+  pushToken: z.string().regex(/^[0-9a-f]{16,200}$/i),
+});
+
+/** Registers a WidgetKit push token and returns a fresh feed token for the widget extension (shown once). */
+router.post('/widget-push-token', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+
+    const { kind, pushToken } = widgetPushTokenSchema.parse(req.body);
+    const feedToken = createFeedToken();
+    await prisma.widgetPushDevice.upsert({
+      where: { pushToken },
+      update: { userId: req.user.id, kind, feedTokenHash: hashFeedToken(feedToken) },
+      create: { userId: req.user.id, kind, pushToken, feedTokenHash: hashFeedToken(feedToken) },
+    });
+
+    return res.json({ feedToken, feedPath: '/widgets/partner-food', pushTokenPath: '/widgets/push-token' });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.delete('/widget-push-token', async (req: AuthRequest, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+
+    const body = z.object({ pushToken: z.string().optional() }).safeParse(req.body ?? {});
+    await prisma.widgetPushDevice.deleteMany({
+      where: { userId: req.user.id, ...(body.success && body.data.pushToken ? { pushToken: body.data.pushToken } : {}) },
     });
 
     return res.json({ ok: true });

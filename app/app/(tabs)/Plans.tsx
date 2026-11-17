@@ -5,16 +5,17 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   Dimensions,
   ActivityIndicator,
   Modal,
+  Platform,
   PanResponder,
   Alert,
   InteractionManager,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaProvider, SafeAreaView as SafeAreaContextView } from 'react-native-safe-area-context';
 import {
   Footprints, Flame, X,
   Sun, Sunset, Moon, Check, Zap, Activity, ChevronDown, ChevronUp, Plus
@@ -30,8 +31,16 @@ import { useTabBar } from '../../contexts/TabBarContext';
 
 // Components
 import { PlanWeeklyTab, WeekPlan, type ManualAdjustDirection } from '../../components/plan/PlanWeeklyTab';
+import { PlansDashboard } from '../../components/plan/PlansDashboard';
+import { PlanGenderProvider, usePlanColors } from '../../components/plan/PlanVisuals';
 import { MobilityExercises } from '../../components/plan/MobilityExercises';
+import { getRecommendedWorkout } from '../../components/plan/workoutCatalog';
+import { GymSession } from '../../components/plan/GymSession';
+import { useWorkoutPhotos } from '../../hooks/useWorkoutPhotos';
+import { useWorkoutOverview } from '../../hooks/useWorkoutOverview';
+import { getTrainingSchedule } from '../../utils/trainingSchedule';
 import { useDailyPoints } from '../../hooks/useDailyPoints';
+import { useAutomaticDailyRewards } from '../../hooks/useAutomaticDailyRewards';
 import { PointsProgressCard } from '../../components/plan/PointsProgressCard';
 import { getDateForPlanWeekDay, getMappedDays } from '../../utils/planProjection';
 import { getRunMeta, getPlanSessionStartLabel } from '../../constants/runDetails';
@@ -119,6 +128,10 @@ type TrainingPlanSession = {
 export default function TimelinePlanScreen() {
   const { authFetch, isAuthenticated, accessToken, user } = useAuth();
   const router = useRouter();
+  const [workoutInitialDetail, setWorkoutInitialDetail] = useState(false);
+  const [gymVisible, setGymVisible] = useState(false);
+  const workoutPhotos = useWorkoutPhotos(user?.partnerId ?? null);
+  const workoutOverview = useWorkoutOverview();
   const params = useLocalSearchParams<{ action?: string }>();
 
   // Selected date state (defaults to today)
@@ -141,7 +154,7 @@ export default function TimelinePlanScreen() {
 
   // Fetch real daily summary data from backend for selected date
   const selectedDayKey = formatDayKey(selectedDate);
-  const { summary, loading: summaryLoading, refetch: refetchSummary } = useDailySummary({
+  const { summary, loading: summaryLoading, refetch: refetchSummary, error: summaryError } = useDailySummary({
     accessToken,
     dayKey: isToday ? undefined : selectedDayKey // Use today endpoint for today, specific date otherwise
   });
@@ -159,6 +172,12 @@ export default function TimelinePlanScreen() {
   const [scheduleUpdating, setScheduleUpdating] = useState(false);
   const [adjustingPlan, setAdjustingPlan] = useState(false);
   const [showWeeklyModal, setShowWeeklyModal] = useState(false);
+  const pendingPlanResetRef = useRef(false);
+  const openPendingPlanReset = () => {
+    if (!pendingPlanResetRef.current) return;
+    pendingPlanResetRef.current = false;
+    router.push('/reset-plan');
+  };
   const [selectedWeek, setSelectedWeek] = useState<WeekPlan | null>(null);
   const [mobilityModalVisible, setMobilityModalVisible] = useState(false);
   const [showRunDetails, setShowRunDetails] = useState(false);
@@ -181,6 +200,7 @@ export default function TimelinePlanScreen() {
   const [userGender, setUserGender] = useState<string | null>(
     typeof user?.gender === 'string' ? user.gender : null
   );
+  const planColors = usePlanColors(userGender);
   const hasLoadedTrainingTimePreference = useRef(false);
   const { setTabBarVisible } = useTabBar();
   const isPlansFocused = useIsFocused();
@@ -493,15 +513,18 @@ export default function TimelinePlanScreen() {
       const data = await response.json();
       const plan = data?.plan;
       if (plan) {
+        if (plan.weekStartedAt) {
+          const start = new Date(plan.weekStartedAt);
+          setPlanStartDate((previous) => previous?.getTime() === start.getTime() ? previous : start);
+        }
         if (typeof plan.goalType === 'string') {
           setPlanGoalType(plan.goalType);
         }
         if (typeof plan.weightKg === 'number' && Number.isFinite(plan.weightKg)) {
           setPlanStartingWeightKg(plan.weightKg);
         }
-        if (typeof plan.targetWeightKg === 'number' && Number.isFinite(plan.targetWeightKg)) {
-          setPlanTargetWeightKg(plan.targetWeightKg);
-        }
+        setPlanTargetWeightKg(typeof plan.targetWeightKg === 'number' && Number.isFinite(plan.targetWeightKg)
+          ? plan.targetWeightKg : null);
       }
       const planDays = Array.isArray(plan?.availableDays) ? plan.availableDays : null;
       if (planDays?.length) {
@@ -659,9 +682,9 @@ export default function TimelinePlanScreen() {
       
       // Calculate and set initial week from start date (only once)
       // TrainingPlan model uses `createdAt` — there is no `startDate` field
-      if (data?.plan?.createdAt) {
+      if (data?.plan?.createdAt && !weekResponse.ok) {
         const start = new Date(data.plan.createdAt);
-        setPlanStartDate(start);
+        setPlanStartDate((previous) => previous?.getTime() === start.getTime() ? previous : start);
         
         if (!currentWeekAnchorDateRef.current) {
           const today = new Date();
@@ -673,12 +696,14 @@ export default function TimelinePlanScreen() {
       }
 
       const sessions = data?.plan?.sessions as TrainingPlanSession[] | undefined;
-      setAllPlanSessions(Array.isArray(sessions) ? sessions : []);
+      const sessionsMatchPlan = !planStartDate || !data?.plan?.createdAt
+        || new Date(data.plan.createdAt).getTime() >= planStartDate.getTime();
+      setAllPlanSessions(sessionsMatchPlan && Array.isArray(sessions) ? sessions : []);
     } catch (err) {
       console.error('Error fetching training plan sessions', err);
       setAllPlanSessions([]);
     }
-  }, [authFetch, isAuthenticated, calculateWeekFromAnchor, calculateWeekNum, selectedDate]);
+  }, [authFetch, isAuthenticated, calculateWeekFromAnchor, calculateWeekNum, selectedDate, planStartDate]);
 
   // Filter sessions by currentWeek reactively (no re-fetch needed)
   const trainingPlanWeekSessions = useMemo(() => {
@@ -797,6 +822,23 @@ export default function TimelinePlanScreen() {
     const currentWeekPlan = weeklyPlan.find(w => w.Week === currentWeek);
     return currentWeekPlan ? getMappedDays(currentWeekPlan, availableDays) : [];
   }, [weeklyPlan, currentWeek, availableDays]);
+  const structuredSchedule = getTrainingSchedule(weeklyPlan.find(week => week.Week === currentWeek)?.['Week Dailys']);
+  const scheduledWorkoutPreference = projectedDays.find(day => day.dayIdx === selectedDayOfWeek)?.workoutPreference;
+  const scheduledWorkoutId = projectedDays.find(day => day.dayIdx === selectedDayOfWeek)?.workoutId;
+  const recommendedWorkout = scheduledWorkoutPreference && scheduledWorkoutPreference !== 'gym'
+    ? getRecommendedWorkout(scheduledWorkoutPreference, currentWeek, scheduledWorkoutId, selectedDayOfWeek) : undefined;
+  const proofCompleted = !!workoutPhotos.mine.completedDays?.includes(selectedDayKey)
+    || workoutPhotos.photos.some(photo => photo.authorUserId === user?.id && photo.dayKey === selectedDayKey);
+  const workoutCompleted = mobilityCompleted || proofCompleted || !!workoutOverview.data?.mine.completedDays.includes(selectedDayKey);
+
+  useEffect(() => {
+    if (!structuredSchedule || !user?.id) return;
+    let active = true;
+    setMobilityCompleted(false);
+    AsyncStorage.getItem(`scheduled_workout_complete_v1:${user.id}:${planStartDate?.toISOString() ?? 'current'}:${selectedDayKey}`)
+      .then(value => { if (active) setMobilityCompleted(value === '1'); }).catch(() => {});
+    return () => { active = false; };
+  }, [!!structuredSchedule, selectedDayKey, user?.id, planStartDate]);
 
   const sessionMapByDay = useMemo(() => {
     const mapped: Record<number, TrainingPlanSession> = {};
@@ -824,7 +866,8 @@ export default function TimelinePlanScreen() {
 
   const projectedRunInfo = useMemo(() => {
     const projectedDay = projectedDays.find(d => d.dayIdx === selectedDayOfWeek);
-    const mappedSession = sessionMapByDay[selectedDayOfWeek];
+    // New schedules prescribe exact distances independently of older run templates.
+    const mappedSession = structuredSchedule ? undefined : sessionMapByDay[selectedDayOfWeek];
     
     // We prioritize the projection (what the user sees in the Weekly Tab) 
     // but keep the sessionId from the actual backend target if available.
@@ -834,7 +877,7 @@ export default function TimelinePlanScreen() {
       runType: projectedDay?.runType || null,
       sessionId: mappedSession?.id || todayTarget?.sessionId || null
     };
-  }, [projectedDays, selectedDayOfWeek, sessionMapByDay, todayTarget]);
+  }, [projectedDays, selectedDayOfWeek, sessionMapByDay, todayTarget, structuredSchedule]);
 
   const projectedTodayTarget = useMemo(() => {
     const projectedDay = projectedDays.find(d => d.dayIdx === selectedDayOfWeek);
@@ -856,13 +899,13 @@ export default function TimelinePlanScreen() {
     const stepsProg = totalDailySteps > 0 ? Math.min(totalStepsCurrent / totalDailySteps, 1) : 0;
     const calsProg = totalDailyCalories > 0 ? Math.min(totalCalsCurrent / totalDailyCalories, 1) : 0;
     const waterProg = totalDailyWater > 0 ? Math.min(waterActual / totalDailyWater, 1) : 0;
-    const mobilityProg = mobilityCompleted ? 1 : 0;
+    const mobilityProg = (structuredSchedule ? workoutCompleted : mobilityCompleted) ? 1 : 0;
     const distanceActual = summary?.distanceKm || 0;
     const runProg = (isRunDay && runKmTarget > 0) ? Math.min(distanceActual / runKmTarget, 1) : 0;
 
     return {
       isRunDay,
-      hasMobility: true,
+      hasMobility: structuredSchedule ? !!scheduledWorkoutPreference : true,
       hasHydration: true,
       stepsProgress: stepsProg,
       caloriesProgress: calsProg,
@@ -870,11 +913,13 @@ export default function TimelinePlanScreen() {
       mobilityProgress: mobilityProg,
       walkRunProgress: runProg,
     };
-  }, [projectedRunInfo, totalStepsCurrent, totalDailySteps, totalCalsCurrent, totalDailyCalories, waterActual, totalDailyWater, mobilityCompleted, summary]);
+  }, [projectedRunInfo, totalStepsCurrent, totalDailySteps, totalCalsCurrent, totalDailyCalories, waterActual, totalDailyWater, mobilityCompleted, summary, structuredSchedule, scheduledWorkoutPreference, workoutCompleted]);
 
   const {
     categories: pointCategories,
     totalMaxPoints,
+    loading: pointsLoading,
+    error: pointsError,
     claimPoints,
     refetch: refetchPoints
   } = useDailyPoints({
@@ -884,7 +929,7 @@ export default function TimelinePlanScreen() {
   });
 
   const displayPointCategories = useMemo(() => {
-    const calorieLowerBound = totalDailyCalories * 0.9;
+    const calorieLowerBound = Math.ceil(totalDailyCalories * 0.7);
     const caloriesWithinTargetRange = totalCalsCurrent >= calorieLowerBound && totalCalsCurrent <= totalDailyCalories;
     const calorieMin = Math.round(calorieLowerBound);
     const calorieMax = Math.round(totalDailyCalories);
@@ -936,16 +981,23 @@ export default function TimelinePlanScreen() {
       if (category.key === 'MOBILITY') {
         return {
           ...category,
-          metricText: mobilityCompleted ? 'Done' : 'Start workout',
+          metricText: (structuredSchedule ? workoutCompleted : mobilityCompleted) ? 'Done' : 'Start workout',
           info: 'Complete your exercise session today to earn these points.',
         };
       }
 
       return category;
     });
-  }, [pointCategories, totalCalsCurrent, totalDailyCalories, totalStepsCurrent, totalDailySteps, summary, projectedRunInfo, waterActual, mobilityCompleted]);
+  }, [pointCategories, totalCalsCurrent, totalDailyCalories, totalStepsCurrent, totalDailySteps, summary, projectedRunInfo, waterActual, mobilityCompleted, structuredSchedule, workoutCompleted]);
 
   const runMeta = useMemo(() => getRunMeta(projectedRunInfo.runType), [projectedRunInfo.runType]);
+  useAutomaticDailyRewards({
+    accessToken,
+    dayKey: selectedDayKey,
+    categories: displayPointCategories,
+    enabled: isToday && !summaryLoading && !summaryError && !pointsLoading && !pointsError,
+    claimPoints,
+  });
   const runInfo = runMeta.details;
   const paceTargetKey = getPaceTargetKey(projectedRunInfo.runType);
   const supportsPersonalPace = paceTargetKey !== null;
@@ -997,6 +1049,12 @@ export default function TimelinePlanScreen() {
       const task = InteractionManager.runAfterInteractions(() => {
         if (!active || !isAuthenticated) return;
         fetchWeeklyPlan();
+        fetchPlanSettings();
+        AsyncStorage.getItem(TRAINING_TIME_PREFERENCE_KEY).then((value) => {
+          if (active && (value === 'morning' || value === 'afternoon' || value === 'evening')) {
+            setTrainingTimePreference(value);
+          }
+        }).catch(() => {});
         fetchDailyTargets();
         fetchTrainingPlanData();
         fetchRunStatuses();
@@ -1008,134 +1066,55 @@ export default function TimelinePlanScreen() {
         active = false;
         task.cancel?.();
       };
-    }, [isAuthenticated, fetchWeeklyPlan, fetchDailyTargets, fetchTrainingPlanData, fetchRunStatuses, refetchSummary, refetchPoints])
+    }, [isAuthenticated, fetchWeeklyPlan, fetchPlanSettings, fetchDailyTargets, fetchTrainingPlanData, fetchRunStatuses, refetchSummary, refetchPoints])
   );
 
   if (loading) return <View style={styles.center}><ActivityIndicator color={COLORS.accent} /></View>;
 
   return (
+    <PlanGenderProvider value={userGender}>
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
-
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 0 }}>
-        {/* Hero Section (extracted component) */}
-        <PlanHero
-          selectedDate={selectedDate}
-          selectedDayOfWeek={selectedDayOfWeek}
-          planDayNumber={planDayNumber}
-          currentWeek={currentWeek}
-          dailyTargets={dailyTargets}
-          projectedRunInfo={projectedRunInfo}
-          projectedDays={projectedDays}
-          panResponderHandlers={panResponder.panHandlers}
-          runStatuses={runStatuses}
-          onOpenWeeklyModal={openWeeklyModal}
-          onGoToToday={handleGoToToday}
-          onGoToNextWeek={goToNextWeek}
-          onGoToPreviousWeek={goToPreviousWeek}
-          onSelectDay={selectDay}
-          userGender={userGender}
-          isActive={isPlansFocused}
-          showWelcomeMessage={planDayNumber === 1 || (isFirstPlanHeroVisit && isToday)}
-          onMissedRunAction={(action, dayKey) => {
-            if (action === 'run_now') {
-              // Navigate to the run screen to start this run now
-              router.push('/(tabs)/Run');
-            } else if (action === 'move_to_free') {
-              // TODO: Implement rescheduling logic once available
-              alert('This run will be rescheduled to the next available rest day.');
-            }
-          }}
-          onStartRunPress={async () => {
-            if (shouldBypassRunDetails) {
-              startPlanRun();
-              return;
-            }
-            setShowRunDetails(true);
-          }}
-        />
-
-        {/* White Curved Body */}
-        <View style={styles.whiteBody}>
-          {/* Small visual handle/indicator if needed, otherwise just padding */}
-
-          {/* Daily Progress Section */}
-          <View style={styles.bodyContent}>
-            <View style={styles.sectionHeaderRow}>
-              <View>
-                <Text style={styles.sectionTitle}>Your daily rewards</Text>
-                <Text style={styles.pointsEarnedHint}>Finish your goals and collect {totalMaxPoints} points</Text>
-              </View>
-              <TouchableOpacity onPress={handleGoToToday}>
-                <Text style={styles.goToToday}>Go to Today</Text>
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.insightScrollContent}
-              style={styles.insightScroll}
-            >
-              {displayPointCategories.map((category) => (
-                <PointsProgressCard
-                  key={category.key}
-                  category={category}
-                  onPress={
-                    category.key === 'MOBILITY' && !mobilityCompleted && !category.isAwarded
-                      ? () => setMobilityModalVisible(true)
-                      : undefined
-                  }
-                  onClaim={() => {
-                    if (!category.isAwarded && (category.claimable ?? category.progress >= 1)) {
-                      claimPoints(category.key);
-                    }
-                  }}
-                />
-              ))}
+      <StatusBar barStyle={planColors.dark ? 'light-content' : 'dark-content'} backgroundColor={planColors.bg} />
+      <SafeAreaContextView edges={['top']} style={{ flex: 1, backgroundColor: planColors.bg }}>
+        <ScrollView contentInsetAdjustmentBehavior="automatic" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+          <PlansDashboard
+            hasTrainingSchedule={!!structuredSchedule} workoutPreference={scheduledWorkoutPreference}
+            workoutTitle={recommendedWorkout?.title}
+            onCustomize={structuredSchedule ? () => router.push('/customize-plan') : undefined}
+            gender={userGender} pointCategories={displayPointCategories}
+            pointsLoading={pointsLoading} pointsError={pointsError}
+            date={selectedDate} planDay={planDayNumber}
+            steps={totalStepsCurrent} stepsTarget={totalDailySteps}
+            calories={totalCalsCurrent} calorieTarget={totalDailyCalories}
+            waterMl={waterActual * 250} waterTarget={summary?.waterTarget || totalDailyWater * 250}
+            loading={summaryLoading} error={summaryError} onRetry={refetchSummary}
+            isToday={isToday} runTitle={projectedRunInfo.isRunDay ? projectedRunInfo.runType ?? undefined : undefined}
+            runDistance={projectedRunInfo.runKm}
+            runComplete={runStatuses[selectedDayKey]?.runStatus === 'COMPLETED' || !!workoutOverview.data?.mine.completedDays.includes(selectedDayKey)} workoutComplete={structuredSchedule ? workoutCompleted : mobilityCompleted}
+            onSelectDate={selectDay} onPreviousWeek={goToPreviousWeek} onNextWeek={goToNextWeek}
+            onToday={handleGoToToday} onFullPlan={openWeeklyModal}
+            onWorkoutOverview={isToday ? () => router.push('/workout') : undefined}
+            onWorkouts={() => { setWorkoutInitialDetail(false); setMobilityModalVisible(true); }}
+            onWorkout={() => { if (scheduledWorkoutPreference === 'gym') setGymVisible(true); else { setWorkoutInitialDetail(true); setMobilityModalVisible(true); } }}
+            onRun={() => { if (shouldBypassRunDetails) startPlanRun(); else setShowRunDetails(true); }}
+            onFood={() => handleLogFoodForPeriod(currentPeriod)}
+            onWater={() => Alert.alert('Log water', `${waterActual} glasses logged today. Each glass is 250 ml.`, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Add 250 ml', onPress: () => { setWaterTotal((waterActual + 1) * 250); } },
+            ])}
+          />
+          {/* Daily rewards section temporarily hidden.
+          <View style={{ marginTop: 24, gap: 12 }}>
+            <View style={{ paddingHorizontal: 24 }}><Text style={{ color: planColors.text, fontSize: 20, fontWeight: '800' }}>Your daily rewards</Text><Text style={{ color: planColors.sub, marginTop: 4 }}>Finish your goals and collect {totalMaxPoints} points</Text></View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}>
+              {displayPointCategories.map(category => <PointsProgressCard key={category.key} category={category}
+                onPress={category.key === 'MOBILITY' && !mobilityCompleted && !category.isAwarded ? () => { setWorkoutInitialDetail(true); setMobilityModalVisible(true); } : undefined}
+                onClaim={() => { if (!category.isAwarded && (category.claimable ?? category.progress >= 1)) claimPoints(category.key); }} />)}
             </ScrollView>
-
-            {/* Daily Tab Section */}
-            <DailyTab
-              selectedDate={selectedDate}
-              loadingDaily={summaryLoading}
-              dailyTargets={dailyTargets as DailyTargetFromAPI[]}
-              todayTarget={projectedTodayTarget as DailyTargetFromAPI}
-              todayIndex={selectedDayOfWeek}
-              currentSteps={totalStepsCurrent}
-              currentCalories={totalCaloriesFromBackend}
-              calorieTarget={totalDailyCalories}
-              waterIntake={waterActual}
-              onSetWaterGlasses={(glasses) => {
-                if (isToday) {
-                  setWaterTotal(glasses * 250);
-                }
-              }}
-              stepSlots={{ 
-                morning: morningStepsActual, 
-                afternoon: afternoonStepsActual, 
-                evening: eveningStepsActual 
-              }}
-              stepTargets={{
-                morning: morningStepsTarget,
-                afternoon: afternoonStepsTarget,
-                evening: eveningStepsTarget,
-              }}
-              exerciseCompleted={mobilityCompleted}
-              trainingTimePreference={trainingTimePreference}
-              onStartRun={() => {
-                setShowRunDetails(true);
-              }}
-              showNightWalkRecoveryPrompt={shouldShowNightWalkRecoveryPrompt}
-              nightWalkRecoverySteps={remainingDailySteps}
-              nightWalkRecoveryKm={nightWalkRecoveryKm}
-              onConvertNightStepsToWalk={handleConvertNightStepsToWalk}
-              onLogFood={handleLogFoodForPeriod}
-              onOpenMobility={() => setMobilityModalVisible(true)}
-            />
           </View>
-        </View>
-      </ScrollView>
+          */}
+        </ScrollView>
+      </SafeAreaContextView>
 
       <Modal
         visible={showRunDetails && projectedRunInfo.isRunDay}
@@ -1206,7 +1185,7 @@ export default function TimelinePlanScreen() {
               </TouchableOpacity>
               {runDetailsExpanded.experts && runInfo.expertOpinions.map((item, i) => (
                 <View key={`expert-${i}`} style={styles.runDetailsRow}>
-                  <Check size={14} color={COLORS.success} />
+                  <Check size={14} color={planColors.secondary} />
                   <Text style={styles.runDetailsRowText}>{item}</Text>
                 </View>
               ))}
@@ -1234,7 +1213,7 @@ export default function TimelinePlanScreen() {
               </TouchableOpacity>
               {runDetailsExpanded.tips && runInfo.tips.map((item, i) => (
                 <View key={`tip-${i}`} style={styles.runDetailsRow}>
-                  <Check size={14} color={COLORS.success} />
+                  <Check size={14} color={planColors.secondary} />
                   <Text style={styles.runDetailsRowText}>{item}</Text>
                 </View>
               ))}
@@ -1254,49 +1233,70 @@ export default function TimelinePlanScreen() {
         visible={showWeeklyModal}
         animationType="slide"
         presentationStyle="fullScreen"
+        onDismiss={openPendingPlanReset}
         onRequestClose={() => {
           setShowWeeklyModal(false);
           setSelectedWeek(null);
         }}
       >
-        <SafeAreaView style={styles.fullPlanOverlay}>
-          <PlanWeeklyTab
-            weeklyPlan={weeklyPlan}
-            planWeekToday={planWeekToday}
-            planStartDate={planStartDate}
-            loading={planLoading}
-            selectedWeek={selectedWeek}
-            onSelectWeek={setSelectedWeek}
-            onClose={() => {
-              setShowWeeklyModal(false);
-              setSelectedWeek(null);
-            }}
-            onSelectSessionDay={handleWeeklySessionDayPress}
-            goalType={planGoalType}
-            startingWeightKg={planStartingWeightKg}
-            targetWeightKg={planTargetWeightKg}
-            usesImperial={user?.units === 'imperial'}
-            availableDays={availableDays}
-            onChangeScheduleDays={updateScheduleDays}
-            scheduleUpdating={scheduleUpdating}
-            trainingTimePreference={trainingTimePreference}
-            onChangeTrainingTimePreference={setTrainingTimePreference}
-            onAdjustPlanManually={adjustPlanManually}
-            adjusting={adjustingPlan}
-            onRegeneratePlan={() => generatePlan(true)}
-            devPrompt={latestPlanPrompt}
-            regenerating={generating}
-          />
-        </SafeAreaView>
+        <SafeAreaProvider>
+          <SafeAreaContextView edges={['top', 'left', 'right']} style={styles.fullPlanOverlay}>
+            <PlanWeeklyTab
+              weeklyPlan={weeklyPlan}
+              planWeekToday={planWeekToday}
+              planStartDate={planStartDate}
+              loading={planLoading}
+              selectedWeek={selectedWeek}
+              onSelectWeek={setSelectedWeek}
+              onClose={() => {
+                setShowWeeklyModal(false);
+                setSelectedWeek(null);
+              }}
+              onSelectSessionDay={handleWeeklySessionDayPress}
+              goalType={planGoalType}
+              startingWeightKg={planStartingWeightKg}
+              targetWeightKg={planTargetWeightKg}
+              usesImperial={user?.units === 'imperial'}
+              gender={userGender}
+              availableDays={availableDays}
+              onChangeScheduleDays={updateScheduleDays}
+              scheduleUpdating={scheduleUpdating}
+              trainingTimePreference={trainingTimePreference}
+              onChangeTrainingTimePreference={setTrainingTimePreference}
+              onAdjustPlanManually={adjustPlanManually}
+              adjusting={adjustingPlan}
+              onRegeneratePlan={() => generatePlan(true)}
+              onResetPlan={() => {
+                pendingPlanResetRef.current = true;
+                setShowWeeklyModal(false);
+                setSelectedWeek(null);
+                if (Platform.OS !== 'ios') requestAnimationFrame(openPendingPlanReset);
+              }}
+              devPrompt={latestPlanPrompt}
+              regenerating={generating}
+            />
+          </SafeAreaContextView>
+        </SafeAreaProvider>
       </Modal>
 
       <MobilityExercises
+        saveCompletion={structuredSchedule && scheduledWorkoutPreference && scheduledWorkoutPreference !== 'gym' && isToday ? workoutOverview.saveCompletion : undefined}
         visible={mobilityModalVisible}
+        workoutPreference={scheduledWorkoutPreference === 'home' || scheduledWorkoutPreference === 'strength' ? scheduledWorkoutPreference : undefined}
+        workoutId={scheduledWorkoutId} dayIndex={selectedDayOfWeek}
+        proofController={structuredSchedule && scheduledWorkoutPreference && scheduledWorkoutPreference !== 'gym' && isToday ? workoutPhotos : undefined}
+        initialDetail={workoutInitialDetail}
         onClose={() => setMobilityModalVisible(false)}
         currentWeek={currentWeek}
-        onMixedSessionComplete={() => setMobilityCompleted(true)}
+        onMixedSessionComplete={() => {
+          if (structuredSchedule && (!isToday || !scheduledWorkoutPreference)) return;
+          setMobilityCompleted(true);
+          if (structuredSchedule && user?.id) void AsyncStorage.setItem(`scheduled_workout_complete_v1:${user.id}:${planStartDate?.toISOString() ?? 'current'}:${selectedDayKey}`, '1').catch(() => {});
+        }}
       />
+      <GymSession visible={gymVisible} onClose={() => setGymVisible(false)} photos={workoutPhotos} isToday={isToday} completed={proofCompleted} />
     </View>
+    </PlanGenderProvider>
   );
 }
 

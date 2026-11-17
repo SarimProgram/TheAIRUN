@@ -13,6 +13,11 @@ import {
 
 // Store io instance for access from routes
 let ioInstance: SocketServer | null = null;
+
+export function emitInvitationChange(userIds: string[], scope: 'weekly_prize' | 'couple_challenge' | 'home_goals') {
+    if (!ioInstance) return;
+    ioInstance.to([...new Set(userIds)].map(id => `user:${id}`)).emit('invitations:changed', { scope });
+}
 type ActiveRaceSession = {
     userAId: string;
     userBId: string;
@@ -55,6 +60,79 @@ async function hasBlockRelationship(userId: string, otherUserId: string): Promis
     });
 
     return !!block;
+}
+
+export type ChatMessagePayload = {
+    id: string;
+    fromUserId: string;
+    fromName: string;
+    toUserId: string;
+    content: string;
+    createdAt: string;
+    viewedAt?: string;
+};
+
+/**
+ * Saves a message from `userId` to their partner, emits it to both users' rooms, and sends the partner a push.
+ * Shared by the `chat:send` socket event and `POST /chat/messages` (used when the app has no socket,
+ * e.g. after a Live Activity button wakes it in the background).
+ */
+export async function deliverPartnerChatMessage(
+    userId: string,
+    rawContent: string,
+): Promise<{ ok: true; message: ChatMessagePayload } | { ok: false; error: string }> {
+    const content = rawContent.trim();
+    if (!content) {
+        return { ok: false, error: 'Message cannot be empty' };
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { partnerId: true, displayName: true },
+    });
+
+    if (!user?.partnerId) {
+        return { ok: false, error: 'No partner connected' };
+    }
+
+    if (await hasBlockRelationship(userId, user.partnerId)) {
+        return { ok: false, error: 'Chat is unavailable for this partner' };
+    }
+
+    const message = await prisma.chatMessage.create({
+        data: {
+            fromUserId: userId,
+            toUserId: user.partnerId,
+            content,
+        },
+    });
+
+    const msgPayload: ChatMessagePayload = {
+        id: message.id,
+        fromUserId: userId,
+        fromName: user.displayName,
+        toUserId: user.partnerId,
+        content: message.content,
+        createdAt: message.createdAt.toISOString(),
+        viewedAt: message.viewedAt?.toISOString(),
+    };
+
+    // The sender's own room also gets it, so every one of their sockets (and the REST caller's) stays in sync.
+    ioInstance?.to(`user:${user.partnerId}`).emit('chat:message', msgPayload);
+    ioInstance?.to(`user:${userId}`).emit('chat:message', msgPayload);
+
+    sendChatMessagePush({
+        toUserId: user.partnerId,
+        fromName: user.displayName,
+        content: message.content,
+        messageId: message.id,
+        createdAt: msgPayload.createdAt,
+    }).catch((pushErr) => {
+        console.error('[Chat] Push send error:', pushErr);
+    });
+
+    console.log(`[Chat] ${userId} -> ${user.partnerId}: "${content.substring(0, 30)}..."`);
+    return { ok: true, message: msgPayload };
 }
 
 export function getIO(): SocketServer {
@@ -588,77 +666,10 @@ export function initializeSocket(httpServer: HTTPServer): SocketServer {
          */
         socket.on('chat:send', async (data: { content: string }) => {
             try {
-                if (!data.content || !data.content.trim()) {
-                    socket.emit('chat:error', { message: 'Message cannot be empty' });
-                    return;
+                const result = await deliverPartnerChatMessage(userId, data?.content ?? '');
+                if (!result.ok) {
+                    socket.emit('chat:error', { message: result.error });
                 }
-
-                const user: any = await prisma.user.findUnique({
-                    where: { id: userId },
-                    select: {
-                        partnerId: true,
-                        displayName: true,
-                        partner: {
-                            select: {
-                                expoPushToken: true,
-                            }
-                        }
-                    }
-                });
-
-                if (!user?.partnerId) {
-                    socket.emit('chat:error', { message: 'No partner connected' });
-                    return;
-                }
-
-                if (await hasBlockRelationship(userId, user.partnerId)) {
-                    socket.emit('chat:error', { message: 'Chat is unavailable for this partner' });
-                    return;
-                }
-
-                // Save message to DB
-                const message = await prisma.chatMessage.create({
-                    data: {
-                        fromUserId: userId,
-                        toUserId: user.partnerId,
-                        content: data.content.trim(),
-                    }
-                });
-
-                const msgPayload = {
-                    id: message.id,
-                    fromUserId: userId,
-                    fromName: user.displayName,
-                    toUserId: user.partnerId,
-                    content: message.content,
-                    createdAt: message.createdAt.toISOString(),
-                    viewedAt: message.viewedAt?.toISOString(),
-                };
-
-                // Send to partner in real-time
-                io.to(`user:${user.partnerId}`).emit('chat:message', msgPayload);
-
-                // Confirm back to sender
-                socket.emit('chat:message', msgPayload);
-
-                console.log('[Chat] Partner push token lookup', {
-                    fromUserId: userId,
-                    partnerId: user.partnerId,
-                    hasToken: !!user.partner?.expoPushToken,
-                    tokenPreview: user.partner?.expoPushToken
-                        ? `${user.partner.expoPushToken.slice(0, 20)}...`
-                        : null,
-                });
-
-                sendChatMessagePush({
-                    toUserId: user.partnerId,
-                    fromName: user.displayName,
-                    content: message.content,
-                }).catch((pushErr) => {
-                    console.error('[Chat] Push send error:', pushErr);
-                });
-
-                console.log(`[Chat] ${userId} -> ${user.partnerId}: "${data.content.trim().substring(0, 30)}..."`);
             } catch (err) {
                 console.error('[Chat] Send error:', err);
                 socket.emit('chat:error', { message: 'Failed to send message' });

@@ -98,7 +98,7 @@ export function useDailySummary({ accessToken, dayKey }: UseDailySummaryOptions)
             return {
                 ...base,
                 consumedCalories: totalFromMeals,
-                caloriesRemaining: (base.calorieTarget ?? 0) - totalFromMeals,
+                caloriesRemaining: (base.calorieTarget ?? 0) + (base.activeCalories ?? 0) - totalFromMeals,
             };
         } catch {
             return base;

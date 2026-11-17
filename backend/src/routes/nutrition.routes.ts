@@ -6,9 +6,26 @@ import sharp from "sharp";
 import { prisma } from "../db/prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { upload } from "../middleware/upload";
+import { isolateFood } from "../services/foodCutout";
+import { MEAL_ANALYSIS_MODEL, MEAL_ANALYSIS_INSTRUCTIONS, MEAL_ANALYSIS_OUTPUT_SCHEMA, toLegacyMealAnalysis } from "../services/mealAnalysis";
 
 const router = Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Ephemeral presentation asset: never persisted or sent to another provider.
+router.post('/meals/isolate', authMiddleware, upload.single('image'), async (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    if (!req.file || !/^image\/(jpeg|png|webp)$/.test(req.file.mimetype)) {
+      return res.status(400).json({ error: 'A jpg, png or webp photo is required.' });
+    }
+    const image = await sharp(req.file.buffer, { limitInputPixels: 25_000_000 })
+      .rotate().resize({ width: 768, height: 768, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 }).toBuffer();
+    const cutout = await isolateFood(image);
+    if (!cutout) return res.status(503).json({ error: 'Photo isolation is temporarily unavailable.' });
+    res.json({ cutoutUri: `data:image/png;base64,${cutout.toString('base64')}` });
+  } catch (error) { next(error); }
+});
 
 function getDayKeyInTimezone(date: Date, timezone: string): string {
   try {
@@ -37,76 +54,8 @@ const FieldsSchema = z.object({
   text: z.string().trim().optional(),
 });
 
-const OutputSchema = {
-  name: "MealAnalysis",
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      mealType: { type: "string", enum: ["BREAKFAST", "LUNCH", "DINNER", "SNACK"] },
-
-      items: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            foodName: { type: "string" },
-            servingQty: { type: ["number", "null"] },
-            servingUnit: { type: ["string", "null"] },
-            grams: { type: ["number", "null"] },
-            calories: { type: "integer" },
-            proteinG: { type: ["number", "null"] },
-            carbsG: { type: ["number", "null"] },
-            fatG: { type: ["number", "null"] },
-            confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
-          },
-          required: [
-            "foodName",
-            "servingQty",
-            "servingUnit",
-            "grams",
-            "calories",
-            "proteinG",
-            "carbsG",
-            "fatG",
-            "confidence",
-          ],
-        },
-      },
-
-      totals: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          calories: { type: "integer" },
-          proteinG: { type: ["number", "null"] },
-          carbsG: { type: ["number", "null"] },
-          fatG: { type: ["number", "null"] },
-        },
-        required: ["calories", "proteinG", "carbsG", "fatG"],
-      },
-
-      confidence: { type: ["number", "null"], minimum: 0, maximum: 1 },
-    },
-
-    required: ["mealType", "items", "totals", "confidence"],
-  },
-};
-
 function buildPrompt(mealType: string, text?: string) {
-  return [
-    "You are a professional nutrition analyst.",
-    "Analyze the image and user text to identify all food items and estimate their portions and calories.",
-    "Keep single dishes as one item (e.g., 'oily omelette' should remain one food item).",
-    "Do not split a dish into ingredients, condiments, or cooking oil unless they are clearly separate foods or the user explicitly lists them separately.",
-    "Treat descriptive words (oily, spicy, cheesy, grilled, etc.) as part of the food name, not separate items.",
-    "Be conservative with calorie estimates. If unsure, set lower confidence.",
-    "Return grams for each item when possible.",
-    `Meal Type: ${mealType}`,
-    text ? `User description: ${text}` : "No user text provided.",
-    "If the image contains multiple food items, please list each one separately.",
-  ].join("\n");
+  return JSON.stringify({ mealType, description: text || null });
 }
 
 /**
@@ -147,29 +96,39 @@ router.post(
         imageDataUrl = `data:image/jpeg;base64,${resized.toString("base64")}`;
       }
 
-      const content: any[] = [{ type: "text", text: buildPrompt(mealType, text) }];
+      const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [{ type: "text", text: buildPrompt(mealType, text) }];
       if (imageDataUrl) {
         content.push({
           type: "image_url",
-          image_url: { url: imageDataUrl }
+          image_url: { url: imageDataUrl, detail: "high" }
         });
       }
 
       const resp = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content }],
+        model: MEAL_ANALYSIS_MODEL,
+        reasoning_effort: "low",
+        messages: [
+          { role: "developer", content: MEAL_ANALYSIS_INSTRUCTIONS },
+          { role: "user", content },
+        ],
         response_format: {
           type: "json_schema",
           json_schema: {
-            ...OutputSchema,
+            ...MEAL_ANALYSIS_OUTPUT_SCHEMA,
             strict: true
           }
         },
       });
 
-      const jsonStr = resp.choices[0].message.content;
-      const json = JSON.parse(jsonStr ?? "{}");
-      res.json(json);
+      const choice = resp.choices[0];
+      if (!choice || choice.finish_reason !== "stop" || choice.message.refusal || !choice.message.content) {
+        return res.status(502).json({ error: "Food analysis could not be completed. Try another photo or describe your meal." });
+      }
+      try {
+        res.json(toLegacyMealAnalysis(JSON.parse(choice.message.content), mealType));
+      } catch {
+        return res.status(502).json({ error: "Food analysis could not be completed. Try another photo or describe your meal." });
+      }
     } catch (err) {
       next(err);
     }
@@ -211,6 +170,19 @@ router.post("/meals", authMiddleware, async (req, res, next) => {
     const userId = (req as AuthRequest).user!.id;
     const data = SaveSchema.parse(req.body);
 
+    // Passed portions are owned by the shared-meal transaction. A stale device
+    // must never recreate one after the recipient has declined it.
+    if (data.clientMealId?.startsWith('pass-')) {
+      const plate = await prisma.sharedMeal.findFirst({
+        where: { id: data.clientMealId.slice(5), recipientUserId: userId, status: { in: ['PENDING', 'ACCEPTED'] } },
+      });
+      const logged = plate && await prisma.mealLog.findUnique({
+        where: { userId_clientMealId: { userId, clientMealId: data.clientMealId } }, include: { items: true },
+      });
+      if (!logged) return res.status(409).json({ error: 'This passed plate is no longer available to log' });
+      return res.status(201).json(logged);
+    }
+
     type MacroTotals = {
       calories: number;
       proteinG: number;
@@ -244,7 +216,7 @@ router.post("/meals", authMiddleware, async (req, res, next) => {
       totalCarbsG: totals.carbsG || null,
       totalFatG: totals.fatG || null,
       confidence: data.confidence ?? null,
-      modelName: data.modelName ?? "gpt-4o-mini",
+      modelName: data.modelName ?? MEAL_ANALYSIS_MODEL,
       items: {
         create: data.items.map((i) => ({
           foodName: i.foodName,

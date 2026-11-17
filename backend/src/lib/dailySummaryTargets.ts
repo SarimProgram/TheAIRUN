@@ -1,6 +1,7 @@
 import prisma from "../db/prisma";
 import type { DailyTarget } from "@prisma/client";
 import { estimateRestingCalories, loadUserBurnProfile } from "./activeCalories";
+import { calculateCaloriesRemaining } from './energyBalance';
 
 export type ResolvedPlanDayTargets = {
     calorieTarget: number;
@@ -137,7 +138,8 @@ export async function syncDailySummaryTargetsFromPlan(userId: string, dayKey: st
         || existing.proteinTarget !== targets.proteinTarget
         || existing.stepsTarget !== targets.stepsTarget
         || existing.runKmTarget !== targets.runKmTarget
-        || existing.runStatus !== targets.runStatus;
+        || existing.runStatus !== targets.runStatus
+        || existing.caloriesRemaining !== calculateCaloriesRemaining(targets.calorieTarget, existing.activeCalories, existing.consumedCalories);
 
     if (!targetFieldsChanged) {
         return existing;
@@ -151,7 +153,7 @@ export async function syncDailySummaryTargetsFromPlan(userId: string, dayKey: st
             stepsTarget: targets.stepsTarget,
             runKmTarget: targets.runKmTarget,
             runStatus: targets.runStatus,
-            caloriesRemaining: targets.calorieTarget - existing.consumedCalories,
+            caloriesRemaining: calculateCaloriesRemaining(targets.calorieTarget, existing.activeCalories, existing.consumedCalories),
         },
     });
 }

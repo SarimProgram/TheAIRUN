@@ -32,7 +32,7 @@ const COLORS = {
 
 type Props = {
     onBack: () => void;
-    onSuccess: () => void;
+    onSuccess: () => void | Promise<void>;
     onRegister: (name: string, email: string, password: string) => Promise<void>;
     initialEmail?: string;
     subtitle?: string;
@@ -75,7 +75,11 @@ export default function Phase0ManualAuth({
         }
     }, [initialEmail]);
 
+    const submittingRef = useRef(false);
+    const registeredRef = useRef(false);
+
     const handleSubmit = async () => {
+        if (submittingRef.current) return;
         if (!name.trim() || !email.trim() || !password || !confirmPassword) {
             Alert.alert('Missing fields', 'Please fill in all the details to get started.');
             return;
@@ -87,12 +91,17 @@ export default function Phase0ManualAuth({
         }
 
         try {
+            submittingRef.current = true;
             setLoading(true);
-            await onRegister(name.trim(), email.trim(), password);
-            onSuccess();
+            if (!registeredRef.current) {
+                await onRegister(name.trim(), email.trim(), password);
+                registeredRef.current = true;
+            }
+            await onSuccess();
         } catch (err: any) {
             Alert.alert('Hold on', err?.message || 'Unable to create your account right now.');
         } finally {
+            submittingRef.current = false;
             setLoading(false);
         }
     };

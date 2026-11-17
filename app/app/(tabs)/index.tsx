@@ -1,3 +1,4 @@
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   StyleSheet,
@@ -6,11 +7,12 @@ import {
   TouchableOpacity,
   StatusBar,
   Dimensions,
-  ActivityIndicator,
+  useWindowDimensions,
   Modal,
   TouchableWithoutFeedback,
   Image,
   ScrollView,
+  RefreshControl,
   Alert,
   LayoutChangeEvent,
   InteractionManager,
@@ -19,8 +21,7 @@ import {
   Heart,
   Flame,
   Utensils,
-  Dumbbell,
-  Plus,
+  ScanLine,
   Swords,
   RefreshCw,
   Users,
@@ -29,10 +30,9 @@ import {
   AlertTriangle,
   UserCheck,
   UserX,
+  Settings,
 } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 
 const MENU_ICONS = {
@@ -47,8 +47,7 @@ const MENU_ICONS = {
 import Animated, {
   useSharedValue,
   withTiming,
-  withRepeat,
-  withSequence,
+  interpolate,
   FadeInDown,
   FadeOut,
   useAnimatedStyle,
@@ -69,28 +68,51 @@ import { useStepSync } from '../../hooks/UseStepSync';
 import { useRealtimePartner } from '../../hooks/useRealtimePartner';
 
 // Components
-import GoalMascot from '../../components/home/GoalMascot';
-import WeeklyProgress from '../../components/home/WeeklyProgress';
-import DailyTasks from '../../components/home/DailyTasks';
+import WeeklyRewardHome, { REWARD_RESIZE_EASING, REWARD_RESIZE_MS, rewardExpandedHeight } from '../../components/home/WeeklyRewardHome';
+import HomeInvitations, { useHomeInvitations } from '../../components/home/HomeInvitations';
+import { HomeAvatarScope } from '../../lib/home-avatar';
+import CaloriesHome, { type PendingInvite } from '../../components/home/CaloriesHome';
+import { preloadNutritionArtwork } from '../../components/home/nutritionAssets';
+import { preloadTugArtwork } from '../../components/battle/tugAssets';
+import { preloadRaceArtwork } from '../../components/race/raceAssets';
+import CalorieWeek from '../../components/home/CalorieWeek';
+import CalorieStatus from '../../components/home/CalorieStatus';
 import StepSyncSection from '../../components/home/StepTracer';
+import GoalProgress from '../../components/home/GoalProgress';
+import { goalProgressState } from '../../components/home/goalProgressState';
+import { notifyGoalComplete } from '../../lib/goal-celebration-events';
+import StepWeek from '../../components/home/StepWeek';
+import WorkoutHome from '../../components/home/WorkoutHome';
+import WorkoutWeek from '../../components/home/WorkoutWeek';
+import WaterHome from '../../components/home/WaterHome';
+import WaterWeek from '../../components/home/WaterWeek';
+import { useWorkoutPhotos } from '@/hooks/useWorkoutPhotos';
+import { useWorkoutOverview } from '@/hooks/useWorkoutOverview';
+import CollapsibleGoal from '../../components/home/CollapsibleGoal';
+import GoalStreakBadge from '../../components/home/GoalStreakBadge';
+import GoalSettingsSheet from '../../components/home/GoalSettingsSheet';
+import { useHomeGoals, type HomeGoal } from '../../hooks/useHomeGoals';
 import WeightHero from '../../components/home/WeightHero';
 import PremiumNotification from '../../components/home/PremiumNotification';
 import PremiumFullscreen from '../../components/home/PremiumFullscreen';
 import InterveneBottomSheet, { INTERVENE_ANIMATION_COST, formatPointsAlert } from '../../components/home/InterveneBottomSheet';
+import WaterReminderBottomSheet from '../../components/home/WaterReminderBottomSheet';
+import type { PartnerReminderOption } from '../../components/partner/reminderAssets';
 import { useChat, ChatMessage } from '../../contexts/ChatContext';
 import { useInterventionCelebration, InterventionCelebrationRequest } from '../../hooks/useInterventionCelebration';
 
-const { width } = Dimensions.get('window');
+const HERO_RESIZE = { duration: REWARD_RESIZE_MS, easing: REWARD_RESIZE_EASING };
 
 const HERO_PAGE = {
   NOTIFICATION: 0,
-  CALORIES: 1,
+  REWARD: 1,
   CHAT: 2,
 } as const;
+const HERO_PAGES: number[] = [HERO_PAGE.NOTIFICATION, HERO_PAGE.REWARD, HERO_PAGE.CHAT];
 
 const COLORS = {
   primary: '#FF6B6B', // This is the Coral color
-  waveAccent: '#FF8E8E',
+  primarySoft: '#FFF1F2',
   textMain: '#1F2937',
   textMuted: '#6B7280',
   border: '#F3F4F6',
@@ -99,252 +121,17 @@ const COLORS = {
   coral: '#FF6B6B',
 };
 
-type PendingInvite = {
-  id: string;
-  code?: string;
-  fromUser?: {
-    id: string;
-    displayName: string;
-    email: string;
-  };
-  toEmail: string;
-  status: string;
-};
-
-const AnimatedCounter = ({ value, style }: { value: number; style?: any }) => {
-  const [displayValue, setDisplayValue] = React.useState(0);
-  useEffect(() => {
-    let start = displayValue;
-    const end = value;
-    if (start === end) return;
-    let totalDuration = 1000;
-    let startTime = Date.now();
-    const timer = setInterval(() => {
-      let timePassed = Date.now() - startTime;
-      let progress = Math.min(timePassed / totalDuration, 1);
-      let current = Math.floor(start + (end - start) * progress);
-      setDisplayValue(current);
-      if (progress === 1) clearInterval(timer);
-    }, 16);
-    return () => clearInterval(timer);
-  }, [value]);
-  return <Text style={style}>{displayValue}</Text>;
-};
-
-const UserCard = ({
-  title,
-  data,
-  accent,
-  isMain,
-  onLog,
-  onPress,
-  showMotivate,
-  onMotivate,
-  motivateLabel,
-}: {
-  title: string;
-  data: any;
-  accent: string;
-  isMain: boolean;
-  onLog: () => void;
-  onPress?: () => void;
-  showMotivate?: boolean;
-  onMotivate?: () => void;
-  motivateLabel?: string;
-}) => {
-  const pulse = useSharedValue(1);
-  const intervenePulse = useSharedValue(1);
-  const remaining = data.goal - (data.food - data.exercise);
-  const isNegative = remaining < 0;
-  const statusColor = isNegative ? '#EF4444' : accent;
-
-  useEffect(() => {
-    const pulsePeak = isNegative ? 1.12 : 1.08;
-    pulse.value = withRepeat(
-      withSequence(withTiming(pulsePeak, { duration: 1100 }), withTiming(1, { duration: 1100 })),
-      -1, true
-    );
-  }, [isNegative]);
-
-  useEffect(() => {
-    if (!showMotivate) {
-      intervenePulse.value = 1;
-      return;
-    }
-    intervenePulse.value = withRepeat(
-      withSequence(withTiming(1.03, { duration: 1000 }), withTiming(1, { duration: 1000 })),
-      -1,
-      true
-    );
-  }, [showMotivate]);
-
-  const animatedFlameStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulse.value }],
-    opacity: 0.96 + (pulse.value - 1) * 0.35,
-  }));
-
-  const animatedInterveneStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: intervenePulse.value }],
-  }));
-
-  return (
-    <View style={[styles.cardOuter, isMain && { shadowColor: statusColor }]}>
-      <TouchableOpacity 
-        style={styles.cardInner} 
-        activeOpacity={0.9} 
-        onPress={onPress}
-      >
-        <Text style={[styles.microTag, { color: statusColor }]}>{title}</Text>
-        <View style={styles.mainStatRow}>
-          <AnimatedCounter value={remaining} style={[styles.bigNum, isNegative && { color: '#EF4444' }]} />
-          <Animated.View style={animatedFlameStyle}>
-            {isNegative ? (
-              <AlertTriangle size={20} color="#EF4444" fill="#FEE2E2" />
-            ) : (
-              <Flame size={18} color={accent} fill={accent} />
-            )}
-          </Animated.View>
-        </View>
-        <Text style={styles.subLabel}>{isNegative ? 'KCAL OVER' : 'KCAL LEFT'}</Text>
-        <View style={styles.statsContainer}>
-          <View style={styles.consistentRow}>
-            <View style={[styles.iconBox, { backgroundColor: '#FEE2E2' }]}><Utensils size={14} color="#EF4444" /></View>
-            <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ fontSize: 9, fontWeight: '800', color: COLORS.textMuted, letterSpacing: 0.5 }}>INTAKE</Text>
-              <Text style={[styles.statValue, { color: '#EF4444' }]}>-{data.food}</Text>
-            </View>
-          </View>
-          <View style={styles.consistentRow}>
-            <View style={[styles.iconBox, { backgroundColor: '#ECFDF5' }]}><Dumbbell size={14} color="#10B981" /></View>
-            <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ fontSize: 9, fontWeight: '800', color: COLORS.textMuted, letterSpacing: 0.5 }}>BURNED</Text>
-              <Text style={[styles.statValue, { color: '#10B981' }]}>+{data.exercise}</Text>
-            </View>
-          </View>
-        </View>
-        {isMain && (
-          <TouchableOpacity
-            style={[styles.logFoodButton, { backgroundColor: accent }]}
-            onPress={(e) => {
-              e.stopPropagation();
-              onLog();
-            }}
-          >
-            <Plus size={14} color="#FFF" strokeWidth={3} />
-            <Text style={styles.logFoodText}>LOG FOOD</Text>
-          </TouchableOpacity>
-        )}
-        {!isMain && showMotivate && onMotivate && (
-          <Animated.View style={[styles.motivateButton, animatedInterveneStyle]}>
-            <TouchableOpacity
-              style={styles.motivateButtonPress}
-              activeOpacity={0.85}
-              onPress={(e) => {
-                e.stopPropagation();
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                onMotivate();
-              }}
-            >
-              <AlertTriangle size={13} color="#DC2626" fill="#FEE2E2" />
-              <Text style={styles.motivateButtonText}>{motivateLabel || 'Intervene!'}</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        )}
-      </TouchableOpacity>
-    </View>
-  );
-};
-
-const PartnerPlaceholderCard = ({ 
-  onPress, 
-  pendingInvite,
-  onAccept,
-  onDecline
-}: { 
-  onPress: () => void;
-  pendingInvite?: PendingInvite;
-  onAccept?: (id: string) => void;
-  onDecline?: (id: string) => void;
-}) => {
-  if (pendingInvite && onAccept && onDecline) {
-    return (
-      <View style={styles.cardOuter}>
-        <LinearGradient
-          colors={['#FFFFFF', '#FFF5F5']}
-          style={[styles.cardInner, styles.placeholderCardInner]}
-        >
-          <View style={styles.placeholderGlassOverlay} />
-          <Text style={[styles.microTag, { color: COLORS.primary, opacity: 0.8, marginBottom: 6 }]}>INVITATION</Text>
-          
-          <View style={styles.partnerImageWrapper}>
-            <Users size={28} color={COLORS.primary} strokeWidth={2.5} />
-          </View>
-
-          <Text style={styles.placeholderTitle} numberOfLines={1}>
-            {pendingInvite.fromUser?.displayName || 'Partner'}
-          </Text>
-          <Text style={styles.placeholderBody} numberOfLines={1}>Sent you an invite</Text>
-          
-          <View style={styles.cardInviteActions}>
-            <TouchableOpacity 
-              style={styles.cardInviteDecline} 
-              onPress={() => onDecline(pendingInvite.id)}
-            >
-              <UserX size={16} color="#EF4444" />
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.cardInviteAccept} 
-              onPress={() => onAccept(pendingInvite.id)}
-            >
-              <UserCheck size={16} color="#FFF" />
-              <Text style={styles.cardInviteAcceptText}>ACCEPT</Text>
-            </TouchableOpacity>
-          </View>
-        </LinearGradient>
-      </View>
-    );
-  }
-
-  return (
-    <TouchableOpacity 
-      style={styles.cardOuter} 
-      activeOpacity={0.9} 
-      onPress={onPress}
-    >
-      <LinearGradient
-        colors={['#FFFFFF', '#F4FBFB']}
-        style={[styles.cardInner, styles.placeholderCardInner]}
-      >
-        <View style={styles.placeholderGlassOverlay} />
-        <Text style={[styles.microTag, { color: '#1F938A', opacity: 0.8, marginBottom: 6 }]}>TEAM UP</Text>
-        
-        <View style={styles.partnerImageWrapper}>
-          <Image 
-            source={require('../../assets/connection.png')} 
-            style={styles.partnerPlaceholderImg}
-            resizeMode="contain"
-          />
-        </View>
-
-        <Text style={styles.placeholderTitle}>Link Partner</Text>
-        <Text style={styles.placeholderBody} numberOfLines={2}>Sync progress and keep each other motivated.</Text>
-        
-        <View style={[styles.placeholderCta, { backgroundColor: '#1F938A' }]}>
-          <Text style={styles.placeholderCtaText}>INVITE</Text>
-        </View>
-      </LinearGradient>
-    </TouchableOpacity>
-  );
-};
 export default function App() {
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const dark = useColorScheme() === 'dark';
   const router = useRouter();
   const isFocused = useIsFocused();
   const { openChat, chatJump } = useLocalSearchParams<{ openChat?: string; chatJump?: string }>();
   const mainScrollRef = useRef<Animated.ScrollView>(null);
+  const activitySectionYRef = useRef(0);
   const heroPagerRef = useRef<Animated.ScrollView>(null);
-  const activeHeroPageRef = useRef(HERO_PAGE.CALORIES);
+  const activeHeroPageRef = useRef<number>(HERO_PAGE.REWARD);
   const lastChatJumpRef = useRef<string | null>(null);
   const lastRoutedCelebrationRef = useRef<string | null>(null);
   const [fullscreenCelebration, setFullscreenCelebration] =
@@ -353,16 +140,24 @@ export default function App() {
     useState<InterventionCelebrationRequest | null>(null);
   const lastMainScrollYRef = useRef(0);
   const heroLayoutRef = useRef({ y: 0, height: 0 });
-  const [isRunning, setIsRunning] = useState(false);
-  const [nudgeSent, setNudgeSent] = useState(false);
   const [showInterveneSheet, setShowInterveneSheet] = useState(false);
+  const [showWaterReminderSheet, setShowWaterReminderSheet] = useState(false);
   const [partner, setPartner] = useState<any>(null);
+  const workoutPhotos = useWorkoutPhotos(partner?.id ?? null);
+  const workoutOverview = useWorkoutOverview();
+  const [waterGoalMetrics, setWaterGoalMetrics] = useState<{ current: number; target: number } | null>(null);
+  const [nudgeSent, setNudgeSent] = useState(false);
+  const [stepGoalStreak, setStepGoalStreak] = useState<{ count: number; name: string } | null>(null);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const { invitation, prize: homePrize } = useHomeInvitations();
+  const heroPages = HERO_PAGES;
+  const [stepRouteMetrics, setStepRouteMetrics] = useState<{ current: number; target: number } | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showPointsInfo, setShowPointsInfo] = useState(false);
-  const [stepRouteMetrics, setStepRouteMetrics] = useState<{ current: number; target: number } | null>(null);
-  // Track active page for dots and title (default: calories grid)
-  const [activeHeroPage, setActiveHeroPage] = useState(HERO_PAGE.CALORIES);
+  const [showGoalSettings, setShowGoalSettings] = useState(false);
+  const homeGoals = useHomeGoals(partner?.id ?? null, isFocused);
+  // Track active page for dots and title (default: weekly reward)
+  const [activeHeroPage, setActiveHeroPage] = useState<number>(HERO_PAGE.REWARD);
   const [chatModerationBusy, setChatModerationBusy] = useState(false);
 
   useEffect(() => {
@@ -391,7 +186,12 @@ export default function App() {
   };
 
   const heroScrollX = useSharedValue(0);
-  const heroPageWidth = width - 32;
+  const heroPageWidth = viewportWidth;
+  const rewardHeroHeight = rewardExpandedHeight(viewportWidth, viewportHeight);
+  const rewardHeightValue = useSharedValue(rewardHeroHeight);
+  const rewardMix = useSharedValue(1);
+  const otherHeroHeight = useSharedValue(235);
+  const otherHeroMargin = useSharedValue(0);
   const isHomeChatVisible = isFocused && activeHeroPage === HERO_PAGE.CHAT && isHeroVisibleOnScreen;
 
   const closeMenuAndNavigate = useCallback((path: Parameters<typeof router.push>[0]) => {
@@ -401,9 +201,9 @@ export default function App() {
     });
   }, [router]);
 
-  const { accessToken, authFetch, isAuthenticated } = useAuth();
+  const { accessToken, authFetch, isAuthenticated, user } = useAuth();
   const { balance: points, refetch: refetchPoints, spend: spendPoints } = usePoints({ accessToken });
-  const { summary, loading, recalculate } = useDailySummary({ accessToken });
+  const { summary, recalculate } = useDailySummary({ accessToken });
   const { partnerData: partnerSummary, hasPartner, refetch: refetchPartnerSummary } = usePartnerSummary({ accessToken });
   const { steps: liveSteps } = useStepSync({
     accessToken,
@@ -433,20 +233,19 @@ export default function App() {
     if (!isAuthenticated) return;
     authFetch(`${API_BASE_URL}/partner/invites/pending`)
       .then(res => res.json())
-      .then(data => {
-        setPendingInvites(data.invites || []);
-      })
+      .then(data => { setPendingInvites(data.invites || []); })
       .catch(err => console.log(err));
   }, [isAuthenticated, authFetch]);
 
-  const resetHeroToCalories = useCallback(() => {
+  const resetHeroToReward = useCallback(() => {
+    const page = HERO_PAGE.REWARD;
     heroPagerRef.current?.scrollTo({
-      x: heroPageWidth * HERO_PAGE.CALORIES,
+      x: heroPageWidth * heroPages.indexOf(page),
       animated: false,
     });
-    activeHeroPageRef.current = HERO_PAGE.CALORIES;
-    setActiveHeroPage(HERO_PAGE.CALORIES);
-  }, [heroPageWidth]);
+    activeHeroPageRef.current = page;
+    setActiveHeroPage(page);
+  }, [heroPageWidth, heroPages]);
 
   // Defer refresh + hero reset until tab transition finishes.
   useFocusEffect(
@@ -455,11 +254,14 @@ export default function App() {
       const task = InteractionManager.runAfterInteractions(() => {
         if (!active) return;
 
-        if (activeHeroPageRef.current !== HERO_PAGE.CALORIES) {
-          resetHeroToCalories();
+        if (activeHeroPageRef.current !== HERO_PAGE.REWARD) {
+          resetHeroToReward();
         }
 
         if (!isAuthenticated) return;
+
+        void preloadTugArtwork();
+        void preloadRaceArtwork();
 
         hasStepPermissionConsent()
           .then((granted) => {
@@ -491,29 +293,29 @@ export default function App() {
       refetchPartnerSummary,
       fetchPartner,
       fetchPendingInvites,
-      resetHeroToCalories,
+      resetHeroToReward,
     ])
   );
 
   const myData = useMemo(() => getDashboardData(summary), [summary]);
   const partnerIsNegative = useMemo(() => {
     if (!hasPartner || !partnerSummary) return false;
-    const remaining = partnerSummary.goal - (partnerSummary.food - partnerSummary.exercise);
-    return remaining < 0;
+    return partnerSummary.goal - (partnerSummary.food - partnerSummary.exercise) < 0;
   }, [hasPartner, partnerSummary]);
+
+  useFocusEffect(useCallback(() => {
+    if (!isAuthenticated || !hasPartner || !partnerSummary || !summary) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void preloadNutritionArtwork({ mine: myData, partner: partnerSummary, gender: user?.gender, partnerGender: partner?.gender });
+    });
+    return () => task.cancel();
+  }, [isAuthenticated, hasPartner, partnerSummary, summary, myData, user?.gender, partner?.gender]));
 
   const latestPartnerMessage = useMemo(() => {
     return [...chatMessages]
       .filter((message) => message.fromUserId !== currentUserId)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
   }, [chatMessages, currentUserId]);
-
-  const teamProgress = useMemo(() => {
-    const myRem = myData.goal - (myData.food - myData.exercise);
-    const partRem = hasPartner && partnerSummary ? partnerSummary.goal - (partnerSummary.food - partnerSummary.exercise) : 0;
-    const totalGoal = myData.goal + (partnerSummary?.goal || 0);
-    return totalGoal === 0 ? 0 : ((totalGoal - myRem - partRem) / totalGoal) * 100;
-  }, [myData, partnerSummary, hasPartner]);
 
   useEffect(() => {
     const widgetUserSteps = Math.max(0, Math.round(Math.max(liveSteps || 0, myData.steps || 0)));
@@ -522,6 +324,8 @@ export default function App() {
       : 0;
     const payload = buildPartnerLivePayload({
       userName: 'You',
+      userGender: user?.gender,
+      partnerGender: hasPartner ? partner?.gender : null,
       userKcal: Math.max(0, Math.round(myData.food || 0)),
       userGoal: Math.max(0, Math.round(myData.goal || 0)),
       userSteps: widgetUserSteps,
@@ -535,7 +339,7 @@ export default function App() {
     });
 
     applyPartnerSurfacePayload(payload, { accessToken }).catch(() => {});
-  }, [accessToken, hasPartner, livePartnerName, liveSteps, myData.food, myData.goal, myData.steps, partner?.displayName, partnerLiveSteps, partnerSummary?.food, partnerSummary?.goal, partnerSummary?.name, partnerSummary?.steps]);
+  }, [accessToken, hasPartner, livePartnerName, liveSteps, myData.food, myData.goal, myData.steps, partner?.displayName, partner?.gender, user?.gender, partnerLiveSteps, partnerSummary?.food, partnerSummary?.goal, partnerSummary?.name, partnerSummary?.steps]);
 
   useEffect(() => {
     fetchPartner();
@@ -543,40 +347,24 @@ export default function App() {
 
   const acceptInvite = useCallback(async (inviteId: string) => {
     try {
-      const res = await authFetch(`${API_BASE_URL}/partner/invites/${inviteId}/accept`, {
-        method: 'POST',
-      });
+      const res = await authFetch(`${API_BASE_URL}/partner/invites/${inviteId}/accept`, { method: 'POST' });
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to accept invite');
-      }
-
+      if (!res.ok) throw new Error(data.error || 'Failed to accept invite');
       Alert.alert('Partner connected', `You are now connected with ${data.partnerName}.`);
       recalculate();
       refetchPartnerSummary();
       fetchPartner();
       fetchPendingInvites();
-    } catch (err: any) {
-      Alert.alert('Error', err.message);
-    }
+    } catch (err: any) { Alert.alert('Error', err.message); }
   }, [authFetch, recalculate, refetchPartnerSummary, fetchPartner, fetchPendingInvites]);
 
   const declineInvite = useCallback(async (inviteId: string) => {
     try {
-      const res = await authFetch(`${API_BASE_URL}/partner/invites/${inviteId}/decline`, {
-        method: 'POST',
-      });
+      const res = await authFetch(`${API_BASE_URL}/partner/invites/${inviteId}/decline`, { method: 'POST' });
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to decline invite');
-      }
-
+      if (!res.ok) throw new Error(data.error || 'Failed to decline invite');
       fetchPendingInvites();
-    } catch (err: any) {
-      Alert.alert('Error', err.message);
-    }
+    } catch (err: any) { Alert.alert('Error', err.message); }
   }, [authFetch, fetchPendingInvites]);
 
   const updateHeroVisibility = useCallback((scrollY: number, nextHeroLayout = heroLayoutRef.current) => {
@@ -611,11 +399,20 @@ export default function App() {
   }, [setIsViewingChat]);
 
   const scrollToHeroPage = useCallback((pageIndex: number) => {
+    const page = heroPages.includes(pageIndex) ? pageIndex : HERO_PAGE.NOTIFICATION;
     mainScrollRef.current?.scrollTo({ y: 0, animated: true });
-    heroPagerRef.current?.scrollTo({ x: heroPageWidth * pageIndex, animated: true });
-    activeHeroPageRef.current = pageIndex;
-    setActiveHeroPage(pageIndex);
-  }, [heroPageWidth]);
+    heroPagerRef.current?.scrollTo({ x: heroPageWidth * heroPages.indexOf(page), animated: true });
+    activeHeroPageRef.current = page;
+    setActiveHeroPage(page);
+  }, [heroPageWidth, heroPages]);
+
+  useEffect(() => {
+    const current = activeHeroPageRef.current;
+    const page = heroPages.includes(current) ? current : HERO_PAGE.NOTIFICATION;
+    activeHeroPageRef.current = page;
+    setActiveHeroPage(page);
+    heroPagerRef.current?.scrollTo({ x: heroPageWidth * heroPages.indexOf(page), animated: false });
+  }, [heroPages, heroPageWidth]);
 
   const scrollToChat = useCallback(() => {
     scrollToHeroPage(HERO_PAGE.CHAT);
@@ -678,6 +475,13 @@ export default function App() {
     setTimeout(() => setNudgeSent(false), 2500);
   }, [sendMessage]);
 
+  const handleWaterReminderSend = useCallback(
+    (option: PartnerReminderOption, message: string) => {
+      sendMessage(message);
+    },
+    [sendMessage],
+  );
+
   const handleInterveneAnimation = useCallback(async (option: { mode: string; text: string }) => {
     if (points < INTERVENE_ANIMATION_COST) {
       Alert.alert('Not enough points', formatPointsAlert(INTERVENE_ANIMATION_COST));
@@ -692,8 +496,8 @@ export default function App() {
 
     sendMessage(`[KCAL:${option.mode}] ${option.text}`);
     setNudgeSent(true);
-    refetchPoints();
     setTimeout(() => setNudgeSent(false), 2500);
+    refetchPoints();
     return true;
   }, [points, spendPoints, sendMessage, refetchPoints]);
 
@@ -750,7 +554,7 @@ export default function App() {
       }
 
       refreshPartnerState();
-      scrollToHeroPage(HERO_PAGE.CALORIES);
+      scrollToHeroPage(HERO_PAGE.REWARD);
       Alert.alert('Partner blocked', 'Chat has been closed and the partner connection has been removed.');
     } catch (err: any) {
       Alert.alert('Error', err.message);
@@ -772,30 +576,156 @@ export default function App() {
 
   // --- ANIMATED STYLES (Moved to top level to fix hook rules) ---
   const headerAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0),
-    transform: [{ translateY: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 0 : -20) }]
+    opacity: withTiming(activeHeroPage === HERO_PAGE.REWARD ? 1 : 0),
+    transform: [{ translateY: withTiming(activeHeroPage === HERO_PAGE.REWARD ? 0 : -20) }]
   }));
 
-  const heroHeaderAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0),
-    height: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 50 : 0),
-    marginBottom: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 8 : 0),
-  }));
-
-  const mascotAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0),
-    transform: [{ scale: withTiming(activeHeroPage === HERO_PAGE.CALORIES ? 1 : 0.8) }]
-  }));
+  const prevHeroPageRef = useRef<number>(HERO_PAGE.REWARD);
+  useEffect(() => {
+    const onReward = activeHeroPage === HERO_PAGE.REWARD;
+    rewardMix.value = withTiming(onReward ? 1 : 0, HERO_RESIZE);
+    if (!onReward) {
+      const height = activeHeroPage === HERO_PAGE.CHAT ? 430 : 235;
+      const margin = activeHeroPage === HERO_PAGE.CHAT ? -50 : 0;
+      const fromReward = prevHeroPageRef.current === HERO_PAGE.REWARD;
+      otherHeroHeight.value = fromReward ? height : withTiming(height, HERO_RESIZE);
+      otherHeroMargin.value = fromReward ? margin : withTiming(margin, HERO_RESIZE);
+    }
+    prevHeroPageRef.current = activeHeroPage;
+  }, [activeHeroPage, rewardMix, otherHeroHeight, otherHeroMargin]);
 
   const pagerAnimatedStyle = useAnimatedStyle(() => ({
-    height: withTiming(activeHeroPage === HERO_PAGE.CHAT ? 430 : 235),
-    marginTop: withTiming(activeHeroPage === HERO_PAGE.CHAT ? -50 : 0)
+    height: interpolate(rewardMix.value, [0, 1], [otherHeroHeight.value, rewardHeightValue.value]),
+    marginTop: interpolate(rewardMix.value, [0, 1], [otherHeroMargin.value, 8]),
   }));
 
+
+
+  const caloriesComplete = goalProgressState(summary?.consumedCalories, summary?.calorieTarget, true).complete;
+  const stepsComplete = goalProgressState(stepRouteMetrics?.current ?? Math.max(liveSteps || 0, myData.steps || 0), stepRouteMetrics?.target ?? myData.stepsTarget ?? 10000).complete;
+  const workoutComplete = goalProgressState(workoutOverview.data?.mine.weeklyCount, workoutOverview.data?.mine.weeklyTarget).complete;
+  const waterComplete = goalProgressState(waterGoalMetrics?.current ?? summary?.waterMl, waterGoalMetrics?.target ?? summary?.waterTarget).complete;
+  const celebrationDay = summary?.dayKey;
+  const celebrationWeek = workoutOverview.data?.mine.weekStart;
+  const visibleGoalKey = homeGoals.visible.join(',');
+  useEffect(() => {
+    if (!isFocused || !user?.id || !homeGoals.ready || !celebrationDay) return;
+    const completed: Record<HomeGoal, boolean> = { calories: caloriesComplete, steps: stepsComplete, workout: workoutComplete, water: waterComplete };
+    for (const goal of visibleGoalKey.split(',').filter(Boolean) as HomeGoal[]) {
+      const period = goal === 'workout' ? celebrationWeek : celebrationDay;
+      if (completed[goal] && period) notifyGoalComplete({ goal, period });
+    }
+  }, [isFocused, user?.id, homeGoals.ready, celebrationDay, celebrationWeek, visibleGoalKey, caloriesComplete, stepsComplete, workoutComplete, waterComplete]);
+
+  const goalCards: Record<HomeGoal, React.ReactNode> = {
+    calories: (
+      <CalorieWeek summary={summary} compact>
+      {({ calendar, streakBadge }) => <CollapsibleGoal connect={homeGoals.visible[homeGoals.visible.length - 1] !== 'calories'} number={1} title="Calorie Goal" titleAccessory={streakBadge}
+        complete={caloriesComplete}
+        overTarget={goalProgressState(summary?.consumedCalories, summary?.calorieTarget, true).overTarget}
+        onIconPress={() => router.push('/activity')}
+        defaultExpanded={false}
+        status={<CalorieStatus showProgress calories={summary?.consumedCalories} target={summary?.calorieTarget} />}
+        expandedStatus={calendar}>
+        <CaloriesHome
+          myData={myData}
+          partnerSummary={partnerSummary}
+          hasPartner={hasPartner}
+          partnerName={livePartnerName}
+          partnerGender={partner?.gender}
+          partnerIsNegative={partnerIsNegative}
+          onMotivate={handleMotivatePartnerCalories}
+          nudgeSent={nudgeSent}
+          pendingInvites={pendingInvites}
+          acceptInvite={acceptInvite}
+          declineInvite={declineInvite}
+        />
+        <TouchableOpacity
+          accessibilityRole="button"
+          activeOpacity={0.85}
+          style={[styles.logFoodButton, styles.nutritionLogFoodButton]}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push({ pathname: '/activity', params: { action: 'logFood', t: Date.now() } });
+          }}
+        >
+          <ScanLine size={20} color="#FFF" strokeWidth={2} />
+          <Text style={styles.logFoodText}>Log Food</Text>
+        </TouchableOpacity>
+      </CollapsibleGoal>}
+      </CalorieWeek>
+    ),
+    steps: (
+      <StepWeek compact summary={summary} steps={stepRouteMetrics?.current ?? Math.max(liveSteps || 0, myData.steps || 0)} target={stepRouteMetrics?.target ?? myData.stepsTarget ?? 10000} streak={stepGoalStreak}>
+      {({ calendar, streakBadge }) => <CollapsibleGoal connect={homeGoals.visible[homeGoals.visible.length - 1] !== 'steps'} number={2} title="Steps Goal" titleAccessory={streakBadge} onTitlePress={() => router.push('/StepbattleFull')}
+        complete={stepsComplete}
+        onIconPress={() => router.push('/StepbattleFull')}
+        iconAccessibilityHint="Opens the full steps battle screen"
+        defaultExpanded={false}
+        contentStyle={{ paddingTop: 0 }}
+        status={<GoalProgress current={stepRouteMetrics?.current ?? Math.max(liveSteps || 0, myData.steps || 0)} target={stepRouteMetrics?.target ?? myData.stepsTarget ?? 10000} unit="steps" />}
+        expandedStatus={calendar}>
+        {/* @ts-ignore */}
+        <StepSyncSection
+          hideHeader
+          onNudge={() => {
+            setNudgeSent(true);
+            setTimeout(() => setNudgeSent(false), 2500);
+          }}
+          permissionEnabled={stepPermissionEnabled}
+          onPermissionChange={setStepPermissionEnabled}
+          onPermissionGranted={handleStepPermissionGranted}
+          myFallbackLiveSteps={liveSteps}
+          partnerFallbackLiveSteps={partnerLiveSteps}
+          fallbackPartnerName={livePartnerName}
+          isConnected={isPartnerLiveConnected}
+          onStepMetricsChange={setStepRouteMetrics}
+          onStreakLabelChange={setStepGoalStreak}
+        />
+      </CollapsibleGoal>}
+      </StepWeek>
+    ),
+    workout: (
+      <CollapsibleGoal connect={homeGoals.visible[homeGoals.visible.length - 1] !== 'workout'} number={3} title="Workout Goal" status={<GoalProgress current={workoutOverview.data?.mine.weeklyCount} target={workoutOverview.data?.mine.weeklyTarget} unit="workouts" />}
+        complete={workoutComplete}
+        onIconPress={() => router.push('/workout')}
+        defaultExpanded={false}
+        contentStyle={{ paddingTop: 0 }}
+        titleAccessory={<GoalStreakBadge compact count={workoutPhotos.mine.streak} name="YOU" />}
+        expandedStatus={<WorkoutWeek photos={workoutPhotos} dayKey={summary?.dayKey} participant={workoutOverview.data?.mine} unavailable={workoutOverview.loading || !!workoutOverview.error} />}
+        onTitlePress={() => router.push('/workout')}>
+      <WorkoutHome
+        hideHeader
+        photos={workoutPhotos}
+        overview={workoutOverview.data}
+        hasPartner={hasPartner}
+        partnerName={livePartnerName}
+        onMotivate={handleMotivatePartnerCalories}
+      />
+      </CollapsibleGoal>
+    ),
+    water: (
+      <CollapsibleGoal connect={homeGoals.visible[homeGoals.visible.length - 1] !== 'water'} number={4} title="Water Goal" status={<GoalProgress current={waterGoalMetrics?.current ?? summary?.waterMl} target={waterGoalMetrics?.target ?? summary?.waterTarget} unit="ml" />} expandedStatus={<WaterWeek dayKey={summary?.dayKey} current={waterGoalMetrics?.current ?? summary?.waterMl} target={waterGoalMetrics?.target ?? summary?.waterTarget} />} onOpen={() => router.push({ pathname: '/activity', params: { action: 'water' } })}
+        complete={waterComplete}
+        onIconPress={() => router.push('/activity')}
+        defaultExpanded={false}
+        >
+      <WaterHome
+        hideHeader
+        onProgressChange={setWaterGoalMetrics}
+        hasPartner={hasPartner}
+        partnerName={livePartnerName}
+        partnerGender={partner?.gender}
+        partnerSummary={partnerSummary}
+        onRemind={() => setShowWaterReminderSheet(true)}
+      />
+      </CollapsibleGoal>
+    ),
+  };
 
 
   return (
-    <View style={styles.mainContainer}>
+    <View style={[styles.mainContainer, { backgroundColor: dark ? '#0F172A' : '#FFFFFF' }]}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
       {/* DROPDOWN MENU */}
@@ -914,7 +844,9 @@ export default function App() {
         </TouchableWithoutFeedback>
       </Modal>
 
+      <HomeAvatarScope userId={user?.id} partnerId={partner?.id}>
       <Animated.ScrollView
+        refreshControl={<RefreshControl refreshing={workoutPhotos.loading} onRefresh={() => { void workoutPhotos.refresh(); void homeGoals.refresh(); }} />}
         ref={mainScrollRef}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
@@ -923,43 +855,36 @@ export default function App() {
           lastMainScrollYRef.current = scrollY;
           updateHeroVisibility(scrollY);
         }}
-        style={[styles.scrollContainer, { backgroundColor: COLORS.primary }]}
-        contentContainerStyle={{ backgroundColor: COLORS.bg }}
+        style={[styles.scrollContainer, { backgroundColor: dark ? '#0F172A' : '#FFFFFF' }]}
+        contentContainerStyle={{ backgroundColor: COLORS.primary }}
         bounces={false}
         overScrollMode="never"
       >
-        {/* WAVE BACKGROUND */}
-        <View style={styles.waveBackgroundContainer}>
-          <Svg height="500" width={width} viewBox={`0 0 ${width} 500`} preserveAspectRatio="none">
-            <Path fill={COLORS.primary} d={`M0,0 L${width},0 L${width},250 Q${width / 2},300 0,250 Z`} />
-            <Path fill={COLORS.waveAccent} opacity="0.4" d={`M0,0 L${width},0 L${width},280 Q${width / 2},330 0,280 Z`} />
-          </Svg>
-        </View>
-
         {/* HEADER */}
-        <Animated.View style={[styles.header, { paddingTop: insets.top + 6 }, headerAnimatedStyle]}>
+        <Animated.View style={[styles.header, { paddingTop: insets.top }, headerAnimatedStyle]}>
 
-          <TouchableOpacity
-            style={styles.profileBtn}
-            onPress={() => setIsMenuOpen(true)}
-          >
-            <MaterialCommunityIcons name="sort-variant" size={20} color={COLORS.primary} />
-          </TouchableOpacity>
+          <View style={styles.headerSide}>
+            <TouchableOpacity
+              style={styles.profileBtn}
+              hitSlop={4}
+              onPress={() => setIsMenuOpen(true)}
+            >
+              <MaterialCommunityIcons name="sort-variant" size={20} color={COLORS.primary} />
+            </TouchableOpacity>
+          </View>
 
-          <View>
+          <Text numberOfLines={1} adjustsFontSizeToFit style={styles.brandTitle}>RunTogether</Text>
+
+          <View style={[styles.headerSide, styles.headerSideRight]}>
             <TouchableOpacity 
               activeOpacity={0.8}
               onPress={() => setShowPointsInfo(!showPointsInfo)}
               style={styles.headerRightRow}
+              hitSlop={7}
             >
-              <View style={styles.partnerPillCombined}>
-                <Users size={14} color={COLORS.primary} />
-                <Text style={styles.partnerNameCombined}>{partner ? partner.displayName : 'Solo'}</Text>
-              </View>
-              <View style={styles.pillDivider} />
               <View style={styles.pointsSection}>
-                <Heart size={12} color="#EF4444" fill="#EF4444" />
-                <Text style={styles.pointsTextCombined}>{points.toLocaleString()}</Text>
+                <Heart size={10} color="#EF4444" fill="#EF4444" />
+                <Text numberOfLines={1} style={styles.pointsTextCombined}>{new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(points)}</Text>
               </View>
             </TouchableOpacity>
 
@@ -1012,40 +937,23 @@ export default function App() {
         {/* HERO CONTENT */}
         <View style={[styles.heroWrapper, { zIndex: 20 }]} onLayout={handleHeroLayout}>
           
-          <Animated.View style={[styles.mascotWrapper, mascotAnimatedStyle]}>
-            {/* @ts-ignore */}
-            <GoalMascot progress={teamProgress} />
-          </Animated.View>
-
-          <Animated.View style={[styles.heroHeader, heroHeaderAnimatedStyle]}>
-
-            <Text style={styles.heroTitle}>Today&apos;s Detail</Text>
-
-           
-          </Animated.View>
-
-
-          {loading && !summary ? (
-            <ActivityIndicator size="large" color="#FFF" style={{ marginVertical: 40 }} />
-          ) : (
-            <>
               <Animated.ScrollView
                 ref={heroPagerRef}
                 horizontal
                 pagingEnabled
                 showsHorizontalScrollIndicator={false}
-                contentOffset={{ x: heroPageWidth * HERO_PAGE.CALORIES, y: 0 }}
+                contentOffset={{ x: heroPageWidth * Math.max(0, heroPages.indexOf(activeHeroPage)), y: 0 }}
                 onScroll={(e) => {
                   heroScrollX.value = e.nativeEvent.contentOffset.x;
                 }}
                 onMomentumScrollEnd={(e) => {
                   const x = e.nativeEvent.contentOffset.x;
-                  const page = Math.round(x / heroPageWidth);
+                  const page = heroPages[Math.round(x / heroPageWidth)] ?? HERO_PAGE.NOTIFICATION;
                   activeHeroPageRef.current = page;
                   setActiveHeroPage(page);
                 }}
                 scrollEventThrottle={16}
-                style={[styles.heroPager, pagerAnimatedStyle]}
+                style={[styles.heroPager, { width: heroPageWidth }, pagerAnimatedStyle]}
               >
 
                 {/* PAGE 0: PARTNER NOTIFICATIONS */}
@@ -1054,61 +962,35 @@ export default function App() {
                     celebrationRequest={cardCelebration}
                     onDismiss={() => {
                       setCardCelebration(null);
-                      scrollToHeroPage(HERO_PAGE.CALORIES);
+                      scrollToHeroPage(HERO_PAGE.REWARD);
                     }}
                   />
                 </View>
 
-                {/* PAGE 1: TODAY'S DETAIL (default) */}
-                <View style={[styles.grid, { width: heroPageWidth, height: 235 }]}>
-
-                  <Animated.View style={{ flex: 1 }} entering={FadeInDown.delay(200)}>
-                        <UserCard 
-                          isMain={true}
-                          onLog={() => router.push({ pathname: '/activity', params: { action: 'logFood', t: Date.now() } })}
-                          onPress={() => router.push({ pathname: '/activity', params: { tab: 'NUTRITION' } })}
-                          title="YOU" 
-                          data={myData} 
-                          accent={COLORS.primary} 
-                        />
-                  </Animated.View>
-
-                  <>
-                    <View style={styles.vsFloating}>
-                      <View style={styles.vsInner}><Swords size={12} color={COLORS.textMuted} /></View>
-                    </View>
-                    <Animated.View style={{ flex: 1 }} entering={FadeInDown.delay(400)}>
-                      {hasPartner && partnerSummary ? (
-                        <UserCard 
-                          isMain={false}
-                          onLog={() => {}}
-                          onPress={() => router.push({
-                            pathname: '/kcal-detail',
-                            params: {
-                              myData: JSON.stringify(myData),
-                              partnerData: JSON.stringify(partnerSummary),
-                              partnerName: partner?.displayName || 'Partner'
-                            }
-                          })}
-                          title={partner?.displayName || "PARTNER"} 
-                          data={partnerSummary} 
-                          accent="#1F938A" 
-                          showMotivate={partnerIsNegative}
-                          onMotivate={handleMotivatePartnerCalories}
-                          motivateLabel={nudgeSent ? 'Sent' : 'Intervene!'}
-                        />
-                      ) : (
-                        <PartnerPlaceholderCard 
-                          onPress={() => router.push('/Partner')} 
-                          pendingInvite={pendingInvites[0]}
-                          onAccept={acceptInvite}
-                          onDecline={declineInvite}
-                        />
-                      )}
-                    </Animated.View>
-                  </>
+                {/* PAGE 1: WEEKLY REWARD (default) */}
+                <View style={[styles.weeklyRewardPage, { width: heroPageWidth, alignSelf: 'flex-start', height: rewardHeroHeight }]}>
+                  <WeeklyRewardHome
+                    skipIntro
+                    initialPrize={homePrize}
+                    heightValue={rewardHeightValue}
+                    showDevPreview={false}
+                    isActive={isFocused && activeHeroPage === HERO_PAGE.REWARD && isHeroVisibleOnScreen}
+                    partnerName={partner?.displayName || 'Partner'}
+                    partnerGender={partner?.gender}
+                    partnerId={partner?.id}
+                    hasPartner={hasPartner}
+                    onPress={() => {
+                      if (!hasPartner) {
+                        router.push('/Partner');
+                        return;
+                      }
+                      mainScrollRef.current?.scrollTo({
+                        y: Math.max(0, activitySectionYRef.current - 12),
+                        animated: true,
+                      });
+                    }}
+                  />
                 </View>
-
 
                 <View style={[styles.weightHeroPage, { width: heroPageWidth, height: 430 }]}>
                     {/* @ts-ignore */}
@@ -1136,68 +1018,26 @@ export default function App() {
 
               </Animated.ScrollView>
 
-              {/* PAGINATION DOTS */}
-              <View style={[styles.paginationContainer, {
-                backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                paddingHorizontal: 12,
-                paddingVertical: 6,
-                borderRadius: 20,
-                alignSelf: 'center',
-                borderWidth: 1,
-                borderColor: 'rgba(255, 255, 255, 0.2)',
-                marginTop: activeHeroPage === HERO_PAGE.CALORIES ? 5 : -20, // Move dots up when full screen
-              }]}>
-
-                {[
-                  HERO_PAGE.NOTIFICATION,
-                  HERO_PAGE.CALORIES,
-                  HERO_PAGE.CHAT,
-                ].map((i) => (
-                  <TouchableOpacity
-                    key={i}
-                    onPress={() => scrollToHeroPage(i)}
-                    activeOpacity={0.8}
-                    style={styles.dotTapTarget}
-                  >
-                    <View
-                      style={[
-                        styles.dot,
-                        activeHeroPage === i ? styles.activeDot : styles.inactiveDot
-                      ]}
-                    />
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-            </>
-          )}
         </View>
 
-        <View style={styles.whiteSheet}>
-          {/* Invitation prompt moved to PartnerPlaceholderCard */}
-          {/* @ts-ignore */}
-          <StepSyncSection
-            onNudge={() => {
-              setNudgeSent(true);
-              setTimeout(() => setNudgeSent(false), 2500);
-            }}
-            permissionEnabled={stepPermissionEnabled}
-            onPermissionChange={setStepPermissionEnabled}
-            onPermissionGranted={handleStepPermissionGranted}
-            myFallbackLiveSteps={liveSteps}
-            partnerFallbackLiveSteps={partnerLiveSteps}
-            fallbackPartnerName={livePartnerName}
-            isConnected={isPartnerLiveConnected}
-            onStepMetricsChange={setStepRouteMetrics}
-          />
-          <View style={styles.divider} />
-          <WeeklyProgress />
-          <View style={styles.divider} />
-          {/* @ts-ignore - DailyTasks expects onLogFood here, not isRunning but we are passing it for future use */}
-          <DailyTasks isRunning={isRunning} setIsRunning={setIsRunning} />
+        <View style={[styles.whiteSheet, { backgroundColor: dark ? '#0F172A' : '#FFFFFF', paddingBottom: 96 + Math.max(insets.bottom, 12) }]} onLayout={(event) => { activitySectionYRef.current = event.nativeEvent.layout.y; }}>
+          <View style={styles.dailyGoalsGroup}>
+          <View style={styles.goalsHeading}>
+            <Text accessibilityRole="header" style={[styles.goalsHeadingText, { color: dark ? '#F1F5F9' : '#182033' }]}>This week’s challenge</Text>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open goal settings" onPress={() => { setShowGoalSettings(true); void homeGoals.refresh(); }} style={styles.goalSettingsButton}>
+              <Settings size={22} color={dark ? '#CBD5E1' : '#64748B'} />
+              {homeGoals.removals.some(row => !row.accepted && !row.requestedByYou) && <View style={styles.goalSettingsBadge} />}
+            </TouchableOpacity>
+          </View>
+          {homeGoals.visible.map(goal => <React.Fragment key={goal}>{goalCards[goal]}</React.Fragment>)}
+          {homeGoals.visible.length === 0 && <Text style={{ color: dark ? '#CBD5E1' : '#64748B', paddingVertical: 16 }}>You both agreed to pause all goals this week. They return next week.</Text>}
+          </View>
         </View>
 
       </Animated.ScrollView>
+      </HomeAvatarScope>
+
+      <GoalSettingsSheet visible={showGoalSettings} onClose={() => setShowGoalSettings(false)} goals={homeGoals} partnerName={partner?.displayName || livePartnerName || 'Your partner'} />
 
       <PremiumFullscreen
         visible={!!fullscreenCelebration}
@@ -1214,22 +1054,27 @@ export default function App() {
         onSendAnimation={handleInterveneAnimation}
       />
 
+      <WaterReminderBottomSheet
+        visible={showWaterReminderSheet}
+        onClose={() => setShowWaterReminderSheet(false)}
+        partnerName={livePartnerName}
+        chatConnected={chatConnected}
+        onSend={handleWaterReminderSend}
+      />
+
+      <HomeInvitations invitation={invitation} active={isFocused} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  goalsHeading: { paddingTop: 16, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  goalSettingsButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  goalSettingsBadge: { position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.primary },
+  goalsHeadingText: { flex: 1, fontSize: 22, lineHeight: 28, fontWeight: '700', letterSpacing: -0.4 },
   mainContainer: {
     flex: 1,
     backgroundColor: COLORS.bg
-  },
-  waveBackgroundContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 500,
-    zIndex: -1,
   },
   scrollContainer: {
     flex: 1,
@@ -1237,11 +1082,16 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    paddingHorizontal: 12,
     alignItems: 'center',
     zIndex: 1000,
   },
+  headerSide: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  headerSideRight: { alignItems: 'flex-end' },
+  brandTitle: { width: 132, textAlign: 'center', color: '#FFFFFF', fontSize: 20, fontWeight: '800', fontStyle: 'italic', letterSpacing: -0.6 },
   headerRightRow: {
+    maxWidth: '100%',
+    minHeight: 30,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
@@ -1253,35 +1103,18 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
-  partnerPillCombined: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  partnerNameCombined: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#1F2937',
-    textTransform: 'uppercase',
-  },
-  pillDivider: {
-    width: 1,
-    height: 14,
-    backgroundColor: '#F3F4F6',
-  },
   pointsSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    gap: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    gap: 3,
   },
   pointsTextCombined: {
     color: '#1F2937',
     fontWeight: '800',
-    fontSize: 12,
+    fontSize: 10,
+    fontVariant: ['tabular-nums'],
   },
   profileBtn: {
     width: 36,
@@ -1452,222 +1285,35 @@ const styles = StyleSheet.create({
     color: COLORS.textMain,
   },
 
-  heroWrapper: { paddingHorizontal: 16, marginTop: 5 },
-
-  heroHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-
-  heroTitle: { fontSize: 28, fontWeight: '900', color: '#FFF', letterSpacing: -0.5 },
+  heroWrapper: { marginTop: 4, marginBottom: 20 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   refreshBtn: { padding: 4, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.2)' },
-  mascotWrapper: { 
-    position: 'absolute',
-    right: 8,
-    top: -5,
-    width: 110,
-    height: 110,
-    zIndex: 0,
-  },
-
-  grid: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  cardOuter: { backgroundColor: '#FFF', padding: 4, borderRadius: 24, elevation: 8, shadowOpacity: 0.1, shadowRadius: 15, position: 'relative' },
-  cardInner: { padding: 12, borderRadius: 20, alignItems: 'center', height: 195, overflow: 'visible' },
-  microTag: { fontSize: 9, fontWeight: '900', letterSpacing: 1.2, marginBottom: 8 },
-  mainStatRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  bigNum: { fontSize: 32, fontWeight: '900', color: COLORS.textMain },
-  subLabel: { fontSize: 8, color: COLORS.textMuted, fontWeight: '700', marginBottom: 12 },
-  statsContainer: { width: '100%', gap: 6 },
-  consistentRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F9FAFB', padding: 6, borderRadius: 10 },
-  iconBox: { width: 24, height: 24, borderRadius: 6, backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center' },
-  statValue: { fontSize: 12, fontWeight: '800', color: COLORS.textMain },
+  weeklyRewardPage: { justifyContent: 'flex-start', paddingTop: 0, paddingBottom: 0 },
   logFoodButton: {
-    position: 'absolute',
-    bottom: -10,
-    right: -5,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    gap: 4,
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    zIndex: 20,
+    flex: 1, minHeight: 50, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', gap: 8, borderRadius: 20, borderCurve: 'continuous', backgroundColor: COLORS.primary,
   },
-  logFoodText: {
-    color: '#FFF',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  motivateButton: {
-    position: 'absolute',
-    bottom: -10,
-    right: -5,
-    zIndex: 20,
-    elevation: 8,
-    shadowColor: '#DC2626',
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-  },
-  motivateButtonPress: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#FFF',
-    borderWidth: 1.5,
-    borderColor: '#FCA5A5',
-    paddingVertical: 8,
-    paddingHorizontal: 11,
-    borderRadius: 14,
-  },
-  motivateButtonText: {
-    color: '#DC2626',
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  placeholderCardInner: {
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.8)',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  placeholderGlassOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  partnerImageWrapper: {
-    width: 70,
-    height: 70,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 2,
-  },
-  cardInviteActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-    width: '100%',
-  },
-  cardInviteDecline: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF',
-    borderWidth: 1.5,
-    borderColor: '#FEE2E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardInviteAccept: {
-    flex: 1,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.primary,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    elevation: 3,
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  cardInviteAcceptText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  partnerPlaceholderImg: {
-    width: 60,
-    height: 60,
-  },
-  placeholderTitle: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: '#1E293B',
-    textAlign: 'center',
-    marginBottom: 0,
-    letterSpacing: -0.3,
-  },
-  placeholderBody: {
-    fontSize: 10,
-    lineHeight: 13,
-    color: '#64748B',
-    textAlign: 'center',
-    paddingHorizontal: 10,
-    marginBottom: 2,
-  },
-  placeholderCta: {
-    marginTop: 8,
-    paddingHorizontal: 18,
-    paddingVertical: 7,
-    borderRadius: 18,
-    shadowColor: '#1F938A',
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  placeholderCtaText: {
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1,
-    color: '#FFF',
-  },
-
-  vsFloating: { position: 'absolute', left: '50%', top: '35%', marginLeft: -14, zIndex: 10, padding: 3, backgroundColor: '#FFF', borderRadius: 20 },
-  vsInner: { width: 22, height: 22, borderRadius: 11, backgroundColor: COLORS.border, alignItems: 'center', justifyContent: 'center' },
-
-  heroPager: { 
-    width: width - 32,
+  logFoodText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  nutritionLogFoodButton: { flex: 0, marginTop: 0, minHeight: 48 },
+  heroPager: {
     zIndex: 5,
   },
-  weightHeroPage: {},
-  waterHeroPage: {},
+  weightHeroPage: { paddingHorizontal: 8 },
+  waterHeroPage: { paddingHorizontal: 8 },
 
-
-  // --- UPDATED PAGINATION STYLES ---
-  paginationContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 0,
-  },
-  dot: {
-    height: 4,
-    borderRadius: 2,
-  },
-  dotTapTarget: {
-    paddingVertical: 6,
-    paddingHorizontal: 2,
-  },
-  activeDot: {
-    width: 18,
-    backgroundColor: COLORS.primary,
-    opacity: 1,
-  },
-  inactiveDot: {
-    width: 6,
-    backgroundColor: '#1F938A',
-  },
 
   whiteSheet: {
     backgroundColor: 'white',
     borderTopLeftRadius: 40,
     borderTopRightRadius: 40,
     paddingHorizontal: 24,
-    paddingTop: 24,
+    paddingTop: 8,
     paddingBottom: 80,
-    marginTop: 5,
-    minHeight: 800,
+    marginTop: 0,
     zIndex: 10,
+  },
+  dailyGoalsGroup: {
+    marginHorizontal: -20, marginBottom: 10, paddingHorizontal: 20,
   },
   widgetTestCard: {
     flexDirection: 'row',
@@ -1823,5 +1469,4 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: '500',
   },
-
 });

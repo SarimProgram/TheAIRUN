@@ -7,3 +7,5 @@ expo-env.d.ts
 AuthKey_*.p8
 *.p8
 # @end expo-cli
+
+.env*.local

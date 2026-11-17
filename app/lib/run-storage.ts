@@ -11,6 +11,7 @@ import {
   type LocalRunRow,
 } from "@/db/offlineDb";
 import { estimateDistanceCalories } from "@/lib/calorie-burn";
+import { notifyWorkoutOverview } from './workout-events';
 
 const RUNS_KEY = "runs_v1";
 let didMigrate = false;
@@ -119,6 +120,7 @@ export async function syncPendingRuns(authFetch: AuthFetch): Promise<PaceSyncUpd
 
   if (syncedIds.length > 0) {
     await markRunSessionsSynced(syncedIds);
+    notifyWorkoutOverview();
   }
   return latestPaceUpdate;
 }

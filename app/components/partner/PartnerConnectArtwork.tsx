@@ -24,6 +24,7 @@ const COLORS = {
 
 type PartnerConnectArtworkProps = {
     width: number;
+    plain?: boolean;
     leftName?: string;
     rightName?: string;
     leftGender?: string | null;
@@ -115,6 +116,7 @@ function PartnerHeartConnector({
 
 export function PartnerConnectArtwork({
     width,
+    plain = false,
     leftName,
     rightName,
     leftGender,
@@ -157,6 +159,7 @@ export function PartnerConnectArtwork({
                     width={halfWidth}
                     imageHeight={imageHeight}
                     mirrored={false}
+                    showGlow={!plain}
                     {...leftAccent}
                 />
                 <AvatarSide
@@ -164,15 +167,16 @@ export function PartnerConnectArtwork({
                     width={halfWidth}
                     imageHeight={imageHeight}
                     mirrored
+                    showGlow={!plain}
                     {...rightAccent}
                 />
             </View>
 
-            <View style={styles.partnerLabelRow}>
+            {!plain && <View style={styles.partnerLabelRow}>
                 <View style={styles.partnerRule} />
                 <Text style={styles.partnerLabel}>PARTNER SPACE</Text>
                 <View style={styles.partnerRule} />
-            </View>
+            </View>}
 
             {hasNames ? (
                 <View style={styles.footerRow}>
@@ -248,6 +252,7 @@ function AvatarSide({
     imageHeight,
     mirrored,
     accentGlow,
+    showGlow,
 }: {
     source: number;
     width: number;
@@ -256,12 +261,13 @@ function AvatarSide({
     accent: string;
     accentSoft: string;
     accentGlow: string;
+    showGlow: boolean;
 }) {
     const glowSize = width * 0.52;
 
     return (
         <View style={[styles.avatarSlot, { width, height: imageHeight }]}>
-            <View
+            {showGlow && <View
                 style={[
                     styles.avatarGlow,
                     {
@@ -273,7 +279,7 @@ function AvatarSide({
                     },
                 ]}
                 pointerEvents="none"
-            />
+            />}
             <View style={[styles.imageWrap, mirrored && styles.imageWrapMirrored]}>
                 <Image
                     source={source}

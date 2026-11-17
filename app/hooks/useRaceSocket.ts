@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '@/src/auth/authContext';
 import { API_BASE_URL } from '../config/api';
+import { notifyInvitationChange, type InvitationChange } from '../lib/invitation-events';
 
 export type RaceState =
     | 'idle'
@@ -39,6 +40,7 @@ export interface UseRaceSocketResult {
     raceDistance: number;
     countdown: number | null;
     partnerPosition: PartnerPosition | null;
+    myDistance: number;
     winner: { odId: string; winnerName: string; duration: number; finalDistance?: number } | null;
     raceStartTime: number | null;
 
@@ -62,6 +64,7 @@ export function useRaceSocket(): UseRaceSocketResult {
     const [isConnected, setIsConnected] = useState(false);
     const [raceState, setRaceState] = useState<RaceState>('idle');
     const [inviteFrom, setInviteFrom] = useState<RaceInvite | null>(null);
+    const [myDistance, setMyDistance] = useState(0);
     const [raceDistance, setRaceDistance] = useState(1000);
     const [countdown, setCountdown] = useState<number | null>(null);
     const [partnerPosition, setPartnerPosition] = useState<PartnerPosition | null>(null);
@@ -87,6 +90,13 @@ export function useRaceSocket(): UseRaceSocketResult {
             console.log('[RaceSocket] Connected');
             setIsConnected(true);
             socket.emit('race:getPendingInvite');
+            notifyInvitationChange({ scope: 'weekly_prize' });
+            notifyInvitationChange({ scope: 'couple_challenge' });
+            notifyInvitationChange({ scope: 'home_goals' });
+        });
+
+        socket.on('invitations:changed', (change: InvitationChange) => {
+            if (change.scope === 'weekly_prize' || change.scope === 'couple_challenge' || change.scope === 'home_goals') notifyInvitationChange(change);
         });
 
         socket.on('disconnect', () => {
@@ -129,6 +139,8 @@ export function useRaceSocket(): UseRaceSocketResult {
             setRaceStartTime(data.startTime);
             setRaceDistance(data.distance);
             setCountdown(null);
+            setMyDistance(0);
+            setPartnerPosition(null);
             setRaceState('racing');
         });
 
@@ -152,7 +164,8 @@ export function useRaceSocket(): UseRaceSocketResult {
 
         socket.on('race:error', (data: { message: string }) => {
             console.error('[RaceSocket] Error:', data.message);
-            setRaceState('idle');
+            // Keep a received invitation available so its response can be retried.
+            setRaceState(current => current === 'invited' ? current : 'idle');
         });
 
         return () => {
@@ -223,6 +236,7 @@ export function useRaceSocket(): UseRaceSocketResult {
         distanceCovered: number;
         speed: number
     }) => {
+        setMyDistance(data.distanceCovered);
         if (socketRef.current) {
             console.log('[RaceSocket] Sending position:', data.distanceCovered, 'm');
             socketRef.current.emit('race:position', data);
@@ -263,6 +277,7 @@ export function useRaceSocket(): UseRaceSocketResult {
         raceDistance,
         countdown,
         partnerPosition,
+        myDistance,
         winner,
         raceStartTime,
         sendInvite,

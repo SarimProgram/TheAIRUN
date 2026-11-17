@@ -1,45 +1,19 @@
-import React, { useMemo, useRef, useState } from 'react';
-import {
-  StyleSheet,
-  View,
-  Text,
-  SafeAreaView,
-  TouchableOpacity,
-  Dimensions,
-  Platform,
-  ScrollView,
-  Modal,
-} from 'react-native';
-import { Image } from 'expo-image';
-import {
-  ChevronLeft,
-  ArrowRight,
-} from 'lucide-react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, { Extrapolation, interpolate, interpolateColor, useAnimatedStyle, useReducedMotion, useSharedValue, withSpring, withTiming, type SharedValue } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
+import * as Haptics from 'expo-haptics';
+import { Image, type ImageSource } from 'expo-image';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getGenderMascotSource } from '../../utils/genderMascot';
+import Slider from '@react-native-community/slider';
+import { ArrowRight, CalendarHeart, ChartSpline, Check, Flag, Flame, type LucideIcon } from 'lucide-react-native';
+import { C, EASE_OUT, OnboardingScreen, SURFACE_SELECTED, ScreenTitle, rise, useCompact } from './OnboardingKit';
 
-const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
-const width = Math.min(windowWidth, 480);
-const height = Math.min(windowHeight, 800);
-const isAirLayout = windowWidth >= 700 || (Platform.OS === 'ios' && Platform.isPad);
-const isCompactFrame = windowHeight <= 820;
-const useCompactLayout = isAirLayout || isCompactFrame;
-const modalContentWidth = Math.min(windowWidth * 0.9, 520);
-
-const COLORS = {
-  brand: '#FF6B6B', // Vibrant Coral
-  brandDark: '#EE5253',
-  ink: '#121212',
-  white: '#FFFFFF',
-  glass: 'rgba(255, 255, 255, 0.95)',
-  border: '#F0F0F0',
-  muted: '#999999',
-  accent: '#FFF0F0',
-  offWhite: '#F5F5F7',
-};
-
+const SURFACE = 'rgba(255,255,255,0.78)';
+const TILE = '#FFF0EF';
+const RING = '#D8D9DB';
+const METER_IDLE = '#FFC2BE';
+const SETTLE = { duration: 400, dampingRatio: 0.72 };
 const MAX_WEEKLY_LOSS_KG = 1.5;
 
 function addWeeks(date: Date, weeks: number) {
@@ -74,41 +48,83 @@ function formatMaxWeeklyLoss(unit?: string) {
   return `${amount.toFixed(1)} ${normalizedUnit}`;
 }
 
-const STEPS = [
+const formatShortDate = (date: Date) => date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+type StepId = 'timeline' | 'trainingStyle' | 'workoutDaysPerWeek' | 'workoutPreference' | 'raceTraining';
+type Option = { id: string; label: string; caption?: string; image?: ImageSource; Icon?: LucideIcon };
+type Step = { id: StepId; lead: string; accent: string; trail?: string; lines: 1 | 2; sparkles?: boolean; options: Option[] };
+
+const STEPS: Step[] = [
   {
     id: 'timeline',
-    title: 'Pick your pace',
-    desc: '',
+    lead: 'Choose your ',
+    accent: 'weight loss',
+    trail: ' pace',
+    lines: 2,
     options: [
-      { id: 'moderate', label: 'Slow and steady', icon: 'chart-timeline-variant' },
-      { id: 'aggressive', label: 'Faster pace', icon: 'fire' },
-      { id: 'custom', label: 'Pick a date', icon: 'calendar-star' },
+      { id: 'moderate', label: 'Slow & steady', Icon: ChartSpline },
+      { id: 'aggressive', label: 'Faster pace', Icon: Flame },
+      { id: 'custom', label: 'Target date', Icon: CalendarHeart },
     ],
   },
   {
     id: 'trainingStyle',
-    title: 'Walking or running?',
-    desc: 'Pick what fits your week.',
+    lead: 'Choose your ',
+    accent: 'workout?',
+    lines: 2,
+    sparkles: true,
     options: [
-      { id: 'walkOnly', label: 'Walk only', icon: 'walk' },
-      { id: 'runOnly', label: 'Run only', icon: 'run' },
-      { id: 'walkAndRun', label: 'Walk and run', icon: 'vector-combine' },
+      { id: 'workout', label: 'Workout', caption: 'Strength, gym or home', image: require('../../assets/goals/goal-weight-and-run.png') },
+      { id: 'runOnly', label: 'Running', caption: 'Run-focused plan', image: require('../../assets/goals/goal-stronger-runner.png') },
+      { id: 'walkOnly', label: 'Walking', caption: 'Low impact, step based', image: require('../../assets/goals/goal-walking.png') },
+    ],
+  },
+  {
+    id: 'workoutDaysPerWeek',
+    lead: 'How many ',
+    accent: 'days a week?',
+    lines: 2,
+    options: [],
+  },
+  {
+    id: 'workoutPreference',
+    lead: 'Your preferred ',
+    accent: 'workout?',
+    lines: 2,
+    options: [
+      { id: 'strength', label: 'Strength', caption: 'Build muscle', image: require('../../assets/goals/workout-strength.png') },
+      { id: 'gym', label: 'Gym', caption: 'Use gym equipment', image: require('../../assets/goals/workout-gym.png') },
+      { id: 'home', label: 'Home', caption: 'Train in your space', image: require('../../assets/goals/workout-home.png') },
     ],
   },
   {
     id: 'raceTraining',
-    title: 'Got a race?',
-    desc: 'This helps us shape your plan.',
+    lead: 'Got a ',
+    accent: 'race?',
+    lines: 1,
+    sparkles: true,
     options: [
-      { id: 'yes', label: 'Yes, I have a race', icon: 'flag-checkered' },
-      { id: 'no', label: 'No, just weight loss', icon: 'heart-pulse' },
+      { id: 'yes', label: 'Yes, I have a race', caption: "We'll build toward race day", image: require('../../assets/goals/goal-race-medal.png') },
+      { id: 'no', label: 'No, just weight loss', caption: 'Focus on fat loss', image: require('../../assets/goals/goal-lose-weight.png') },
     ],
   },
 ];
 
-export default function WeightBranch({ onComplete, onBack, currentWeight, targetWeight, unit, gender }: any) {
+interface Props {
+  onComplete?: (data: Record<string, unknown>) => void;
+  onBack?: () => void;
+  currentWeight: number | string;
+  targetWeight: number | string;
+  unit?: string;
+  gender?: string | null;
+}
+
+export default function WeightBranch({ onComplete, onBack, currentWeight, targetWeight, unit }: Props) {
+  const compact = useCompact();
+  const reducedMotion = useReducedMotion();
   const [currentStep, setCurrentStep] = useState(0);
-  const [selections, setSelections] = useState<Record<string, string>>({});
+  const [selections, setSelections] = useState<Record<string, string>>({ workoutDaysPerWeek: '3' });
+  const [trainingStyles, setTrainingStyles] = useState<string[]>([]);
   const [targetDate, setTargetDate] = useState<Date | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [calculatedWeeks, setCalculatedWeeks] = useState<number | null>(null);
@@ -135,6 +151,29 @@ export default function WeightBranch({ onComplete, onBack, currentWeight, target
   }, [minWeeksRequired, minimumTargetDate, unit, weightDiff]);
   const lastPickerDateRef = useRef<Date | null>(null);
   const pickerMoveCountRef = useRef(0);
+
+  const exit = useSharedValue(0);
+  const exitDirection = useSharedValue(1);
+  const transitioning = useRef(false);
+
+  useLayoutEffect(() => {
+    exit.set(0);
+    transitioning.current = false;
+  }, [currentStep, exit]);
+
+  const stepStyle = useAnimatedStyle(() => ({
+    opacity: 1 - exit.get(),
+    transform: [{ translateX: -exitDirection.get() * 28 * exit.get() }],
+  }));
+
+  const goToStep = (next: number, direction: 1 | -1) => {
+    if (transitioning.current) return;
+    transitioning.current = true;
+    exitDirection.set(direction);
+    exit.set(withTiming(1, { duration: reducedMotion ? 0 : 150, easing: EASE_OUT }, (finished) => {
+      if (finished) scheduleOnRN(setCurrentStep, next);
+    }));
+  };
 
   const calculateWeeksFromDate = (date: Date) => {
     const diff = date.getTime() - new Date().getTime();
@@ -165,12 +204,17 @@ export default function WeightBranch({ onComplete, onBack, currentWeight, target
     return picked;
   };
 
+  const selectCustomTimeline = () => {
+    Haptics.selectionAsync().catch(() => {});
+    setSelections((prev) => ({ ...prev, timeline: 'custom' }));
+  };
+
   const onDateChange = (event: any, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
       setShowCalendar(false);
       if (selectedDate) {
         applySelectedDate(selectedDate);
-        setSelections({ ...selections, timeline: 'custom' });
+        selectCustomTimeline();
       }
       return;
     }
@@ -199,7 +243,7 @@ export default function WeightBranch({ onComplete, onBack, currentWeight, target
       ? applySelectedDate(targetDate)
       : applySelectedDate(minimumTargetDate);
 
-    setSelections({ ...selections, timeline: 'custom' });
+    selectCustomTimeline();
     setTargetDate(resolvedDate);
     setShowCalendar(false);
   };
@@ -218,198 +262,215 @@ export default function WeightBranch({ onComplete, onBack, currentWeight, target
     setShowCalendar(true);
   };
 
-  const handleNext = async () => {
-    if (currentStep === 1 && selections.trainingStyle === 'walkOnly') {
-      onComplete?.({ ...selections, targetDate, calculatedWeeks });
+  const includesWorkout = trainingStyles.includes('workout');
+  const includesRunning = trainingStyles.includes('runOnly');
+  const steps = STEPS.filter((step) =>
+    (step.id !== 'workoutPreference' || includesWorkout) &&
+    (step.id !== 'raceTraining' || includesRunning)
+  );
+  const stepData = steps[currentStep];
+  const isLastStep = currentStep === steps.length - 1;
+
+  const handleNext = () => {
+    if (transitioning.current || !hasSelection) return;
+    if (!isLastStep) {
+      goToStep(currentStep + 1, 1);
       return;
     }
 
-    if (currentStep < STEPS.length - 1) {
-      setCurrentStep(currentStep + 1);
-    } else {
-      onComplete?.({ ...selections, targetDate, calculatedWeeks });
-    }
+    onComplete?.({
+      timeline: selections.timeline,
+      trainingStyle: trainingStyles.join(', '),
+      workoutDaysPerWeek: Number(selections.workoutDaysPerWeek),
+      workoutPreference: includesWorkout ? selections.workoutPreference : null,
+      ...(includesRunning ? { raceTraining: selections.raceTraining } : {}),
+      targetDate,
+      calculatedWeeks,
+    });
   };
 
   const handleBack = () => {
     if (currentStep > 0) {
-      setCurrentStep(currentStep - 1);
+      goToStep(currentStep - 1, -1);
     } else {
       onBack?.();
     }
   };
 
   const toggleSelection = (id: string) => {
+    if (transitioning.current) return;
     if (id === 'custom') {
       openCustomDatePicker();
       return;
     }
 
-    const nextWeightDiff = Math.abs(Number(currentWeight) - Number(targetWeight));
     if (id === 'moderate') {
-      setCalculatedWeeks(Math.ceil(nextWeightDiff / 0.5));
+      setCalculatedWeeks(Math.ceil(weightDiff / 0.5));
       setIsViable(true);
       setTargetDate(null);
       setShowMinDateBlockedHint(false);
     } else if (id === 'aggressive') {
-      setCalculatedWeeks(Math.ceil(nextWeightDiff / 1.0));
+      setCalculatedWeeks(Math.ceil(weightDiff / 1.0));
       setIsViable(true);
       setTargetDate(null);
       setShowMinDateBlockedHint(false);
-    } else {
-      setCalculatedWeeks(null);
-      setIsViable(true);
     }
 
-    setSelections({ ...selections, [STEPS[currentStep].id]: id });
+    const stepId = stepData.id;
+    if (stepId === 'trainingStyle') {
+      Haptics.selectionAsync().catch(() => {});
+      setTrainingStyles((prev) => prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]);
+      return;
+    }
+    if (selections[stepId] === id) return;
+    Haptics.selectionAsync().catch(() => {});
+    setSelections((prev) => ({ ...prev, [stepId]: id }));
   };
 
-  const stepData = STEPS[currentStep];
+  const isMultiSelect = stepData.id === 'trainingStyle';
   const selectedOptionId = selections[stepData.id];
-  const isButtonActive = !!selectedOptionId;
-  const mascotSource = getGenderMascotSource(gender);
+  const hasSelection = isMultiSelect ? trainingStyles.length > 0 : !!selectedOptionId;
+  const dense = stepData.options.length > 3;
+  const unitLabel = unit?.toLowerCase() === 'lbs' ? 'lb' : 'kg';
   const showAggressiveDateWarning =
-    currentStep === 0 &&
+    stepData.id === 'timeline' &&
     selections.timeline === 'custom' &&
     !!targetDate &&
     calculatedWeeks !== null &&
     !isViable;
 
+  const renderMeta = (option: Option, selected: boolean): ReactNode => {
+    if (option.caption) return <Text style={styles.caption} numberOfLines={1}>{option.caption}</Text>;
+    if (weightDiff <= 0 && option.id !== 'custom') return null;
+
+    if (option.id === 'moderate') return <PaceMeter level={1} selected={selected} label={`~${Math.ceil(weightDiff / 0.5)} weeks`} />;
+    if (option.id === 'aggressive') return <PaceMeter level={3} selected={selected} label={`~${Math.ceil(weightDiff / 1.0)} weeks`} />;
+    if (selected && targetDate && calculatedWeeks !== null) {
+      return <Text style={[styles.caption, styles.captionAccent]} numberOfLines={1}>
+        {`By ${formatShortDate(targetDate)} · ${calculatedWeeks} wk`}
+      </Text>;
+    }
+    return <DateTrail />;
+  };
+
   return (
-    <View style={styles.container}>
-        <View style={[styles.fixedHeader, useCompactLayout && styles.fixedHeaderCompact]}>
-            <LinearGradient colors={[COLORS.brand, COLORS.brandDark]} style={styles.hero}>
-                <Text style={styles.watermarkText}>WEIGHT LOSS</Text>
-                <SafeAreaView>
-                    <View style={[styles.navRow, useCompactLayout && styles.navRowCompact]}>
-                        <TouchableOpacity
-                            onPress={handleBack}
-                            style={[styles.backBtn, useCompactLayout && styles.backBtnCompact]}
-                        >
-                            <ChevronLeft color={COLORS.white} size={28} />
-                        </TouchableOpacity>
-                        <View style={styles.progressContainer}>
-                            <View style={[styles.progressBar, { width: `${((currentStep + 1) / STEPS.length) * 100}%` }]} />
-                        </View>
-                    </View>
-                </SafeAreaView>
-                
-                <View style={[styles.mascotWrapper, useCompactLayout && styles.mascotWrapperCompact]} pointerEvents="none">
-                    <Image
-                        source={mascotSource}
-                        style={[styles.heroMascot, useCompactLayout && styles.heroMascotCompact]}
-                        contentFit="contain"
-                    />
-                </View>
-            </LinearGradient>
-        </View>
-
-      <View
-        style={[
-            styles.contentMask,
-            useCompactLayout && styles.contentMaskCompact,
-        ]}
+    <>
+      <OnboardingScreen
+        key={stepData.id}
+        onBack={handleBack}
+        showBrand
+        scrollable
+        ctaLabel={isLastStep ? 'Unlock my plan' : 'Continue'}
+        onCta={handleNext}
+        ctaDisabled={!hasSelection}
       >
-        <View style={styles.content}>
-            <ScrollView 
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={[styles.scrollContent, useCompactLayout && styles.scrollContentCompact]}
+        <Animated.View style={stepStyle}>
+          <View key={stepData.id}>
+            <ScreenTitle
+              lead={stepData.lead}
+              accent={stepData.accent}
+              trail={stepData.trail}
+              lines={stepData.lines}
+              sparkles={stepData.sparkles}
+              style={{ marginTop: compact ? 12 : 20 }}
+            />
+
+            {stepData.id === 'timeline' && (
+              <Animated.View
+                entering={rise(140)}
+                style={[styles.summary, { marginTop: compact ? 12 : 18 }]}
+                accessible
+                accessibilityLabel={`From ${currentWeight} ${unitLabel} to ${targetWeight} ${unitLabel}`}
+              >
+                <View style={styles.summarySide}>
+                  <Text style={styles.summaryValue}>{currentWeight}<Text style={styles.summaryUnit}> {unitLabel}</Text></Text>
+                </View>
+                <ArrowRight color={C.muted} size={20} strokeWidth={2.4} />
+                <View style={[styles.summarySide, styles.summaryTarget]}>
+                  <Text style={[styles.summaryValue, styles.coral]}>{targetWeight}<Text style={[styles.summaryUnit, styles.coral]}> {unitLabel}</Text></Text>
+                </View>
+              </Animated.View>
+            )}
+
+            {isMultiSelect && <Text style={styles.selectionHint}>Choose all that apply.</Text>}
+
+            {stepData.id === 'workoutDaysPerWeek' ? (
+              <Animated.View entering={rise(200)} style={styles.frequency}>
+                <View style={styles.frequencyValue} accessible accessibilityLabel={`${selections.workoutDaysPerWeek} ${selections.workoutDaysPerWeek === '1' ? 'day' : 'days'} per week`}>
+                  <Text style={styles.frequencyNumber}>{selections.workoutDaysPerWeek}</Text>
+                  <Text style={styles.frequencyUnit}>{selections.workoutDaysPerWeek === '1' ? 'day' : 'days'} per week</Text>
+                </View>
+                <Text style={styles.frequencyHint}>Choose a routine that fits your week.</Text>
+                <Slider
+                  style={styles.frequencySlider}
+                  minimumValue={1}
+                  maximumValue={7}
+                  step={1}
+                  tapToSeek
+                  value={Number(selections.workoutDaysPerWeek)}
+                  minimumTrackTintColor={C.coral}
+                  maximumTrackTintColor={RING}
+                  thumbTintColor={C.coral}
+                  accessibilityLabel="Workout days per week"
+                  accessibilityValue={{ min: 1, max: 7, now: Number(selections.workoutDaysPerWeek), text: `${selections.workoutDaysPerWeek} days per week` }}
+                  onValueChange={(value) => setSelections((prev) => ({ ...prev, workoutDaysPerWeek: String(Math.round(value)) }))}
+                  onSlidingComplete={() => { Haptics.selectionAsync().catch(() => {}); }}
+                />
+                <View style={styles.frequencyTicks} importantForAccessibility="no-hide-descendants" aria-hidden>
+                  {[1, 2, 3, 4, 5, 6, 7].map((day) => <Text key={day} style={[styles.frequencyTick, Number(selections.workoutDaysPerWeek) === day && styles.frequencyTickSelected]}>{day}</Text>)}
+                </View>
+              </Animated.View>
+            ) : <View
+              style={{ marginTop: compact ? 14 : 22, gap: dense ? (compact ? 10 : 14) : (compact ? 12 : 16) }}
+              accessibilityRole={isMultiSelect ? undefined : "radiogroup"}
             >
-                <View style={[styles.textGroup, useCompactLayout && styles.textGroupCompact]}>
-                    <Text style={[styles.mainTitle, useCompactLayout && styles.mainTitleCompact]}>{stepData.title}</Text>
-                    {!!stepData.desc && (
-                        <Text style={[styles.subTitle, useCompactLayout && styles.subTitleCompact]}>{stepData.desc}</Text>
-                    )}
-                </View>
+              {stepData.options.map((option, index) => {
+                const selected = isMultiSelect ? trainingStyles.includes(option.id) : selectedOptionId === option.id;
+                return (
+                  <Animated.View key={option.id} entering={rise(200 + index * 70)}>
+                    <ChoiceCard
+                      label={option.label}
+                      selected={selected}
+                      multiple={isMultiSelect}
+                      compact={compact}
+                      dense={dense}
+                      onPress={() => toggleSelection(option.id)}
+                      leading={option.image
+                        ? <View style={[styles.art, dense && styles.artDense, compact && styles.artCompact]}>
+                          <Image source={option.image} contentFit="contain" style={styles.artImage} accessible={false} />
+                        </View>
+                        : option.Icon && <View style={[styles.tile, compact && styles.tileCompact]}>
+                          <option.Icon color={C.coral} size={compact ? 24 : 27} strokeWidth={2.4} />
+                        </View>}
+                      meta={renderMeta(option, selected)}
+                    />
+                  </Animated.View>
+                );
+              })}
+            </View>}
 
-                <View style={[styles.optionStack, useCompactLayout && styles.optionStackCompact]}>
-                    {stepData.options.map((item) => {
-                        const isSelected = selectedOptionId === item.id;
-                        return (
-                            <TouchableOpacity 
-                                key={item.id}
-                                onPress={() => toggleSelection(item.id)}
-                                activeOpacity={0.8}
-                                style={[
-                                    styles.optionCard,
-                                    useCompactLayout && styles.optionCardCompact,
-                                    isSelected && styles.optionCardActive
-                                ]}
-                            >
-                                <View style={[styles.iconWrap, useCompactLayout && styles.iconWrapCompact, isSelected && styles.iconWrapActive]}>
-                                    <MaterialCommunityIcons 
-                                        name={item.icon as any} 
-                                        size={useCompactLayout ? 21 : 24}
-                                        color={isSelected ? COLORS.white : COLORS.brand} 
-                                    />
-                                </View>
-                                <View style={[styles.optionTextWrap, useCompactLayout && styles.optionTextWrapCompact]}>
-                                    <Text style={[styles.optionTitle, useCompactLayout && styles.optionTitleCompact, isSelected && { color: COLORS.brand }]}>{item.label}</Text>
-                                </View>
-                                <MaterialCommunityIcons 
-                                    name={isSelected ? "check-circle" : "chevron-right"} 
-                                    size={24} 
-                                    color={isSelected ? COLORS.brand : "#E2E8F0"} 
-                                />
-                            </TouchableOpacity>
-                        );
-                    })}
-                </View>
+            {showAggressiveDateWarning && (
+              <Animated.View entering={rise(0)} style={styles.notice}>
+                <Text style={styles.noticeText}>{minimumDateBlockedMessage}</Text>
+              </Animated.View>
+            )}
+          </View>
+        </Animated.View>
+      </OnboardingScreen>
 
-                {currentStep === 0 && calculatedWeeks !== null && (
-                    <View style={[styles.weeksBadge, useCompactLayout && styles.weeksBadgeCompact, !isViable && styles.weeksBadgeWarning]}>
-                        <Text style={[styles.weeksText, useCompactLayout && styles.weeksTextCompact, !isViable && styles.weeksTextWarning]}>
-                            {selections.timeline === 'custom' && targetDate
-                                ? `Target: ${targetDate.toLocaleDateString()} • ${calculatedWeeks} weeks`
-                                : isViable
-                                    ? `Estimated: ${calculatedWeeks} weeks until goal`
-                                    : `Too soon for your goal (${calculatedWeeks} weeks).`}
-                        </Text>
-                        {showAggressiveDateWarning ? (
-                            <Text style={[styles.weeksHintText, useCompactLayout && styles.weeksHintTextCompact]}>
-                                {minimumDateBlockedMessage}
-                            </Text>
-                        ) : null}
-                    </View>
-                )}
-                
-                <View style={{ height: useCompactLayout ? 16 : 40 }} />
-            </ScrollView>
-
-            <View style={[styles.footer, useCompactLayout && styles.footerCompact]}>
-                <TouchableOpacity 
-                    disabled={!isButtonActive}
-                    onPress={handleNext}
-                    style={[styles.nextBtn, useCompactLayout && styles.nextBtnCompact, !isButtonActive && styles.nextBtnDisabled]}
-                    activeOpacity={0.9}
-                >
-                    <Text style={[styles.nextBtnText, useCompactLayout && styles.nextBtnTextCompact]}>
-                        {currentStep === STEPS.length - 1 ? 'Unlock My Plan' : 'Continue'}
-                    </Text>
-                    <View style={[styles.nextIconWrap, useCompactLayout && styles.nextIconWrapCompact]}>
-                        <ArrowRight color={COLORS.white} size={useCompactLayout ? 18 : 20} strokeWidth={3} />
-                    </View>
-                </TouchableOpacity>
-            </View>
-        </View>
-      </View>
-
-      {/* iOS Modal Date Picker */}
       {Platform.OS === 'ios' && (
-        <Modal animationType="fade" transparent={true} visible={showCalendar} onRequestClose={() => setShowCalendar(false)}>
-          <TouchableOpacity
-            style={styles.modalOverlay}
-            activeOpacity={1}
-            onPress={() => setShowCalendar(false)}
-          >
-            <TouchableOpacity activeOpacity={1} style={styles.modalContent}>
-              <View style={styles.modalHandle} />
-              <Text style={styles.modalTitle}>Choose Target Date</Text>
+        <Modal animationType="fade" transparent visible={showCalendar} onRequestClose={() => setShowCalendar(false)}>
+          <Pressable style={styles.modalOverlay} onPress={() => setShowCalendar(false)} accessibilityLabel="Close date picker">
+            <Pressable style={styles.modalContent} onPress={() => {}}>
+              <View style={styles.modalIcon}>
+                <CalendarHeart color={C.coral} size={26} strokeWidth={2.4} />
+              </View>
+              <Text style={styles.modalTitle}>Pick your <Text style={styles.coral}>target date</Text></Text>
               <Text style={styles.modalSubtitle}>{minimumDateReason}</Text>
 
               {showMinDateBlockedHint ? (
-                <View style={styles.modalNotice}>
-                  <Text style={styles.modalNoticeText}>{minimumDateBlockedMessage}</Text>
+                <View style={styles.notice}>
+                  <Text style={styles.noticeText}>{minimumDateBlockedMessage}</Text>
                 </View>
               ) : null}
 
@@ -422,438 +483,188 @@ export default function WeightBranch({ onComplete, onBack, currentWeight, target
                   onChange={onDateChange}
                   themeVariant="light"
                   style={styles.modalCalendar}
-                  textColor={COLORS.ink}
+                  textColor={C.ink}
                 />
               </View>
 
               <View style={styles.modalActionRow}>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.modalButtonSecondary]}
+                <Pressable
+                  style={({ pressed }) => [styles.modalButton, styles.modalButtonSecondary, pressed && styles.modalButtonPressed]}
                   onPress={() => setShowCalendar(false)}
-                  activeOpacity={0.85}
+                  accessibilityRole="button"
                 >
                   <Text style={[styles.modalButtonText, styles.modalButtonSecondaryText]}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.modalButtonPrimary]}
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.modalButton, styles.modalButtonPrimary, pressed && styles.modalButtonPressed]}
                   onPress={confirmIosDate}
-                  activeOpacity={0.9}
+                  accessibilityRole="button"
                 >
-                  <Text style={styles.modalButtonText}>Confirm Date</Text>
-                </TouchableOpacity>
+                  <Text style={styles.modalButtonText}>Confirm</Text>
+                </Pressable>
               </View>
-            </TouchableOpacity>
-          </TouchableOpacity>
+            </Pressable>
+          </Pressable>
         </Modal>
       )}
 
       {showCalendar && Platform.OS === 'android' && (
         <DateTimePicker
-            value={targetDate && targetDate >= minimumTargetDate ? targetDate : minimumTargetDate}
-            mode="date"
-            minimumDate={minimumTargetDate}
-            onChange={onDateChange}
+          value={targetDate && targetDate >= minimumTargetDate ? targetDate : minimumTargetDate}
+          mode="date"
+          minimumDate={minimumTargetDate}
+          onChange={onDateChange}
         />
       )}
-    </View>
+    </>
   );
 }
 
+function ChoiceCard({ label, selected, multiple, compact, dense, onPress, leading, meta }: {
+  label: string;
+  selected: boolean;
+  multiple: boolean;
+  compact: boolean;
+  dense: boolean;
+  onPress: () => void;
+  leading: ReactNode;
+  meta: ReactNode;
+}) {
+  const progress = useSharedValue(selected ? 1 : 0);
+  const badge = useSharedValue(selected ? 1 : 0);
+  const pressed = useSharedValue(0);
+
+  useEffect(() => {
+    progress.set(withTiming(selected ? 1 : 0, { duration: 240, easing: EASE_OUT }));
+    badge.set(selected ? withSpring(1, SETTLE) : withTiming(0, { duration: 140, easing: EASE_OUT }));
+  }, [selected, progress, badge]);
+
+  const cardStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(progress.get(), [0, 1], [C.border, C.coral]),
+    backgroundColor: interpolateColor(progress.get(), [0, 1], [SURFACE, SURFACE_SELECTED]),
+    transform: [{ scale: interpolate(pressed.get(), [0, 1], [1, 0.97]) }],
+  }));
+  const leadingStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: interpolate(badge.get(), [0, 1], [1, 1.07]) }, { rotate: `${interpolate(badge.get(), [0, 1], [0, -5])}deg` }],
+  }));
+  const checkStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, badge.get() * 1.6),
+    transform: [{ scale: interpolate(badge.get(), [0, 1], [0.55, 1]) }],
+  }));
+  const ringStyle = useAnimatedStyle(() => ({ opacity: 1 - progress.get() }));
+
+  return <Pressable
+    onPress={onPress}
+    onPressIn={() => pressed.set(withTiming(1, { duration: 110, easing: EASE_OUT }))}
+    onPressOut={() => pressed.set(withTiming(0, { duration: 180, easing: EASE_OUT }))}
+    accessibilityRole={multiple ? "checkbox" : "radio"}
+    accessibilityState={multiple ? { checked: selected } : { selected }}
+    accessibilityLabel={label}
+  >
+    <Animated.View style={[styles.card, dense && styles.cardDense, compact && (dense ? styles.cardDenseCompact : styles.cardCompact), cardStyle]}>
+      <Animated.View style={leadingStyle}>{leading}</Animated.View>
+      <View style={styles.cardBody}>
+        <Text style={[styles.cardTitle, compact && styles.cardTitleCompact]} numberOfLines={2}>{label}</Text>
+        {meta}
+      </View>
+      <View style={styles.radio}>
+        <Animated.View style={[styles.radioRing, ringStyle]} />
+        <Animated.View style={[styles.radioChecked, checkStyle]}>
+          <Check color={C.white} size={18} strokeWidth={3.4} />
+        </Animated.View>
+      </View>
+    </Animated.View>
+  </Pressable>;
+}
+
+function PaceMeter({ level, selected, label }: { level: number; selected: boolean; label: string }) {
+  const fill = useSharedValue(selected ? 1 : 0);
+
+  useEffect(() => {
+    fill.set(withTiming(selected ? 1 : 0, { duration: 460, easing: EASE_OUT }));
+  }, [selected, fill]);
+
+  return <View style={styles.metaRow}>
+    <View style={styles.meter}>
+      {[0, 1, 2].map((i) => <MeterBar key={i} index={i} active={i < level} fill={fill} />)}
+    </View>
+    <Text style={styles.caption}>{label}</Text>
+  </View>;
+}
+
+function MeterBar({ index, active, fill }: { index: number; active: boolean; fill: SharedValue<number> }) {
+  const style = useAnimatedStyle(() => {
+    const t = interpolate(fill.get(), [index * 0.22, index * 0.22 + 0.56], [0, 1], Extrapolation.CLAMP);
+    return { backgroundColor: active ? interpolateColor(t, [0, 1], [METER_IDLE, C.coral]) : C.track };
+  });
+  return <Animated.View style={[styles.meterBar, style]} />;
+}
+
+function DateTrail() {
+  return <View style={styles.metaRow} accessible={false}>
+    <View style={styles.trailStart} />
+    <View style={styles.trailDots}>
+      {Array.from({ length: 9 }, (_, i) => <View key={i} style={styles.trailDot} />)}
+    </View>
+    <Flag color={C.coral} fill={C.coral} size={15} strokeWidth={2.4} />
+  </View>;
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-  },
-  fixedHeader: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: height * 0.45,
-    width: width,
-  },
-  fixedHeaderCompact: {
-    height: height * 0.38,
-  },
-  hero: {
-    flex: 1,
-    paddingHorizontal: 25,
-    justifyContent: 'flex-start',
-  },
-  watermarkText: {
-    position: 'absolute',
-    top: height * 0.14,
-    left: 0,
-    right: 0,
-    width: width,
-    textAlign: 'center',
-    fontSize: 52,
-    fontWeight: '900',
-    color: 'rgba(255,255,255,0.22)',
-    letterSpacing: -1,
-    zIndex: 0,
-  },
-  navRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    gap: 15,
-  },
-  navRowCompact: {
-    marginTop: 4,
-  },
-  backBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 22,
-  },
-  backBtnCompact: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-  },
-  progressContainer: {
-    flex: 1,
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 2,
-    marginRight: 10,
-  },
-  progressBar: {
-    height: '100%',
-    backgroundColor: COLORS.white,
-    borderRadius: 2,
-  },
-  mascotWrapper: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: height * 0.08,
-  },
-  mascotWrapperCompact: {
-    paddingBottom: height * 0.05,
-  },
-  heroMascot: {
-    width: width * 0.55,
-    height: width * 0.55,
-  },
-  heroMascotCompact: {
-    width: width * 0.45,
-    height: width * 0.45,
-  },
-  contentMask: {
-    flex: 1,
-    marginTop: height * 0.33,
-  },
-  contentMaskCompact: {
-    marginTop: height * 0.28,
-  },
-  content: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-    borderTopLeftRadius: 40,
-    borderTopRightRadius: 40,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -10 },
-    shadowOpacity: 0.05,
-    shadowRadius: 20,
-    elevation: 10,
-    overflow: 'hidden',
-  },
-  scrollContent: {
-    paddingHorizontal: 30,
-    paddingTop: 40,
-    paddingBottom: 160,
-  },
-  scrollContentCompact: {
-    paddingTop: 26,
-    paddingBottom: 112,
-  },
-  textGroup: {
-    marginBottom: 30,
-  },
-  textGroupCompact: {
-    marginBottom: 18,
-  },
-  mainTitle: {
-    fontSize: 34,
-    fontWeight: '900',
-    color: COLORS.ink,
-    letterSpacing: -1,
-  },
-  mainTitleCompact: {
-    fontSize: 28,
-  },
-  subTitle: {
-    fontSize: 16,
-    color: COLORS.muted,
-    marginTop: 10,
-    lineHeight: 24,
-  },
-  subTitleCompact: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 6,
-  },
-  optionStack: {
-    gap: 12,
-  },
-  optionStackCompact: {
-    gap: 8,
-  },
-  optionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FAFAFA',
-    padding: 16,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#F0F0F0',
-  },
-  optionCardCompact: {
-    padding: 12,
-    borderRadius: 20,
-  },
-  optionCardActive: {
-    backgroundColor: '#FFF0F0',
-    borderColor: COLORS.brand,
-    borderWidth: 1.5,
-  },
-  iconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.02,
-    shadowRadius: 5,
-  },
-  iconWrapCompact: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-  },
-  iconWrapActive: {
-    backgroundColor: COLORS.brand,
-  },
-  optionTextWrap: {
-    flex: 1,
-    marginLeft: 15,
-  },
-  optionTextWrapCompact: {
-    marginLeft: 12,
-  },
-  optionTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: COLORS.ink,
-  },
-  optionTitleCompact: {
-    fontSize: 15,
-  },
-  weeksBadge: {
-    backgroundColor: '#FAFAFA',
-    padding: 16,
-    borderRadius: 20,
-    marginTop: 20,
-    borderWidth: 1,
-    borderColor: '#F0F0F0',
-    alignItems: 'center',
-  },
-  weeksBadgeCompact: {
-    padding: 12,
-    borderRadius: 16,
-    marginTop: 14,
-  },
-  weeksBadgeWarning: {
-    backgroundColor: '#FFF5F5',
-    borderColor: '#FFE0E0',
-  },
-  weeksText: {
-    fontSize: 14,
-    color: COLORS.ink,
-    fontWeight: '700',
-  },
-  weeksTextCompact: {
-    fontSize: 12,
-  },
-  weeksTextWarning: {
-    color: COLORS.brand,
-  },
-  weeksHintText: {
-    marginTop: 8,
-    fontSize: 12,
-    lineHeight: 18,
-    color: COLORS.muted,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  weeksHintTextCompact: {
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: 30,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 25,
-    paddingTop: 15,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-  },
-  footerCompact: {
-    paddingTop: 10,
-    paddingBottom: Platform.OS === 'ios' ? 22 : 18,
-  },
-  nextBtn: {
-    backgroundColor: COLORS.ink,
-    height: 70,
-    borderRadius: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 25,
-    shadowColor: COLORS.ink,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.2,
-    shadowRadius: 15,
-    elevation: 8,
-  },
-  nextBtnCompact: {
-    height: 58,
-    borderRadius: 20,
-    paddingHorizontal: 20,
-  },
-  nextBtnDisabled: {
-    backgroundColor: COLORS.offWhite,
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  nextBtnText: {
-    color: COLORS.white,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  nextBtnTextCompact: {
-    fontSize: 16,
-  },
-  nextIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: COLORS.brand,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nextIconWrapCompact: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 28,
-    paddingHorizontal: 22,
-    paddingTop: 14,
-    paddingBottom: 22,
-    width: modalContentWidth,
-    maxWidth: 520,
-    alignItems: 'stretch',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.18,
-    shadowRadius: 28,
-    elevation: 12,
-  },
-  modalHandle: {
-    alignSelf: 'center',
-    width: 44,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#E5E7EB',
-    marginBottom: 14,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: COLORS.ink,
-    textAlign: 'center',
-    letterSpacing: -0.3,
-  },
-  modalSubtitle: {
-    fontSize: 13,
-    color: COLORS.muted,
-    textAlign: 'center',
-    marginTop: 6,
-    marginBottom: 4,
-    fontWeight: '500',
-    lineHeight: 19,
-    paddingHorizontal: 4,
-  },
-  modalNotice: {
-    marginTop: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: COLORS.accent,
-    borderWidth: 1,
-    borderColor: '#FFD6D6',
-  },
-  modalNoticeText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: COLORS.brand,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  modalPickerWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 8,
-  },
-  modalCalendar: {
-    width: '100%',
-    height: 200,
-  },
-  modalActionRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 6,
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalButtonPrimary: {
-    backgroundColor: COLORS.ink,
-  },
-  modalButtonSecondary: {
-    backgroundColor: COLORS.offWhite,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  modalButtonText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  modalButtonSecondaryText: {
-    color: COLORS.ink,
-  },
+  frequency: { marginTop: 40, paddingHorizontal: 8, gap: 12 },
+  frequencyValue: { alignItems: 'center' },
+  frequencyNumber: { color: C.coral, fontSize: 88, lineHeight: 104, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  frequencyUnit: { color: C.ink, fontSize: 20, fontWeight: '600' },
+  frequencyHint: { color: C.ink, opacity: 0.6, fontSize: 15, textAlign: 'center', marginBottom: 20 },
+  frequencySlider: { width: '100%', height: 48 },
+  frequencyTicks: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 12 },
+  frequencyTick: { color: '#6E7B85', fontSize: 16, fontWeight: '500', textAlign: 'center', minWidth: 16, fontVariant: ['tabular-nums'] },
+  frequencyTickSelected: { color: C.coral, fontWeight: '800' },
+  selectionHint: { color: C.ink, opacity: 0.6, fontSize: 15, textAlign: 'center', marginTop: 12 },
+  coral: { color: C.coral },
+  summary: { height: 60, padding: 5, gap: 8, borderRadius: 999, borderCurve: 'continuous', backgroundColor: 'rgba(241,241,243,0.85)', flexDirection: 'row', alignItems: 'center', alignSelf: 'center', minWidth: 240 },
+  summarySide: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center', borderRadius: 999, borderCurve: 'continuous', paddingHorizontal: 14 },
+  summaryTarget: { backgroundColor: SURFACE_SELECTED, borderWidth: 1.5, borderColor: 'rgba(255, 69, 72, 0.22)' },
+  summaryValue: { color: C.ink, fontSize: 22, fontWeight: '900', letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
+  summaryUnit: { color: 'rgba(8, 36, 55, 0.45)', fontSize: 15, fontWeight: '700', letterSpacing: 0 },
+  card: { minHeight: 104, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1.5, borderColor: C.border, backgroundColor: SURFACE, flexDirection: 'row', alignItems: 'center', paddingLeft: 16, paddingRight: 18, paddingVertical: 12, gap: 16, boxShadow: '0 6px 18px rgba(8, 36, 55, 0.05)' },
+  cardCompact: { minHeight: 88 },
+  cardDense: { minHeight: 92, paddingVertical: 10 },
+  cardDenseCompact: { minHeight: 78, paddingVertical: 8 },
+  cardBody: { flex: 1, gap: 6 },
+  cardTitle: { color: C.ink, fontSize: 19, fontWeight: '800', letterSpacing: -0.4, lineHeight: 24 },
+  cardTitleCompact: { fontSize: 17, lineHeight: 22 },
+  caption: { color: 'rgba(8, 36, 55, 0.5)', fontSize: 14, fontWeight: '600', letterSpacing: -0.1, fontVariant: ['tabular-nums'] },
+  captionAccent: { color: C.coral, fontWeight: '700' },
+  art: { width: 84, height: 76, alignItems: 'center', justifyContent: 'center' },
+  artDense: { width: 74, height: 66 },
+  artCompact: { width: 64, height: 58 },
+  artImage: { width: '100%', height: '100%' },
+  tile: { width: 60, height: 60, borderRadius: 16, borderCurve: 'continuous', backgroundColor: TILE, alignItems: 'center', justifyContent: 'center' },
+  tileCompact: { width: 52, height: 52 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  meter: { flexDirection: 'row', gap: 4 },
+  meterBar: { width: 22, height: 7, borderRadius: 4 },
+  trailStart: { width: 10, height: 10, borderRadius: 5, borderWidth: 2, borderColor: C.coral },
+  trailDots: { flexDirection: 'row', gap: 5, marginLeft: -4, marginRight: -4 },
+  trailDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.muted },
+  radio: { width: 28, height: 28 },
+  radioRing: { ...StyleSheet.absoluteFillObject, borderRadius: 14, borderWidth: 2, borderColor: RING },
+  radioChecked: { ...StyleSheet.absoluteFillObject, borderRadius: 14, backgroundColor: C.coral, alignItems: 'center', justifyContent: 'center' },
+  notice: { marginTop: 16, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderCurve: 'continuous', backgroundColor: SURFACE_SELECTED, borderWidth: 1, borderColor: 'rgba(255, 69, 72, 0.22)' },
+  noticeText: { color: C.coral, fontSize: 13, lineHeight: 19, fontWeight: '700', textAlign: 'center' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(8, 36, 55, 0.45)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
+  modalContent: { width: '100%', maxWidth: 480, backgroundColor: C.bg, borderRadius: 24, borderCurve: 'continuous', paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20, alignItems: 'stretch', boxShadow: '0 16px 40px rgba(8, 36, 55, 0.18)' },
+  modalIcon: { alignSelf: 'center', width: 52, height: 52, borderRadius: 16, borderCurve: 'continuous', backgroundColor: TILE, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  modalTitle: { color: C.ink, fontSize: 24, fontWeight: '900', letterSpacing: -0.8, textAlign: 'center' },
+  modalSubtitle: { color: 'rgba(8, 36, 55, 0.55)', fontSize: 14, lineHeight: 20, fontWeight: '600', textAlign: 'center', marginTop: 8, paddingHorizontal: 4 },
+  modalPickerWrap: { alignItems: 'center', justifyContent: 'center', marginVertical: 8 },
+  modalCalendar: { width: '100%', height: 200 },
+  modalActionRow: { flexDirection: 'row', gap: 12, marginTop: 4 },
+  modalButton: { flex: 1, height: 52, borderRadius: 999, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center' },
+  modalButtonPrimary: { backgroundColor: C.coral, boxShadow: '0 8px 20px rgba(255, 69, 72, 0.26)' },
+  modalButtonSecondary: { backgroundColor: C.track },
+  modalButtonPressed: { transform: [{ scale: 0.97 }] },
+  modalButtonText: { color: C.white, fontSize: 17, fontWeight: '800', letterSpacing: -0.3 },
+  modalButtonSecondaryText: { color: C.ink },
 });

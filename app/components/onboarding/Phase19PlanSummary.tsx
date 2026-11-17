@@ -1,71 +1,83 @@
-import React, { useEffect, useMemo, useRef } from 'react';
-import {
-  Animated,
-  Dimensions,
+import React, { useEffect, useMemo } from 'react';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import Animated, {
   Easing,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import Svg, {
-  Circle,
-  Defs,
-  LinearGradient as SvgLinearGradient,
-  Line,
-  Path,
-  Stop,
-  Text as SvgText,
-} from 'react-native-svg';
+  Extrapolation,
+  cancelAnimation,
+  interpolate,
+  useAnimatedProps,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+import Svg, { Circle, Defs, Line, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
+import { Image } from 'expo-image';
 import {
   ArrowRight,
   BellRing,
   Bot,
+  CalendarDays,
   Check,
-  ChevronLeft,
   Dumbbell,
   Flame,
   Footprints,
   Handshake,
   Heart,
+  Route,
   Scale,
-  Sparkles,
   Target,
   Trophy,
-  Users,
+  type LucideIcon,
 } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { APP_NAME } from '@/constants/branding';
-
-const { width: windowWidth } = Dimensions.get('window');
-const H_PADDING = 24;
-const CHART_WIDTH = Math.min(windowWidth - H_PADDING * 2 - 32, 360);
-const CHART_HEIGHT = 160;
-const DRAW_EASE = Easing.bezier(0.22, 1, 0.36, 1);
+import { C, EASE_OUT, OnboardingScreen, SURFACE_SELECTED, Sparkles, pop, rise, useCompact } from './OnboardingKit';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
-const COLORS = {
-  coral: '#FF6B6B',
-  coralDark: '#EE5253',
-  coralSoft: '#FFF1F1',
-  white: '#FFFFFF',
-  black: '#0F172A',
-  ink: '#111827',
-  muted: '#6B7280',
-  subtle: '#94A3B8',
-  border: '#EEF0F4',
-  hair: '#F3F4F6',
-  card: '#FBFBFC',
-  success: '#10B981',
-  successSoft: '#ECFDF5',
-  gridLine: '#EEF0F4',
+const SCREEN_PADDING = 24;
+const CARD_PADDING = 18;
+const DRAW_EASING = Easing.bezier(0.33, 0, 0.2, 1);
+const SUBTLE_INK = 'rgba(8, 36, 55, 0.5)';
+const CAPTION_INK = 'rgba(8, 36, 55, 0.42)';
+const CHART_PAD = { left: 10, right: 18, top: 14, bottom: 18 };
+const ROW_STEP = 70;
+
+const ENTER = {
+  pill: 40,
+  art: 120,
+  titleLead: 160,
+  titleDate: 240,
+  subtitle: 320,
+  chart: 400,
+  chartDraw: 700,
+  stats: 520,
+  info: 680,
+  infoItems: 740,
+  reach: 1000,
+  reachRows: 1060,
+  why: 1380,
+  whyRows: 1440,
+  cta: 1760,
 };
+
+const REACH: { icon: LucideIcon; text: string }[] = [
+  { icon: Dumbbell, text: 'Exercise plan matched to your level' },
+  { icon: Footprints, text: 'Planned runs & walks each week' },
+  { icon: Flame, text: 'Daily calorie & protein targets' },
+  { icon: Heart, text: 'Partner motivation to keep you on track' },
+];
+
+const WHY: { icon: LucideIcon; text: string }[] = [
+  { icon: Bot, text: `${APP_NAME} plans tailored to your goals` },
+  { icon: Handshake, text: 'Stay accountable with your partner' },
+  { icon: Trophy, text: 'Celebrate milestones together' },
+  { icon: BellRing, text: 'Smart reminders for workouts and meal logs' },
+];
 
 type WeeklyPlanRow = {
   Week?: number;
@@ -76,6 +88,7 @@ type WeeklyPlanRow = {
   'Run km/week'?: number;
   'Steps/day target'?: number;
   'Week Dailys'?: {
+    trainingSchedule?: { version: number; sessions: unknown[] };
     runDays?: number;
     stepDays?: number;
     recoveryDays?: number;
@@ -95,6 +108,21 @@ type Props = {
   onContinue: () => void;
 };
 
+type Point = { x: number; y: number };
+
+type ChartModel = {
+  caption: string;
+  line: string;
+  area: string;
+  pathLength: number;
+  start: Point;
+  end: Point;
+  startLabel: string;
+  endLabel: string;
+  startCaption: string;
+  endCaption: string;
+};
+
 const RUN_GOAL_LABELS: Record<string, string> = {
   '5k': '5K',
   '10k': '10K',
@@ -102,11 +130,10 @@ const RUN_GOAL_LABELS: Record<string, string> = {
   pr: 'a PR',
 };
 
-function formatTargetDate(dateStr?: string | null) {
-  if (!dateStr) return null;
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+function parseDate(value: unknown) {
+  if (typeof value !== 'string' || !value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function addWeeks(date: Date, weeks: number) {
@@ -116,7 +143,7 @@ function addWeeks(date: Date, weeks: number) {
 }
 
 // Catmull-Rom spline → cubic bezier for a soft, natural curve
-function buildSmoothPath(points: Array<{ x: number; y: number }>, tension = 0.9) {
+function buildSmoothPath(points: Point[], tension = 0.9) {
   if (points.length === 0) return '';
   if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
   if (points.length === 2) {
@@ -140,11 +167,7 @@ function buildSmoothPath(points: Array<{ x: number; y: number }>, tension = 0.9)
   return d.join(' ');
 }
 
-function buildSmoothArea(
-  points: Array<{ x: number; y: number }>,
-  baseY: number,
-  tension = 0.9,
-) {
+function buildSmoothArea(points: Point[], baseY: number, tension = 0.9) {
   if (points.length === 0) return '';
   const line = buildSmoothPath(points, tension);
   const last = points[points.length - 1];
@@ -152,7 +175,7 @@ function buildSmoothArea(
   return `${line} L ${last.x} ${baseY} L ${first.x} ${baseY} Z`;
 }
 
-function approximatePathLength(points: Array<{ x: number; y: number }>) {
+function approximatePathLength(points: Point[]) {
   let length = 0;
   for (let i = 1; i < points.length; i++) {
     const dx = points[i].x - points[i - 1].x;
@@ -163,10 +186,7 @@ function approximatePathLength(points: Array<{ x: number; y: number }>) {
 }
 
 // Add small organic wobble to intermediate points so the curve isn't a straight glide
-function withOrganicJitter(
-  values: number[],
-  amplitudeRatio = 0.06,
-): number[] {
+function withOrganicJitter(values: number[], amplitudeRatio = 0.06): number[] {
   if (values.length < 3) return values;
   const first = values[0];
   const last = values[values.length - 1];
@@ -225,19 +245,11 @@ export default function Phase19PlanSummary({
   onBack,
   onContinue,
 }: Props) {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
-  const chartDraw = useRef(new Animated.Value(0)).current;
-  const areaOpacity = useRef(new Animated.Value(0)).current;
-  const endDotOpacity = useRef(new Animated.Value(0)).current;
-  const endDotScale = useRef(new Animated.Value(0.55)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 550, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, friction: 9, useNativeDriver: true }),
-    ]).start();
-  }, [fadeAnim, slideAnim]);
+  const compact = useCompact();
+  const reduced = useReducedMotion();
+  const { width } = useWindowDimensions();
+  const chartWidth = Math.min(width, 480) - SCREEN_PADDING * 2 - CARD_PADDING * 2;
+  const chartHeight = compact ? 104 : 124;
 
   const normalizedPlan = useMemo(() => {
     return (Array.isArray(weeklyPlan) ? weeklyPlan : [])
@@ -247,9 +259,7 @@ export default function Phase19PlanSummary({
         expectedWeight:
           typeof row?.['Expected weight'] === 'number' ? row['Expected weight'] : null,
         calories: typeof row?.['Calories/day'] === 'number' ? row['Calories/day'] : null,
-        protein: typeof row?.['Protein/day'] === 'number' ? row['Protein/day'] : null,
         runKm: typeof row?.['Run km/week'] === 'number' ? row['Run km/week'] : null,
-        steps: typeof row?.['Steps/day target'] === 'number' ? row['Steps/day target'] : null,
         weekDailys: row?.['Week Dailys'],
       }))
       .filter((row) => Number.isFinite(row.week) && row.week > 0)
@@ -270,18 +280,14 @@ export default function Phase19PlanSummary({
 
   const runGoalKey = String(planData?.runGoal || '').toLowerCase();
   const runGoalLabel = RUN_GOAL_LABELS[runGoalKey] || 'your race';
-  const projectedEndDate = addWeeks(new Date(), totalWeeks);
-  const targetDate =
-    formatTargetDate((planData?.targetDate as string) || (planData?.runRaceDate as string)) ||
-    formatTargetDate(projectedEndDate.toISOString());
-  const shortEndDate = projectedEndDate.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
-  const shortStartDate = new Date().toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
+
+  const endDate =
+    parseDate(planData?.targetDate) ??
+    parseDate(planData?.runRaceDate) ??
+    addWeeks(new Date(), totalWeeks);
+  const longEndDate = endDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  const shortEndDate = endDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  const shortStartDate = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
   const goalMode =
     mainGoal === 'running'
@@ -294,42 +300,34 @@ export default function Phase19PlanSummary({
             ? 'running'
             : 'weight';
 
-  const goalPhrase = useMemo(() => {
-    if (goalMode === 'running') {
-      return `Prep for ${runGoalLabel}`;
-    }
-    if (weightDiff) {
-      return `${isLoss ? 'Lose' : 'Gain'} ${weightDiff.toFixed(1)} ${weightUnit}`;
-    }
-    return 'Your personalized plan';
-  }, [goalMode, runGoalLabel, weightDiff, weightUnit, isLoss]);
+  const [lead, accent] =
+    goalMode === 'running'
+      ? ['Ready for', runGoalLabel]
+      : weightDiff
+        ? [isLoss ? 'Lose' : 'Gain', `${weightDiff.toFixed(1)}\u00A0${weightUnit}`]
+        : ['Your', `${totalWeeks}-week plan`];
 
-  const heroTitle = useMemo(() => {
-    if (targetDate) return `${goalPhrase} on track by ${targetDate}`;
-    return `${goalPhrase} — ${totalWeeks}-week plan`;
-  }, [goalPhrase, targetDate, totalWeeks]);
-
-  const chart = useMemo(() => {
-    const padding = { left: 20, right: 20, top: 28, bottom: 30 };
-    const innerW = CHART_WIDTH - padding.left - padding.right;
-    const innerH = CHART_HEIGHT - padding.top - padding.bottom;
-    const baseY = padding.top + innerH;
+  const chart = useMemo<ChartModel | null>(() => {
+    const innerW = chartWidth - CHART_PAD.left - CHART_PAD.right;
+    const innerH = chartHeight - CHART_PAD.top - CHART_PAD.bottom;
+    const baseY = CHART_PAD.top + innerH;
 
     const buildFrom = (
       rawValues: number[],
-      caption: string,
+      captions: Pick<ChartModel, 'caption' | 'startCaption' | 'endCaption'>,
       formatValue: (v: number) => string,
       jitterRatio = 0.08,
-    ) => {
+    ): ChartModel => {
       const values = withOrganicJitter(rawValues, jitterRatio);
       const max = Math.max(...values);
       const min = Math.min(...values);
       const range = Math.max(max - min, 0.5);
       const points = values.map((value, index) => ({
-        x: padding.left + (index / Math.max(values.length - 1, 1)) * innerW,
-        y: padding.top + innerH - ((value - min) / range) * innerH,
+        x: CHART_PAD.left + (index / Math.max(values.length - 1, 1)) * innerW,
+        y: CHART_PAD.top + innerH - ((value - min) / range) * innerH,
       }));
       return {
+        ...captions,
         line: buildSmoothPath(points, 0.85),
         area: buildSmoothArea(points, baseY, 0.85),
         pathLength: approximatePathLength(points),
@@ -337,14 +335,17 @@ export default function Phase19PlanSummary({
         end: points[points.length - 1],
         startLabel: formatValue(rawValues[0]),
         endLabel: formatValue(rawValues[rawValues.length - 1]),
-        caption,
       };
     };
 
     if (goalMode === 'running') {
       const values = normalizedPlan.map((row) => row.runKm ?? 0);
       if (!values.length) return null;
-      return buildFrom(values, 'Weekly distance', (v) => `${v.toFixed(1)} km`);
+      return buildFrom(
+        values,
+        { caption: 'Weekly distance', startCaption: 'Week 1', endCaption: 'Final week' },
+        (v) => `${v.toFixed(1)} km`,
+      );
     }
 
     const startVal = Number.isFinite(startWeight) ? startWeight : weekOne?.expectedWeight ?? null;
@@ -359,68 +360,17 @@ export default function Phase19PlanSummary({
     if (startVal == null || endVal == null) return null;
 
     const series = buildWeightTrendSeries(startVal, endVal, weights);
-    return buildFrom(series, 'Weight trend', (v) => `${v.toFixed(1)} ${weightUnit}`, 0);
-  }, [goalMode, goalWeight, normalizedPlan, startWeight, weekOne?.expectedWeight, weightUnit]);
-
-  const chartPathLength = chart?.pathLength ?? 400;
-  const chartStrokeDashoffset = chartDraw.interpolate({
-    inputRange: [0, 1],
-    outputRange: [chartPathLength, 0],
-  });
-  const endDotRingR = endDotScale.interpolate({
-    inputRange: [0.55, 1],
-    outputRange: [8, 13],
-  });
-  const endDotR = endDotScale.interpolate({
-    inputRange: [0.55, 1],
-    outputRange: [4, 6],
-  });
-
-  useEffect(() => {
-    if (!chart) return;
-
-    chartDraw.setValue(0);
-    areaOpacity.setValue(0);
-    endDotOpacity.setValue(0);
-    endDotScale.setValue(0.55);
-
-    Animated.parallel([
-      Animated.timing(chartDraw, {
-        toValue: 1,
-        duration: 2400,
-        easing: DRAW_EASE,
-        useNativeDriver: false,
-      }),
-      Animated.sequence([
-        Animated.delay(500),
-        Animated.timing(areaOpacity, {
-          toValue: 1,
-          duration: 1600,
-          easing: DRAW_EASE,
-          useNativeDriver: false,
-        }),
-      ]),
-      Animated.sequence([
-        Animated.delay(2100),
-        Animated.parallel([
-          Animated.spring(endDotOpacity, {
-            toValue: 1,
-            friction: 7,
-            tension: 90,
-            useNativeDriver: false,
-          }),
-          Animated.spring(endDotScale, {
-            toValue: 1,
-            friction: 7,
-            tension: 90,
-            useNativeDriver: false,
-          }),
-        ]),
-      ]),
-    ]).start();
-  }, [areaOpacity, chart, chartDraw, endDotOpacity, endDotScale]);
+    return buildFrom(
+      series,
+      { caption: 'Weight trend', startCaption: 'Today', endCaption: 'Goal' },
+      (v) => `${v.toFixed(1)} ${weightUnit}`,
+      0,
+    );
+  }, [chartWidth, chartHeight, goalMode, goalWeight, normalizedPlan, startWeight, weekOne?.expectedWeight, weightUnit]);
 
   const weeklySessionCount = useMemo(() => {
+    const schedule = weekOne?.weekDailys?.trainingSchedule;
+    if (schedule?.version === 1) return schedule.sessions.length;
     const runs = weekOne?.weekDailys?.runs ?? [];
     if (runs.length) {
       return runs.reduce((sum, run) => sum + (run.sessions > 0 ? run.sessions : 0), 0);
@@ -432,622 +382,349 @@ export default function Phase19PlanSummary({
     return (weekOne?.runKm ?? 0) > 0 ? 1 : 0;
   }, [weekOne]);
 
-  const planLabel = weekOne?.weekName || 'Personalized plan';
-  const trainingDays =
-    availableDays.length > 0 ? `${availableDays.length} days / week` : 'Flexible';
-
-  const reachBullets = [
-    { icon: Dumbbell, text: 'Exercise plan matched to your level' },
-    { icon: Footprints, text: 'Planned runs & walks each week' },
-    { icon: Flame, text: 'Daily calorie & protein targets' },
-    { icon: Heart, text: 'Partner motivation to keep you on track' },
+  const stats: { icon: LucideIcon; value: string; label: string }[] = [
+    { icon: Flame, value: weekOne?.calories ? weekOne.calories.toLocaleString() : '—', label: 'Calories' },
+    { icon: Footprints, value: String(weeklySessionCount), label: weekOne?.weekDailys?.trainingSchedule ? 'Training days' : 'Runs & walks' },
   ];
 
-  const whyFeatures = [
-    {
-      icon: Bot,
-      title: `${APP_NAME} plans`,
-      desc: 'Training tailored to your goals',
-    },
-    {
-      icon: Handshake,
-      title: 'Train together',
-      desc: 'Stay accountable with your partner',
-    },
-    {
-      icon: Trophy,
-      title: 'Earn rewards',
-      desc: 'Celebrate milestones together',
-    },
-    {
-      icon: BellRing,
-      title: 'Smart reminders',
-      desc: 'Never miss a workout or meal log',
-    },
+  const infoItems: { icon: LucideIcon; label: string; value: string }[] = [
+    { icon: Scale, label: 'Start', value: Number.isFinite(startWeight) ? `${startWeight} ${weightUnit}` : '—' },
+    { icon: Target, label: 'Goal', value: Number.isFinite(goalWeight) ? `${goalWeight} ${weightUnit}` : '—' },
+    { icon: Route, label: 'Plan', value: weekOne?.weekName || 'Personalized plan' },
+    { icon: CalendarDays, label: 'Schedule', value: availableDays.length > 0 ? `${availableDays.length} days / week` : 'Flexible' },
   ];
 
-  const infoItems = [
-    {
-      icon: Scale,
-      label: 'Start',
-      value: Number.isFinite(startWeight) ? `${startWeight} ${weightUnit}` : '—',
-    },
-    {
-      icon: Target,
-      label: 'Goal',
-      value: Number.isFinite(goalWeight) ? `${goalWeight} ${weightUnit}` : '—',
-    },
-    { icon: Sparkles, label: 'Plan', value: planLabel },
-    { icon: Users, label: 'Schedule', value: trainingDays },
-  ];
+  const artSize = compact ? 64 : 76;
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-      <SafeAreaView style={styles.flex}>
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
-            <ChevronLeft color={COLORS.black} size={28} />
-          </TouchableOpacity>
-        </View>
+    <OnboardingScreen onBack={onBack} showBrand scrollable ctaLabel="Start my plan" onCta={onContinue} ctaDelay={ENTER.cta}>
+      <Animated.View entering={rise(ENTER.pill)} style={[styles.pill, { marginTop: compact ? 12 : 20 }]}>
+        <Text style={styles.pillText}>YOUR TIMELINE</Text>
+      </Animated.View>
 
-        <Animated.View
-          style={[styles.flex, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
-        >
-          <ScrollView
-            style={styles.flex}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.scrollContent}
+      <View style={[styles.hero, { paddingLeft: artSize * 0.55 }]}>
+        <HeroArt size={artSize} reduced={reduced} />
+        <View style={styles.titleBlock} accessible accessibilityRole="header" accessibilityLabel={`${lead} ${accent} by ${longEndDate}`}>
+          <Animated.View entering={rise(ENTER.titleLead)} style={styles.titleLine}>
+            <Text style={[styles.title, compact && styles.titleCompact]}>{lead}</Text>
+            <Text style={[styles.title, styles.titleAccent, compact && styles.titleCompact]}>{accent}</Text>
+          </Animated.View>
+          <Animated.Text
+            entering={rise(ENTER.titleDate)}
+            style={[styles.title, compact && styles.titleCompact]}
+            numberOfLines={1}
           >
-            {/* HERO */}
-            <View style={styles.hero}>
-              <Text style={styles.heroTitle}>{heroTitle}</Text>
-            </View>
+            by {longEndDate}
+          </Animated.Text>
+          <Sparkles delay={ENTER.titleDate + 260} style={styles.titleSparkles} />
+        </View>
+      </View>
 
-            {/* CHART CARD */}
-            {chart && (
-              <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                  <Text style={styles.cardTitle}>{chart.caption}</Text>
-                  <View style={styles.chartBadge}>
-                    <Text style={styles.chartBadgeText}>{totalWeeks} weeks</Text>
-                  </View>
-                </View>
+      <Animated.Text entering={rise(ENTER.subtitle)} style={styles.subtitle}>A clear path to your goal.</Animated.Text>
 
-                <View style={styles.chartWrap}>
-                  <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
-                    <Defs>
-                      <SvgLinearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
-                        <Stop offset="0" stopColor={COLORS.coral} stopOpacity={0.28} />
-                        <Stop offset="1" stopColor={COLORS.coral} stopOpacity={0.02} />
-                      </SvgLinearGradient>
-                    </Defs>
-
-                    {[0.25, 0.5, 0.75].map((t) => (
-                      <Line
-                        key={t}
-                        x1={20}
-                        y1={28 + (CHART_HEIGHT - 58) * t}
-                        x2={CHART_WIDTH - 20}
-                        y2={28 + (CHART_HEIGHT - 58) * t}
-                        stroke={COLORS.gridLine}
-                        strokeWidth={1}
-                        strokeDasharray="3 6"
-                      />
-                    ))}
-
-                    <AnimatedPath
-                      d={chart.area}
-                      fill="url(#chartFill)"
-                      opacity={areaOpacity}
-                    />
-                    <AnimatedPath
-                      d={chart.line}
-                      stroke={COLORS.coral}
-                      strokeWidth={3.2}
-                      fill="none"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeDasharray={chartPathLength}
-                      strokeDashoffset={chartStrokeDashoffset}
-                    />
-
-                    {chart.start && (
-                      <Circle
-                        cx={chart.start.x}
-                        cy={chart.start.y}
-                        r={5}
-                        fill={COLORS.white}
-                        stroke={COLORS.coral}
-                        strokeWidth={2.5}
-                      />
-                    )}
-                    {chart.end && (
-                      <>
-                        <AnimatedCircle
-                          cx={chart.end.x}
-                          cy={chart.end.y}
-                          r={endDotRingR}
-                          fill={COLORS.coral}
-                          opacity={endDotOpacity.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [0, 0.14],
-                          })}
-                        />
-                        <AnimatedCircle
-                          cx={chart.end.x}
-                          cy={chart.end.y}
-                          r={endDotR}
-                          fill={COLORS.coral}
-                          stroke={COLORS.white}
-                          strokeWidth={2.5}
-                          opacity={endDotOpacity}
-                        />
-                      </>
-                    )}
-
-                    {chart.start && (
-                      <SvgText
-                        x={chart.start.x}
-                        y={CHART_HEIGHT - 8}
-                        fontSize="10"
-                        fontWeight="600"
-                        fill={COLORS.subtle}
-                        textAnchor="start"
-                      >
-                        {shortStartDate}
-                      </SvgText>
-                    )}
-                    {chart.end && (
-                      <SvgText
-                        x={chart.end.x}
-                        y={CHART_HEIGHT - 8}
-                        fontSize="10"
-                        fontWeight="700"
-                        fill={COLORS.coral}
-                        textAnchor="end"
-                      >
-                        {shortEndDate}
-                      </SvgText>
-                    )}
-                  </Svg>
-                </View>
-
-                <View style={styles.chartFooter}>
-                  <View style={styles.chartFootCol}>
-                    <Text style={styles.chartFootLabel}>Today</Text>
-                    <Text style={styles.chartFootValue}>{chart.startLabel}</Text>
-                  </View>
-                  <View style={styles.chartArrow}>
-                    <ArrowRight size={16} color={COLORS.subtle} strokeWidth={2.5} />
-                  </View>
-                  <View style={[styles.chartFootCol, { alignItems: 'flex-end' }]}>
-                    <Text style={styles.chartFootLabel}>Goal</Text>
-                    <Text style={[styles.chartFootValue, { color: COLORS.coral }]}>
-                      {chart.endLabel}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {/* STAT CARDS */}
-            <View style={styles.statRow}>
-              <View style={styles.statCard}>
-                <View style={[styles.statIcon, { backgroundColor: COLORS.coralSoft }]}>
-                  <Flame color={COLORS.coral} size={18} strokeWidth={2.4} />
-                </View>
-                <Text style={styles.statValue}>
-                  {weekOne?.calories ? weekOne.calories.toLocaleString() : '—'}
-                </Text>
-                <Text style={styles.statLabel}>Calories</Text>
-              </View>
-
-              <View style={styles.statCard}>
-                <View style={[styles.statIcon, { backgroundColor: COLORS.coralSoft }]}>
-                  <Footprints color={COLORS.coral} size={18} strokeWidth={2.4} />
-                </View>
-                <Text style={styles.statValue}>{weeklySessionCount}</Text>
-                <Text style={styles.statLabel}>Runs & walks</Text>
-              </View>
-            </View>
-
-            {/* INFO */}
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>Your info</Text>
-              </View>
-              <View style={styles.infoGrid}>
-                {infoItems.map(({ icon: Icon, label, value }, idx) => (
-                  <View
-                    key={label}
-                    style={[
-                      styles.infoItem,
-                      idx % 2 === 0 && styles.infoItemDivider,
-                      idx < 2 && styles.infoItemRowDivider,
-                    ]}
-                  >
-                    <View style={styles.infoIcon}>
-                      <Icon size={14} color={COLORS.muted} strokeWidth={2.2} />
-                    </View>
-                    <View style={styles.infoText}>
-                      <Text style={styles.infoLabel}>{label}</Text>
-                      <Text style={styles.infoValue} numberOfLines={1}>
-                        {value}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </View>
-
-            {/* HOW YOU'LL REACH */}
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>How you'll reach your goal</Text>
-              </View>
-              <View style={styles.reachList}>
-                {reachBullets.map(({ icon: Icon, text }, idx) => (
-                  <View
-                    key={text}
-                    style={[styles.reachRow, idx < reachBullets.length - 1 && styles.reachDivider]}
-                  >
-                    <View style={styles.reachIcon}>
-                      <Icon size={16} color={COLORS.coral} strokeWidth={2.2} />
-                    </View>
-                    <Text style={styles.reachText}>{text}</Text>
-                    <View style={styles.reachCheck}>
-                      <Check size={12} color={COLORS.success} strokeWidth={3.5} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </View>
-
-            {/* WHY RUNTOGETHER */}
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>Why it works</Text>
-              </View>
-              <View style={styles.featureList}>
-                {whyFeatures.map(({ icon: Icon, title, desc }, idx) => (
-                  <View
-                    key={title}
-                    style={[
-                      styles.featureRow,
-                      idx < whyFeatures.length - 1 && styles.reachDivider,
-                    ]}
-                  >
-                    <View style={styles.featureIcon}>
-                      <Icon size={18} color={COLORS.coral} strokeWidth={2.2} />
-                    </View>
-                    <View style={styles.featureTextWrap}>
-                      <Text style={styles.featureTitle}>{title}</Text>
-                      <Text style={styles.featureDesc}>{desc}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </View>
-          </ScrollView>
-
-          {/* FOOTER */}
-          <View style={styles.footer}>
-            <TouchableOpacity activeOpacity={0.9} onPress={onContinue} style={styles.mainButton}>
-              <LinearGradient
-                colors={[COLORS.coral, COLORS.coralDark]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.gradientButton}
-              >
-                <Text style={styles.buttonText}>See my timeline</Text>
-                <View style={styles.buttonArrow}>
-                  <ArrowRight color={COLORS.white} size={18} strokeWidth={3} />
-                </View>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
+      {chart && (
+        <Animated.View entering={rise(ENTER.chart)} style={[styles.card, { marginTop: compact ? 16 : 24 }]}>
+          <TrendChart
+            chart={chart}
+            width={chartWidth}
+            height={chartHeight}
+            weeks={totalWeeks}
+            startDate={shortStartDate}
+            endDate={shortEndDate}
+            reduced={reduced}
+          />
         </Animated.View>
-      </SafeAreaView>
+      )}
+
+      <View style={styles.statRow}>
+        {stats.map(({ icon: Icon, value, label }, index) => (
+          <Animated.View
+            key={label}
+            entering={rise(ENTER.stats + index * ROW_STEP)}
+            style={[styles.card, styles.statCard]}
+            accessible
+            accessibilityLabel={`${value} ${label}`}
+          >
+            <View style={styles.statTile}>
+              <Icon color={C.coral} size={24} strokeWidth={2.2} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
+              <Text style={styles.statLabel} numberOfLines={1}>{label}</Text>
+            </View>
+          </Animated.View>
+        ))}
+      </View>
+
+      <Animated.View entering={rise(ENTER.info)} style={[styles.card, styles.sectionCard]}>
+        <Text style={styles.cardTitle}>Your info</Text>
+        <View style={styles.infoGrid}>
+          {infoItems.map(({ icon: Icon, label, value }, index) => (
+            <Animated.View
+              key={label}
+              entering={rise(ENTER.infoItems + index * ROW_STEP)}
+              style={[
+                styles.infoItem,
+                index % 2 === 0 ? styles.infoItemLeft : styles.infoItemRight,
+                index < 2 && styles.infoItemTop,
+              ]}
+              accessible
+              accessibilityLabel={`${label}, ${value}`}
+            >
+              <View style={styles.infoTile}>
+                <Icon color={SUBTLE_INK} size={16} strokeWidth={2.2} />
+              </View>
+              <View style={styles.flex}>
+                <Text style={styles.infoLabel}>{label}</Text>
+                <Text style={styles.infoValue} numberOfLines={2}>{value}</Text>
+              </View>
+            </Animated.View>
+          ))}
+        </View>
+      </Animated.View>
+
+      <Animated.View entering={rise(ENTER.reach)} style={[styles.card, styles.sectionCard]}>
+        <Text style={styles.cardTitle}>How you'll reach your goal</Text>
+        <View style={styles.list}>
+          {REACH.map(({ icon: Icon, text }, index) => {
+            const delay = ENTER.reachRows + index * ROW_STEP;
+            return (
+              <Animated.View
+                key={text}
+                entering={rise(delay)}
+                style={[styles.listRow, index < REACH.length - 1 && styles.listDivider]}
+              >
+                <View style={styles.listTile}>
+                  <Icon color={C.coral} size={17} strokeWidth={2.2} />
+                </View>
+                <Text style={styles.listText}>{text}</Text>
+                <Animated.View entering={pop(delay + 260)} style={styles.listCheck}>
+                  <Check color={C.white} size={14} strokeWidth={3.4} />
+                </Animated.View>
+              </Animated.View>
+            );
+          })}
+        </View>
+      </Animated.View>
+
+      <Animated.View entering={rise(ENTER.why)} style={[styles.card, styles.sectionCard]}>
+        <Text style={styles.cardTitle}>Why it works</Text>
+        <View style={styles.list}>
+          {WHY.map(({ icon: Icon, text }, index) => (
+            <Animated.View
+              key={text}
+              entering={rise(ENTER.whyRows + index * ROW_STEP)}
+              style={[styles.listRow, index < WHY.length - 1 && styles.listDivider]}
+              accessible
+              accessibilityLabel={text}
+            >
+              <View style={styles.listTile}>
+                <Icon color={C.coral} size={17} strokeWidth={2.2} />
+              </View>
+              <Text style={styles.listText} numberOfLines={1}>
+                {text}
+              </Text>
+            </Animated.View>
+          ))}
+        </View>
+      </Animated.View>
+    </OnboardingScreen>
+  );
+}
+
+function HeroArt({ size, reduced }: { size: number; reduced: boolean }) {
+  const t = useSharedValue(0);
+
+  useEffect(() => {
+    if (reduced) return;
+    const easing = Easing.inOut(Easing.sin);
+    t.set(withDelay(600, withRepeat(withSequence(
+      withTiming(1, { duration: 1800, easing }),
+      withTiming(0, { duration: 1800, easing }),
+    ), -1)));
+    return () => cancelAnimation(t);
+  }, [reduced, t]);
+
+  const floatStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -5 * t.get() }, { rotate: `${-10 + 4 * t.get()}deg` }],
+  }));
+
+  return (
+    <Animated.View entering={pop(ENTER.art)} style={[styles.heroArt, { width: size, height: size }]} accessible={false}>
+      <Animated.View style={floatStyle}>
+        <Image source={require('../../assets/plan/plan-calendar.png')} style={{ width: size, height: size }} contentFit="contain" />
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+function TrendChart({ chart, width, height, weeks, startDate, endDate, reduced }: {
+  chart: ChartModel;
+  width: number;
+  height: number;
+  weeks: number;
+  startDate: string;
+  endDate: string;
+  reduced: boolean;
+}) {
+  const draw = useSharedValue(reduced ? 1 : 0);
+  const dot = useSharedValue(reduced ? 1 : 0);
+  const halo = useSharedValue(0);
+  const pathLength = chart.pathLength;
+
+  useEffect(() => {
+    if (reduced) return;
+    draw.set(withDelay(ENTER.chartDraw, withTiming(1, { duration: 1400, easing: DRAW_EASING })));
+    dot.set(withDelay(ENTER.chartDraw + 1200, withTiming(1, { duration: 320, easing: EASE_OUT })));
+    halo.set(withDelay(ENTER.chartDraw + 1500, withRepeat(withTiming(1, { duration: 1600, easing: Easing.out(Easing.quad) }), -1, false)));
+    return () => {
+      cancelAnimation(draw);
+      cancelAnimation(dot);
+      cancelAnimation(halo);
+    };
+  }, [reduced, draw, dot, halo]);
+
+  const lineProps = useAnimatedProps(() => ({ strokeDashoffset: pathLength * (1 - draw.get()) }));
+  const areaProps = useAnimatedProps(() => ({
+    opacity: interpolate(draw.get(), [0.25, 1], [0, 1], Extrapolation.CLAMP),
+  }));
+  const dotProps = useAnimatedProps(() => ({ r: 6 * dot.get() }));
+  const haloProps = useAnimatedProps(() => ({
+    r: 6 + 10 * halo.get(),
+    opacity: dot.get() * 0.22 * (1 - halo.get()),
+  }));
+
+  const innerH = height - CHART_PAD.top - CHART_PAD.bottom;
+
+  return (
+    <View accessible accessibilityLabel={`${chart.caption}: ${chart.startLabel} ${startDate} to ${chart.endLabel} by ${endDate}`}>
+      <View style={styles.cardHeader}>
+        <Text style={styles.cardTitle}>{chart.caption}</Text>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{weeks} weeks</Text>
+        </View>
+      </View>
+
+      <Svg width={width} height={height}>
+        <Defs>
+          <SvgLinearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={C.coral} stopOpacity={0.22} />
+            <Stop offset="1" stopColor={C.coral} stopOpacity={0.01} />
+          </SvgLinearGradient>
+        </Defs>
+        {[1 / 3, 2 / 3].map((t) => (
+          <Line
+            key={t}
+            x1={CHART_PAD.left}
+            x2={width - CHART_PAD.right}
+            y1={CHART_PAD.top + innerH * t}
+            y2={CHART_PAD.top + innerH * t}
+            stroke={C.border}
+            strokeWidth={1.5}
+            strokeDasharray="4 6"
+          />
+        ))}
+        <AnimatedPath d={chart.area} fill="url(#trendFill)" animatedProps={areaProps} />
+        <AnimatedPath
+          d={chart.line}
+          stroke={C.coral}
+          strokeWidth={3.5}
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray={`${pathLength} ${pathLength}`}
+          animatedProps={lineProps}
+        />
+        <Circle cx={chart.start.x} cy={chart.start.y} r={5.5} fill={C.white} stroke={C.coral} strokeWidth={2.5} />
+        <AnimatedCircle cx={chart.end.x} cy={chart.end.y} fill={C.coral} animatedProps={haloProps} />
+        <AnimatedCircle cx={chart.end.x} cy={chart.end.y} fill={C.coral} stroke={C.white} strokeWidth={2.5} animatedProps={dotProps} />
+      </Svg>
+
+      <View style={styles.dateRow}>
+        <Text style={styles.dateText}>{startDate}</Text>
+        <Text style={[styles.dateText, styles.dateEnd]}>{endDate}</Text>
+      </View>
+
+      <View style={styles.trendFoot}>
+        <View style={styles.flex}>
+          <Text style={styles.caption}>{chart.startCaption}</Text>
+          <Text style={styles.footValue}>{chart.startLabel}</Text>
+        </View>
+        <ArrowRight color={CAPTION_INK} size={20} strokeWidth={2.4} />
+        <View style={[styles.flex, styles.alignEnd]}>
+          <Text style={styles.caption}>{chart.endCaption}</Text>
+          <Text style={[styles.footValue, styles.footGoal]}>{chart.endLabel}</Text>
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.white },
   flex: { flex: 1 },
-  topBar: { paddingHorizontal: 12, paddingTop: 4 },
-  backBtn: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scrollContent: {
-    paddingHorizontal: H_PADDING,
-    paddingBottom: 32,
-  },
+  alignEnd: { alignItems: 'flex-end' },
 
-  // Hero
-  hero: {
-    marginTop: 2,
-    marginBottom: 20,
-  },
-  heroTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: COLORS.black,
-    letterSpacing: -0.9,
-    lineHeight: 34,
-  },
+  pill: { alignSelf: 'center', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, backgroundColor: SURFACE_SELECTED },
+  pillText: { color: C.coral, fontSize: 13, fontWeight: '900', letterSpacing: 1.6 },
+  hero: { marginTop: 12, justifyContent: 'center' },
+  heroArt: { position: 'absolute', left: -4, top: 2 },
+  titleBlock: { alignSelf: 'stretch' },
+  titleLine: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'baseline', columnGap: 8 },
+  title: { color: C.ink, fontSize: 38, lineHeight: 45, fontWeight: '900', letterSpacing: -1.5, textAlign: 'center' },
+  titleCompact: { fontSize: 32, lineHeight: 38 },
+  titleAccent: { color: C.coral, letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
+  titleSparkles: { right: -10, top: -22 },
+  subtitle: { color: SUBTLE_INK, fontSize: 16, fontWeight: '600', textAlign: 'center', marginTop: 8 },
 
-  // Unified card
   card: {
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    paddingHorizontal: 18,
-    paddingVertical: 18,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 12,
+    borderRadius: 24,
+    borderCurve: 'continuous',
+    borderWidth: 1.5,
+    borderColor: C.border,
+    backgroundColor: 'rgba(255, 255, 255, 0.86)',
+    padding: CARD_PADDING,
+    boxShadow: '0 6px 18px rgba(8, 36, 55, 0.05)',
   },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  cardTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.black,
-    letterSpacing: -0.2,
-  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  cardTitle: { color: C.ink, fontSize: 17, fontWeight: '800', letterSpacing: -0.4 },
+  badge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 999, backgroundColor: SURFACE_SELECTED },
+  badgeText: { color: C.coral, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  caption: { color: CAPTION_INK, fontSize: 12, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' },
 
-  // Chart
-  chartBadge: {
-    backgroundColor: COLORS.coralSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  chartBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.coral,
-    letterSpacing: 0.1,
-  },
-  chartWrap: {
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  chartFooter: {
+  dateRow: { flexDirection: 'row', justifyContent: 'space-between', paddingLeft: CHART_PAD.left, marginTop: 2 },
+  dateText: { color: CAPTION_INK, fontSize: 13, fontWeight: '700' },
+  dateEnd: { color: C.coral },
+  trendFoot: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
+    gap: 12,
+    marginTop: 14,
     paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.hair,
+    borderTopWidth: 1.5,
+    borderTopColor: C.track,
   },
-  chartFootCol: { flex: 1 },
-  chartFootLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: COLORS.subtle,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 3,
-  },
-  chartFootValue: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.black,
-    letterSpacing: -0.4,
-  },
-  chartArrow: {
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  footValue: { color: C.ink, fontSize: 22, fontWeight: '900', letterSpacing: -0.8, marginTop: 2, fontVariant: ['tabular-nums'] },
+  footGoal: { color: C.coral },
 
-  // Stat row
-  statRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  statIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: COLORS.black,
-    letterSpacing: -0.7,
-    lineHeight: 28,
-  },
-  statLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.black,
-    marginTop: 2,
-    letterSpacing: -0.15,
-  },
-  statSub: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: COLORS.muted,
-    marginTop: 3,
-    lineHeight: 15,
-  },
+  statRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  statCard: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14 },
+  statTile: { width: 48, height: 48, borderRadius: 16, borderCurve: 'continuous', backgroundColor: SURFACE_SELECTED, alignItems: 'center', justifyContent: 'center' },
+  statValue: { color: C.ink, fontSize: 24, fontWeight: '900', letterSpacing: -0.8, fontVariant: ['tabular-nums'] },
+  statLabel: { color: C.ink, fontSize: 14, fontWeight: '700', marginTop: 1 },
 
-  // Info grid (2x2)
-  infoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  infoItem: {
-    width: '50%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-  },
-  infoItemDivider: {
-    borderRightWidth: 1,
-    borderRightColor: COLORS.hair,
-    paddingRight: 12,
-  },
-  infoItemRowDivider: {
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.hair,
-  },
-  infoIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: COLORS.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  infoText: { flex: 1 },
-  infoLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: COLORS.subtle,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  infoValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.black,
-    letterSpacing: -0.2,
-    marginTop: 2,
-  },
-
-  // Reach list (inside card)
-  reachList: {},
-  reachRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-  },
-  reachDivider: {
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.hair,
-  },
-  reachIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: COLORS.coralSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  reachText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '500',
-    color: COLORS.ink,
-    lineHeight: 19,
-    letterSpacing: -0.1,
-  },
-  reachCheck: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: COLORS.successSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  // Features (inside card)
-  featureList: {},
-  featureRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    paddingVertical: 14,
-  },
-  featureIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: COLORS.coralSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  featureTextWrap: { flex: 1, paddingTop: 2 },
-  featureTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.black,
-    marginBottom: 2,
-    letterSpacing: -0.2,
-  },
-  featureDesc: {
-    fontSize: 12,
-    fontWeight: '400',
-    color: COLORS.muted,
-    lineHeight: 17,
-  },
-
-  // Footer
-  footer: {
-    paddingHorizontal: H_PADDING,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 12 : 20,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.hair,
-    backgroundColor: COLORS.white,
-  },
-  mainButton: {
-    height: 58,
-    borderRadius: 18,
-    overflow: 'hidden',
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.24,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  gradientButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-  },
-  buttonText: {
-    color: COLORS.white,
-    fontSize: 15,
-    fontWeight: '600',
-    letterSpacing: -0.3,
-  },
-  buttonArrow: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  sectionCard: { marginTop: 12, paddingBottom: 6 },
+  list: { marginTop: 6 },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11 },
+  listDivider: { borderBottomWidth: 1.5, borderBottomColor: C.track },
+  listTile: { width: 34, height: 34, borderRadius: 12, borderCurve: 'continuous', backgroundColor: SURFACE_SELECTED, alignItems: 'center', justifyContent: 'center' },
+  listText: { flex: 1, color: C.ink, fontSize: 14, fontWeight: '600', lineHeight: 18 },
+  listCheck: { width: 20, height: 20, borderRadius: 10, backgroundColor: C.coral, alignItems: 'center', justifyContent: 'center' },
+  infoGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6 },
+  infoItem: { width: '50%', flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 11 },
+  infoItemLeft: { paddingRight: 10, borderRightWidth: 1.5, borderRightColor: C.track },
+  infoItemRight: { paddingLeft: 12 },
+  infoItemTop: { borderBottomWidth: 1.5, borderBottomColor: C.track },
+  infoTile: { width: 32, height: 32, borderRadius: 12, borderCurve: 'continuous', backgroundColor: C.track, alignItems: 'center', justifyContent: 'center' },
+  infoLabel: { color: CAPTION_INK, fontSize: 10, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase' },
+  infoValue: { color: C.ink, fontSize: 13, fontWeight: '700', lineHeight: 17, marginTop: 1 },
 });

@@ -50,6 +50,11 @@ import {
 } from '@/lib/run-pace-targets';
 
 import type { PerceivedEffort } from '@/lib/pace-personalization';
+import { WalkSessionHud, getWalkLayout } from '@/components/run/WalkSessionHud';
+import { WALK_MAP_STYLE, WALK_THEME, usesWalkDesign } from '@/constants/walkTheme';
+import { getStyledMapProvider } from '@/lib/map-provider';
+import { ensureForegroundLocationPermission } from '@/lib/location-permission';
+import { useSessionSteps } from '@/hooks/useSessionSteps';
 
 const { width, height } = Dimensions.get('window');
 
@@ -135,6 +140,13 @@ export default function RunScreen() {
             ? parsedDistanceKm
             : template.defaultDistanceKm;
 
+    const isWalkDesign = usesWalkDesign(templateId);
+    const accentColor = isWalkDesign ? WALK_THEME.accent : template.primaryColor;
+    const mapProvider = isWalkDesign
+        ? getStyledMapProvider()
+        : Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
+    const usesGoogleMap = mapProvider === PROVIDER_GOOGLE;
+
     const weekContext = params.weekContext || 'WEEK 1 / FOUNDATION';
     const shouldOfferLoopPrompt = templateId === 'long_walk' || params.askLoop === '1';
 
@@ -154,6 +166,7 @@ export default function RunScreen() {
         finishRun,
         resetRun,
     } = useRunTracker();
+    const sessionSteps = useSessionSteps(isWalkDesign ? runState : 'idle');
 
     const [isSaving, setIsSaving] = useState(false);
     const savedFinishedRunRef = React.useRef(false);
@@ -166,6 +179,7 @@ export default function RunScreen() {
     const [isFollowingUser, setIsFollowingUser] = useState(true);
     const [cameraHeading, setCameraHeading] = useState(0);
     const [isHudCollapsed, setIsHudCollapsed] = useState(true);
+    const [isWalkSatellite, setIsWalkSatellite] = useState(false);
     const [userGender, setUserGender] = useState<string | null>(
         typeof user?.gender === 'string' ? user.gender : null
     );
@@ -554,8 +568,8 @@ export default function RunScreen() {
                 center: currentMarkerCoordinate,
                 heading: nextHeading,
                 pitch: 0,
-                altitude: Platform.OS === 'ios' ? 650 : undefined,
-                zoom: Platform.OS === 'android' ? 18.2 : undefined,
+                altitude: usesGoogleMap ? undefined : 650,
+                zoom: usesGoogleMap ? 18.2 : undefined,
             };
 
             if ((immediateHeading && movedMeters < 1.2) || (headingDelta >= 1.25 && movedMeters < 1.2)) {
@@ -583,7 +597,7 @@ export default function RunScreen() {
         lastFollowCameraHeadingRef.current = 0;
         lastFollowCameraCoordinateRef.current = currentMarkerCoordinate;
         return true;
-    }, [currentMarkerCoordinate, currentMarkerHeading]);
+    }, [currentMarkerCoordinate, currentMarkerHeading, usesGoogleMap]);
 
     useEffect(() => {
         if (!currentMarkerCoordinate || !isFollowingUser || (runState !== 'running' && runState !== 'paused')) return;
@@ -593,6 +607,18 @@ export default function RunScreen() {
     const currentPace = paceSecPerKm
         ? (paceSecPerKm / 60).toFixed(2)
         : '0.00';
+
+    const showWalkHud = isWalkDesign && (runState === 'running' || runState === 'paused');
+    const walkLayout = getWalkLayout(height, insets.bottom);
+    const walkCueText = useMemo(() => {
+        if (instruction) {
+            const sentence = instruction.trim().toLowerCase();
+            return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+        }
+        if (paceState === 'too_fast') return 'Ease off a little';
+        if (paceState === 'too_slow') return 'Pick up the pace a touch';
+        return 'Keep a steady pace!';
+    }, [instruction, paceState]);
 
     // --- ANIMATED STYLES ---
     const timerContainerStyle = useAnimatedStyle(() => {
@@ -903,9 +929,7 @@ export default function RunScreen() {
                 : null;
 
             if (!anchor) {
-                const permission = await Location.requestForegroundPermissionsAsync();
-                if (permission.status !== 'granted') {
-                    Alert.alert("Location Needed", "Location permission is required to generate a walk loop.");
+                if (!(await ensureForegroundLocationPermission())) {
                     setLongWalkLoopDecision('undecided');
                     return;
                 }
@@ -1021,6 +1045,27 @@ export default function RunScreen() {
         }
     };
 
+    const handleFinishWalkPress = () => {
+        if (isSaving) return;
+        Alert.alert('Finish this walk?', `You've covered ${currentKm} km.`, [
+            { text: 'Keep Going', style: 'cancel' },
+            { text: 'Finish', onPress: () => { void finishRun(); } },
+        ]);
+    };
+
+    const handleRouteOverview = () => {
+        const overviewCoords = plannedLoopCoords.length > 1 ? plannedLoopCoords : displayRouteCoords;
+        if (overviewCoords.length < 2) {
+            handleRecenter();
+            return;
+        }
+        setIsFollowingUser(false);
+        mapRef.current?.fitToCoordinates(overviewCoords, {
+            edgePadding: { top: 140, right: 70, bottom: 60, left: 50 },
+            animated: true,
+        });
+    };
+
     // --- TRANSITION TO RESULT SCREEN ---
     if (runState === 'finished') {
         return (
@@ -1040,15 +1085,17 @@ export default function RunScreen() {
     }
 
     return (
-        <View style={styles.container}>
+        <View style={[styles.container, showWalkHud && { backgroundColor: WALK_THEME.background }]}>
             <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
-            <StatusBar barStyle="light-content" />
+            <StatusBar barStyle={showWalkHud ? 'dark-content' : 'light-content'} />
 
             {/* BACKGROUND MAP */}
             <MapView
                 ref={mapRef}
-                style={StyleSheet.absoluteFillObject}
-                provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+                style={showWalkHud ? [styles.walkMap, { height: walkLayout.mapHeight }] : StyleSheet.absoluteFillObject}
+                provider={mapProvider}
+                mapType={showWalkHud && isWalkSatellite ? 'hybrid' : 'standard'}
+                customMapStyle={isWalkDesign && usesGoogleMap ? WALK_MAP_STYLE : undefined}
                 initialRegion={mapRegion}
                 onPanDrag={() => setIsFollowingUser(false)}
                 onRegionChangeComplete={(_, details) => {
@@ -1061,29 +1108,69 @@ export default function RunScreen() {
                 pitchEnabled={false}
                 rotateEnabled={false}
                 showsBuildings={false}
-                tintColor={template.primaryColor}
+                tintColor={accentColor}
             >
-                {displayRouteCoords.length > 1 && (
+                {displayRouteCoords.length > 1 && isWalkDesign && (
+                    <>
+                        <Polyline
+                            coordinates={displayRouteCoords}
+                            strokeWidth={20}
+                            strokeColor={WALK_THEME.accentGlow}
+                            lineCap="round"
+                            lineJoin="round"
+                            zIndex={2}
+                        />
+                        <Polyline
+                            coordinates={displayRouteCoords}
+                            strokeWidth={8}
+                            strokeColor={accentColor}
+                            lineCap="round"
+                            lineJoin="round"
+                            zIndex={3}
+                        />
+                        <Polyline
+                            coordinates={displayRouteCoords}
+                            strokeWidth={3.5}
+                            strokeColor="#FFFFFF"
+                            lineCap="round"
+                            lineJoin="round"
+                            zIndex={4}
+                        />
+                    </>
+                )}
+                {displayRouteCoords.length > 1 && !isWalkDesign && (
                     <Polyline
                         coordinates={displayRouteCoords}
                         strokeWidth={6}
-                        strokeColor={template.primaryColor}
+                        strokeColor={accentColor}
                     />
+                )}
+                {isWalkDesign && routeCoords.length > 0 && !displayLoopAnchor && (
+                    <Marker
+                        coordinate={routeCoords[0]}
+                        title="Start"
+                        anchor={{ x: 0.5, y: 0.5 }}
+                        tracksViewChanges={false}
+                    >
+                        <View style={styles.walkStartMarker}>
+                            <View style={styles.walkStartMarkerInner} />
+                        </View>
+                    </Marker>
                 )}
                 {plannedLoopCoords.length > 1 && (
                     <Polyline
                         coordinates={plannedLoopCoords}
                         strokeWidth={runState === 'idle' ? 4 : 3}
-                        strokeColor={runState === 'idle' ? template.primaryColor : `${template.primaryColor}88`}
+                        strokeColor={runState === 'idle' ? accentColor : `${accentColor}88`}
                         lineDashPattern={runState === 'idle' ? [10, 8] : [6, 6]}
                         zIndex={1}
                     />
                 )}
                 {displayLoopAnchor && plannedLoopCoords.length > 1 && (
                     <Marker coordinate={displayLoopAnchor} title="Loop Start" tracksViewChanges={false}>
-                        <View style={[styles.loopStartMarker, { borderColor: template.primaryColor }]}>
-                            <View style={[styles.loopStartMarkerInner, { backgroundColor: template.primaryColor }]} />
-                            <View style={[styles.loopStartMarkerBadge, { backgroundColor: template.primaryColor }]}>
+                        <View style={[styles.loopStartMarker, { borderColor: accentColor }]}>
+                            <View style={[styles.loopStartMarkerInner, { backgroundColor: accentColor }]} />
+                            <View style={[styles.loopStartMarkerBadge, { backgroundColor: accentColor }]}>
                                 <Text style={styles.loopStartMarkerBadgeText}>S</Text>
                             </View>
                         </View>
@@ -1108,7 +1195,7 @@ export default function RunScreen() {
                                         <View
                                             style={[
                                                 styles.customMarkerHeading,
-                                                { borderBottomColor: template.primaryColor },
+                                                { borderBottomColor: accentColor },
                                             ]}
                                         />
                                     </View>
@@ -1116,7 +1203,7 @@ export default function RunScreen() {
                                 <View
                                     style={[
                                         styles.customMarkerInner,
-                                        { backgroundColor: template.primaryColor, borderColor: 'white' },
+                                        { backgroundColor: accentColor, borderColor: 'white' },
                                     ]}
                                 />
                             </View>
@@ -1126,12 +1213,14 @@ export default function RunScreen() {
             </MapView>
 
             {/* GRADIENT MAP DIMMING */}
-            <LinearGradient
-                colors={['rgba(255, 255, 255, 0.0)', 'rgba(255, 255, 255, 0.7)']}
-                locations={[0, 1]}
-                style={[StyleSheet.absoluteFillObject, { top: width * 1.2 }]}
-                pointerEvents="none"
-            />
+            {!showWalkHud && (
+                <LinearGradient
+                    colors={['rgba(255, 255, 255, 0.0)', 'rgba(255, 255, 255, 0.7)']}
+                    locations={[0, 1]}
+                    style={[StyleSheet.absoluteFillObject, { top: width * 1.2 }]}
+                    pointerEvents="none"
+                />
+            )}
 
             {/* IDLE HERO OVERLAY */}
             {runState === 'idle' && (
@@ -1153,15 +1242,17 @@ export default function RunScreen() {
                 )}
 
                 {/* MAP CONTROLS (Floating Right - Centered Vertically for better reach) */}
-                <View style={styles.mapControls} pointerEvents="box-none">
-                    <TouchableOpacity
-                        style={[styles.mapBtn, { backgroundColor: COLORS.glassDark }]}
-                        onPress={handleRecenter}
-                        activeOpacity={0.7}
-                    >
-                        <LocateFixed size={18} color={COLORS.textDark} />
-                    </TouchableOpacity>
-                </View>
+                {!showWalkHud && (
+                    <View style={styles.mapControls} pointerEvents="box-none">
+                        <TouchableOpacity
+                            style={[styles.mapBtn, { backgroundColor: COLORS.glassDark }]}
+                            onPress={handleRecenter}
+                            activeOpacity={0.7}
+                        >
+                            <LocateFixed size={18} color={COLORS.textDark} />
+                        </TouchableOpacity>
+                    </View>
+                )}
 
                 {/* REMOVED: Separate floating phase timer (now integrated into top bar) */}
 
@@ -1169,7 +1260,7 @@ export default function RunScreen() {
                 {runState === 'idle' && (
                     <View style={styles.heroContainer}>
                         <View style={styles.heroContentTop}>
-                            <Text style={[styles.heroSubtitle, { color: template.primaryColor }]}>
+                            <Text style={[styles.heroSubtitle, { color: accentColor }]}>
                                 {weekContext.toUpperCase()}
                             </Text>
                             <Text style={styles.heroTitle}>{template.title}</Text>
@@ -1180,7 +1271,7 @@ export default function RunScreen() {
                                     const IconComponent = AIM_ICONS[aim.icon];
                                     return (
                                         <View key={idx} style={styles.aimPill}>
-                                            <IconComponent size={16} color={template.primaryColor} />
+                                            <IconComponent size={16} color={accentColor} />
                                             <Text style={styles.aimText}>{aim.text}</Text>
                                         </View>
                                     );
@@ -1191,7 +1282,7 @@ export default function RunScreen() {
                         <View style={styles.heroContentBottom}>
                             <View style={styles.targetRow}>
                                 <Text style={styles.targetVal}>{targetDistanceKm.toFixed(1)} KM</Text>
-                                <Text style={[styles.targetLab, { color: template.primaryColor }]}>
+                                <Text style={[styles.targetLab, { color: accentColor }]}>
                                     TARGET DISTANCE
                                 </Text>
                             </View>
@@ -1203,7 +1294,7 @@ export default function RunScreen() {
                             <TouchableOpacity
                                 style={[
                                     styles.heroStartBtn,
-                                    { backgroundColor: template.primaryColor },
+                                    { backgroundColor: accentColor },
                                     isGeneratingLoop && { opacity: 0.7 }
                                 ]}
                                 onPress={handleStartPress}
@@ -1215,7 +1306,7 @@ export default function RunScreen() {
                                         ? 'GENERATING LOOP...'
                                         : (shouldOfferLoopPrompt && loopPreviewActive)
                                             ? 'START LOOP WALK'
-                                            : 'START RUN'}
+                                            : workoutType === 'WALK' ? 'START WALK' : 'START RUN'}
                                 </Text>
                                 <ChevronRight size={24} color={COLORS.textDark} />
                             </TouchableOpacity>
@@ -1224,7 +1315,7 @@ export default function RunScreen() {
                 )}
 
                 {/* 2. RUNNING HUD */}
-                {(runState === 'running' || runState === 'paused') && (
+                {(runState === 'running' || runState === 'paused') && !isWalkDesign && (
                     <View style={styles.runningHud} pointerEvents="box-none">
                         {/* A. INTEGRATED TOP BAR (Pace + Phase) */}
                         {template.hud.showPaceBar && (
@@ -1464,6 +1555,37 @@ export default function RunScreen() {
                 {/* 3. PAUSED STATE (MINIMAL OLD VERSION - OVERRIDDEN BY NEW UI) */}
                 {/* We can keep this empty or stylized similarly to the new HUD */}
             </SafeAreaView>
+
+            {showWalkHud && (
+                <WalkSessionHud
+                    title={workoutLabel}
+                    phaseLabel={currentPhase.label}
+                    phaseIndex={phaseInfo.currentPhaseIndex}
+                    totalPhases={phaseInfo.totalPhases}
+                    blockRemainingSec={phaseInfo.timeRemainingSec}
+                    blockDurationSec={currentPhase.durationSec}
+                    blockProgress={phaseInfo.progressInPhase}
+                    steps={sessionSteps}
+                    distanceKm={(distanceM / 1000).toFixed(1)}
+                    calories={calories}
+                    cueText={walkCueText}
+                    isPaused={runState === 'paused'}
+                    isSaving={isSaving}
+                    isSatellite={isWalkSatellite}
+                    mapHeight={walkLayout.mapHeight}
+                    ringSize={walkLayout.ringSize}
+                    topInset={insets.top}
+                    bottomInset={insets.bottom}
+                    onBack={handleBackPress}
+                    onPause={pauseRun}
+                    onResume={resumeRun}
+                    onFinish={handleFinishWalkPress}
+                    onCoach={() => triggerCoachInstruction('manual')}
+                    onRecenter={handleRecenter}
+                    onOverview={handleRouteOverview}
+                    onToggleLayers={() => setIsWalkSatellite((value) => !value)}
+                />
+            )}
         </View>
     );
 }
@@ -1471,6 +1593,24 @@ export default function RunScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.textDark },
     overlay: { flex: 1 },
+    walkMap: { position: 'absolute', top: 0, left: 0, right: 0 },
+    walkStartMarker: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 4,
+        borderColor: WALK_THEME.accent,
+        alignItems: 'center',
+        justifyContent: 'center',
+        boxShadow: WALK_THEME.buttonShadow,
+    },
+    walkStartMarkerInner: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: WALK_THEME.accent,
+    },
 
     // Header
     header: { paddingHorizontal: 20, paddingTop: 10, flexDirection: 'row', alignItems: 'center', zIndex: 50 },

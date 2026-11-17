@@ -1,1017 +1,464 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from "react";
 import {
-  StyleSheet,
-  View,
-  Text,
-  SafeAreaView,
-  TouchableOpacity,
-  Animated,
-  StatusBar,
-  Platform,
-  ScrollView,
-  TextInput,
-  Modal,
-  Pressable,
+  Keyboard,
   KeyboardAvoidingView,
-} from 'react-native';
-import {
-  ArrowRight,
-  Check,
-  Heart,
-  ChevronLeft,
-  ShieldCheck,
-  Medal,
-  Smile,
-  Coffee,
-  Film,
-  Gift,
-  Calendar,
-  Trophy,
-  Sparkles,
-  type LucideIcon,
-} from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Image as ExpoImage } from 'expo-image';
-import { useAuth } from '@/src/auth/authContext';
-import { API_BASE_URL } from '../../config/api';
-import { Fonts } from '../../constants/theme';
-
-const H_PADDING = 28;
-const OPTION_WIDTH = 104;
-const OPTION_GAP = 14;
-
-const BENEFITS = [
-  { icon: ShieldCheck, text: 'Stay motivated' },
-  { icon: Medal, text: 'Celebrate wins' },
-  { icon: Smile, text: "They'll love it" },
-];
-
-const COLORS = {
-  coral: '#FF6B6B',
-  coralDark: '#EE5253',
-  coralLight: '#FFF5F5',
-  white: '#FFFFFF',
-  black: '#1F2937',
-  muted: '#6B7280',
-  border: '#F0F0F0',
-  selection: '#FFF0F0',
-};
-
-type RewardOption = {
-  id: string;
-  label: string;
-  icon: LucideIcon;
-  iconColor: string;
-  iconBg: string;
-  isCustom?: boolean;
-};
-
-const OPTIONS: RewardOption[] = [
-  { id: 'coffee', label: 'Coffee', icon: Coffee, iconColor: '#C2410C', iconBg: '#FFF7ED' },
-  { id: 'movie', label: 'Movie', icon: Film, iconColor: '#7C3AED', iconBg: '#F5F3FF' },
-  { id: 'gift', label: 'Gift', icon: Gift, iconColor: '#DB2777', iconBg: '#FDF2F8' },
-  { id: 'date', label: 'Date', icon: Calendar, iconColor: '#E11D48', iconBg: '#FFF1F2' },
-  { id: 'heart', label: 'Time', icon: Heart, iconColor: '#DC2626', iconBg: '#FEF2F2' },
-  { id: 'trophy', label: 'Prize', icon: Trophy, iconColor: '#2563EB', iconBg: '#EFF6FF' },
-  { id: 'custom', label: 'Custom', icon: Sparkles, iconColor: '#6366F1', iconBg: '#EEF2FF', isCustom: true },
-];
-
-const WEEKS = [
-  {
-    key: 'week1' as const,
-    label: 'Week 1',
-    points: '700',
-    milestoneAction: 'If your partner earns',
-    milestoneSub: 'they’ll unlock this reward.',
-  },
-  {
-    key: 'week2' as const,
-    label: 'Week 2',
-    points: '1,400',
-    milestoneAction: 'If your partner earns',
-    milestoneSub: 'they’ll unlock this reward.',
-  },
-  {
-    key: 'week3' as const,
-    label: 'Week 3',
-    points: '2,100',
-    milestoneAction: 'If your partner earns',
-    milestoneSub: 'they’ll unlock this reward.',
-  },
-];
+  Platform,
+  Pressable,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from "react-native";
+import Animated, {
+  Extrapolation,
+  interpolate,
+  interpolateColor,
+  useAnimatedScrollHandler,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+  useAnimatedRef,
+  type SharedValue,
+} from "react-native-reanimated";
+import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
+import * as Haptics from "expo-haptics";
+import { Check, ChevronLeft, Pencil } from "lucide-react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { C, EASE_OUT, PrimaryButton, SURFACE_SELECTED, ScreenTitle, rise, useCompact } from "./OnboardingKit";
 
 type RewardMap = {
   week1: string | null;
   week2: string | null;
   week3: string | null;
 };
-
-type CustomLabels = {
-  week1: string;
-  week2: string;
-  week3: string;
-};
-
 type Props = {
   onContinue: (data: RewardMap) => void;
   onBack?: () => void;
   joinedWithCode?: boolean;
 };
+type RewardId = "massage" | "cook" | "money" | "custom";
+type RewardOption = { id: RewardId; label: string; image: number };
 
-function RewardHero({ compact = false }: { compact?: boolean }) {
-  return (
-    <View style={[styles.heroScene, compact && styles.heroSceneCompact]}>
-      <View style={[styles.heroGlow, compact && styles.heroGlowCompact]} />
-      <ExpoImage
-        source={require('../../assets/bf5ea328-b200-4872-90b4-5932707e2f40.png')}
-        style={[styles.heroImage, compact && styles.heroImageCompact]}
-        contentFit="contain"
-        contentPosition="center"
-      />
-      <View style={[styles.heroHeartBadge, compact && styles.heroHeartBadgeCompact]}>
-        <Heart size={compact ? 9 : 11} color={COLORS.white} fill={COLORS.white} />
-      </View>
-    </View>
-  );
-}
+const OPTIONS: RewardOption[] = [
+  { id: "massage", label: "Massage", image: require("../../assets/rewards/prize-massage.webp") },
+  { id: "cook", label: "Cook a treat", image: require("../../assets/rewards/prize-cook.webp") },
+  { id: "money", label: "Money reward", image: require("../../assets/rewards/prize-money.webp") },
+  { id: "custom", label: "Your own prize", image: require("../../assets/rewards/prize-custom.webp") },
+];
 
-function RewardTile({
-  option,
-  isSelected,
-  displayLabel,
-  onPress,
-}: {
+const SURFACE = "rgba(255,255,255,0.78)";
+const RING = "#D8D9DB";
+const MUTED_TEXT = "rgba(8, 36, 55, 0.5)";
+const SETTLE = { duration: 400, dampingRatio: 0.72 };
+
+function PrizeCard({ option, selected, detail, compact, onPress }: {
   option: RewardOption;
-  isSelected: boolean;
-  displayLabel: string;
+  selected: boolean;
+  detail?: string;
+  compact: boolean;
   onPress: () => void;
 }) {
-  const Icon = option.icon;
+  const progress = useSharedValue(selected ? 1 : 0);
+  const badge = useSharedValue(selected ? 1 : 0);
+  const pressed = useSharedValue(0);
+
+  useEffect(() => {
+    progress.set(withTiming(selected ? 1 : 0, { duration: 240, easing: EASE_OUT }));
+    badge.set(selected ? withSpring(1, SETTLE) : withTiming(0, { duration: 140, easing: EASE_OUT }));
+  }, [selected, progress, badge]);
+
+  const cardStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(progress.get(), [0, 1], [C.border, "#FF9CA3"]),
+    backgroundColor: interpolateColor(progress.get(), [0, 1], [SURFACE, SURFACE_SELECTED]),
+    transform: [{ scale: interpolate(pressed.get(), [0, 1], [1, 0.97]) }],
+  }));
+  const iconStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: interpolate(badge.get(), [0, 1], [1, 1.08]) }, { rotate: `${interpolate(badge.get(), [0, 1], [0, -5])}deg` }],
+  }));
+  const checkStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, badge.get() * 1.6),
+    transform: [{ scale: interpolate(badge.get(), [0, 1], [0.55, 1]) }],
+  }));
+  const ringStyle = useAnimatedStyle(() => ({ opacity: 1 - progress.get() }));
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.92}
+    <Pressable
       onPress={onPress}
-      style={[
-        styles.optionCard,
-        option.isCustom && !isSelected && styles.optionCardCustom,
-        isSelected && styles.optionCardSelected,
-      ]}
+      onPressIn={() => pressed.set(withTiming(1, { duration: 110, easing: EASE_OUT }))}
+      onPressOut={() => pressed.set(withTiming(0, { duration: 180, easing: EASE_OUT }))}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${option.label}${detail ? `, ${detail}` : ""}`}
     >
-      {isSelected ? (
-        <LinearGradient
-          colors={[COLORS.coral, COLORS.coralDark]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.iconWell}
-        >
-          <Icon color={COLORS.white} size={22} strokeWidth={2} />
-        </LinearGradient>
-      ) : (
-        <View style={[styles.iconWell, { backgroundColor: option.iconBg }]}>
-          <Icon color={option.iconColor} size={22} strokeWidth={1.9} />
+      <Animated.View style={[styles.card, compact && styles.cardCompact, cardStyle]}>
+        <Animated.View style={[styles.iconWrap, compact && styles.iconWrapCompact, iconStyle]}>
+          <Image source={option.image} style={styles.icon} contentFit="contain" accessible={false} />
+        </Animated.View>
+        <View style={styles.cardBody}>
+          <Text style={[styles.cardTitle, compact && styles.cardTitleCompact]}>{option.label}</Text>
+          {!!detail && (
+            <Text numberOfLines={1} style={[styles.cardDetail, selected && styles.coral]}>{detail}</Text>
+          )}
         </View>
-      )}
-
-      <Text style={[styles.optionLabel, isSelected && styles.optionLabelSelected]} numberOfLines={1}>
-        {displayLabel}
-      </Text>
-
-      <View style={[styles.selectRing, isSelected && styles.selectRingActive]}>
-        {isSelected && <Check color={COLORS.white} size={10} strokeWidth={3.5} />}
-      </View>
-    </TouchableOpacity>
+        <View style={styles.radio}>
+          <Animated.View style={[styles.radioRing, ringStyle]} />
+          <Animated.View style={[styles.radioChecked, checkStyle]}>
+            <Check color={C.white} size={18} strokeWidth={3.4} />
+          </Animated.View>
+        </View>
+      </Animated.View>
+    </Pressable>
   );
 }
 
-export default function PartnerRewardSelection({
-  onContinue,
-  onBack,
-  joinedWithCode = false,
-}: Props) {
-  const { authFetch } = useAuth();
-  const [rewards, setRewards] = useState<RewardMap>({
-    week1: null,
-    week2: null,
-    week3: null,
-  });
-  const [customLabels, setCustomLabels] = useState<CustomLabels>({
-    week1: '',
-    week2: '',
-    week3: '',
-  });
-  const [customModalWeek, setCustomModalWeek] = useState<keyof RewardMap | null>(null);
-  const [customDraft, setCustomDraft] = useState('');
-  const [partnerHasOnboardingRewards, setPartnerHasOnboardingRewards] = useState(false);
-  const [step, setStep] = useState<'pick' | 'review'>('pick');
+function ScrollReveal({ scrollY, viewport, contentTop, children }: {
+  scrollY: SharedValue<number>;
+  viewport: SharedValue<number>;
+  contentTop: SharedValue<number>;
+  children: React.ReactNode;
+}) {
+  const top = useSharedValue(0);
+  const size = useSharedValue(0);
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(28)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
-    ]).start();
-  }, [fadeAnim, slideAnim]);
-
-  useEffect(() => {
-    if (!joinedWithCode) return;
-
-    let mounted = true;
-    const loadPartnerState = async () => {
-      try {
-        const res = await authFetch(`${API_BASE_URL}/partner`);
-        const data = await res.json();
-        if (!mounted) return;
-        setPartnerHasOnboardingRewards(!!data?.partnerHasOnboardingRewards);
-      } catch {
-        if (!mounted) return;
-        setPartnerHasOnboardingRewards(false);
-      }
+  const style = useAnimatedStyle(() => {
+    const h = size.get();
+    if (h === 0 || viewport.get() === 0) return {};
+    const y = contentTop.get() + top.get();
+    const enter = interpolate(scrollY.get() + viewport.get() - y, [0, h], [0, 1], Extrapolation.CLAMP);
+    const leave = interpolate(y + h - scrollY.get(), [0, h * 0.7], [0, 1], Extrapolation.CLAMP);
+    const visible = Math.min(enter, leave);
+    return {
+      opacity: interpolate(visible, [0, 1], [0.3, 1]),
+      transform: [
+        { translateY: interpolate(enter, [0, 1], [14, 0]) },
+        { scale: interpolate(visible, [0, 1], [0.92, 1]) },
+      ],
     };
+  });
 
-    loadPartnerState();
+  return (
+    <Animated.View
+      onLayout={(e) => {
+        top.set(e.nativeEvent.layout.y);
+        size.set(e.nativeEvent.layout.height);
+      }}
+      style={style}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+export default function PartnerRewardSelection({ onContinue, onBack }: Props) {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const compact = useCompact();
+  const reduced = useReducedMotion();
+  const [selected, setSelected] = useState<RewardId | null>(null);
+  const [money, setMoney] = useState("");
+  const [custom, setCustom] = useState("");
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const scroll = useAnimatedRef<Animated.ScrollView>();
+  const cheer = useSharedValue(0);
+  const scrollY = useSharedValue(0);
+  const viewport = useSharedValue(0);
+  const contentHeight = useRef(0);
+  const optionsTop = useSharedValue(0);
+  const editorTop = useRef(0);
+  const inputFocused = useRef(false);
+
+  const revealEditor = () => {
+    scroll.current?.scrollTo({ y: Math.max(0, optionsTop.get() + editorTop.current - 12), animated: !reduced });
+  };
+
+  const onScroll = useAnimatedScrollHandler((event) => {
+    scrollY.set(event.contentOffset.y);
+  });
+
+  useEffect(() => {
+    const show = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide", () => setKeyboardVisible(false));
     return () => {
-      mounted = false;
+      show.remove();
+      hide.remove();
     };
-  }, [joinedWithCode, authFetch]);
+  }, []);
 
-  const selectReward = (weekKey: keyof RewardMap, option: RewardOption) => {
-    if (option.isCustom) {
-      setCustomDraft(customLabels[weekKey]);
-      setCustomModalWeek(weekKey);
-      return;
+  useEffect(() => {
+    if (reduced) return;
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const peek = setTimeout(() => {
+      if (inputFocused.current || contentHeight.current <= viewport.get() + 8) return;
+      scroll.current?.scrollTo({ y: 56, animated: true });
+      settle = setTimeout(() => {
+        if (!inputFocused.current) scroll.current?.scrollTo({ y: 0, animated: true });
+      }, 560);
+    }, 1100);
+    return () => {
+      clearTimeout(peek);
+      if (settle) clearTimeout(settle);
+    };
+  }, [reduced, scroll, viewport]);
+
+  const moneyValue = Number(money);
+  const validMoney = /^\d+(\.\d{1,2})?$/.test(money) && moneyValue > 0 && moneyValue <= 99999;
+  const valid =
+    selected !== null &&
+    (selected !== "money" || validMoney) &&
+    (selected !== "custom" || custom.trim().length > 0);
+  const moneyLabel = validMoney
+    ? `$${moneyValue.toLocaleString("en-AU", { minimumFractionDigits: moneyValue % 1 ? 2 : 0, maximumFractionDigits: 2 })}`
+    : "";
+
+  const heroWidth = Math.min(width - 32, 420);
+  const heroHeight = Math.round(Math.min(heroWidth * 0.64, height * (compact ? 0.22 : 0.27)));
+
+  const heroStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: interpolate(cheer.get(), [0, 1], [0, -6]) },
+      { scale: interpolate(cheer.get(), [0, 1], [1, 1.03]) },
+    ],
+  }));
+
+  const select = (id: RewardId) => {
+    if (selected !== id) {
+      Haptics.selectionAsync().catch(() => {});
+      if (!reduced) {
+        cheer.set(withSequence(
+          withTiming(1, { duration: 140, easing: EASE_OUT }),
+          withSpring(0, { duration: 420, dampingRatio: 0.55 }),
+        ));
+      }
     }
-
-    setRewards((prev) => ({
-      ...prev,
-      [weekKey]: prev[weekKey] === option.id ? null : option.id,
-    }));
+    setSelected(id);
+    if (id !== "custom" && id !== "money") Keyboard.dismiss();
   };
 
-  const confirmCustomReward = () => {
-    if (!customModalWeek) return;
-    const label = customDraft.trim();
-    setCustomLabels((prev) => ({ ...prev, [customModalWeek]: label }));
-    setRewards((prev) => ({
-      ...prev,
-      [customModalWeek]: prev[customModalWeek] === 'custom' && !label ? null : 'custom',
-    }));
-    setCustomModalWeek(null);
-    setCustomDraft('');
-  };
-
-  const getRewardOption = (optionId: string | null) =>
-    OPTIONS.find((o) => o.id === optionId) ?? null;
-
-  const getDisplayLabel = (weekKey: keyof RewardMap, optionId: string | null) => {
-    if (!optionId) return '';
-    if (optionId === 'custom' && customLabels[weekKey].trim()) {
-      return customLabels[weekKey].trim();
-    }
-    return getRewardOption(optionId)?.label ?? '';
-  };
-
-  const selectedCount = [rewards.week1, rewards.week2, rewards.week3].filter(Boolean).length;
-  const hasAnySelection = selectedCount >= 1;
-  const shouldShowPartnerStoreStory = joinedWithCode && partnerHasOnboardingRewards;
-
-  const handleBack = () => {
-    if (step === 'review') {
-      setStep('pick');
-      return;
-    }
-    onBack?.();
-  };
-
-  const handlePrimaryAction = () => {
-    if (step === 'pick') {
-      if (hasAnySelection) setStep('review');
-      return;
-    }
-    onContinue({
-      week1: rewards.week1,
-      week2: rewards.week2,
-      week3: rewards.week3,
-    });
+  const finish = () => {
+    if (!valid || !selected) return;
+    Keyboard.dismiss();
+    const value =
+      selected === "custom"
+        ? `custom:${custom.trim()}`
+        : selected === "money"
+          ? `money:${moneyValue.toFixed(2)}`
+          : selected;
+    onContinue({ week1: value, week2: null, week3: null });
   };
 
   return (
-    <View style={styles.container}>
+    <View style={styles.root}>
       <StatusBar barStyle="dark-content" />
-
-      <SafeAreaView style={styles.flex}>
-        <View style={styles.topBar}>
-          <TouchableOpacity
-            onPress={handleBack}
-            style={styles.backBtn}
-            activeOpacity={0.7}
-            disabled={step === 'pick' && !onBack}
-          >
-            <ChevronLeft color={COLORS.black} size={30} />
-          </TouchableOpacity>
-        </View>
-
-        <KeyboardAvoidingView
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <View style={[styles.topBlush, { width: width * 0.85, height: width * 0.85 }]} />
+        <View style={[styles.bottomMint, { width: width * 0.95, height: width * 0.95 }]} />
+      </View>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <View style={styles.listArea}>
+        <Animated.ScrollView
+          ref={scroll}
           style={styles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          contentContainerStyle={styles.content}
+          contentInsetAdjustmentBehavior="never"
+          automaticallyAdjustKeyboardInsets={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          onLayout={(e) => {
+            viewport.set(e.nativeEvent.layout.height);
+            if (inputFocused.current) revealEditor();
+          }}
+          onContentSizeChange={(_, h) => {
+            contentHeight.current = h;
+            if (inputFocused.current) revealEditor();
+          }}
         >
-          <Animated.View
-            style={[
-              styles.flex,
-              { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
-            ]}
-          >
-            <ScrollView
-              style={styles.flex}
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.scrollContent}
-              keyboardShouldPersistTaps="handled"
-            >
-              <View style={styles.heroBlock}>
-                <View style={styles.heroRow}>
-                  <View style={styles.heroTextCol}>
-                    <View style={styles.titleBlock}>
-                      {step === 'pick' ? (
-                        <Text style={styles.title}>
-                          Pick rewards{'\n'}
-                          <Text style={styles.titleAccent}>for your partner</Text>
-                        </Text>
-                      ) : (
-                        <>
-                          <Text style={styles.title}>Review your</Text>
-                          <Text style={styles.reviewTitleAction}>reward picks</Text>
-                        </>
-                      )}
-                    </View>
-                  </View>
-
-                  <RewardHero compact={step === 'review'} />
-                </View>
-
-                <Text style={[styles.subtitle, styles.pickSubtitle]}>
-                  {step === 'pick'
-                    ? shouldShowPartnerStoreStory
-                      ? 'Your partner already set up their store — add milestones or skip for now.'
-                      : 'Choose what your partner earns when they complete their weekly tasks and reach each points milestone.'
-                    : `${selectedCount} of 3 milestones set. You can edit these anytime.`}
-                </Text>
-              </View>
-
-              {step === 'pick' ? (
-                <View style={styles.benefitsRow}>
-                  {BENEFITS.map(({ icon: Icon, text }) => (
-                    <View key={text} style={styles.benefitItem}>
-                      <View style={styles.benefitIcon}>
-                        <Icon size={16} color={COLORS.coral} strokeWidth={2.4} />
-                      </View>
-                      <Text style={styles.benefitText}>{text}</Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-
-              <View style={styles.weeksList}>
-                {WEEKS.map((week) => {
-                  const weekKey = week.key;
-                  const selectedId = rewards[weekKey];
-                  const option = getRewardOption(selectedId);
-                  const label = getDisplayLabel(weekKey, selectedId);
-                  const isSet = Boolean(selectedId && option);
-
-                  if (step === 'pick') {
-                    return (
-                      <View key={week.key} style={styles.weekSection}>
-                        <View style={styles.weekHeader}>
-                          <Text style={styles.weekLabel}>{week.label}</Text>
-                          <View style={styles.pointsRow}>
-                            <Heart size={14} color={COLORS.coral} fill={COLORS.coral} />
-                            <Text style={styles.pointsText}>
-                              {week.points}
-                              <Text style={styles.pointsUnit}> pts</Text>
-                            </Text>
-                          </View>
-                        </View>
-
-                        <ScrollView
-                          horizontal
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={styles.optionsRow}
-                          decelerationRate="fast"
-                        >
-                          {OPTIONS.map((optionItem) => {
-                            const isSelected = selectedId === optionItem.id;
-                            const optionLabel =
-                              optionItem.isCustom && isSelected
-                                ? getDisplayLabel(weekKey, 'custom') || 'Custom'
-                                : optionItem.label;
-
-                            return (
-                              <RewardTile
-                                key={`${week.key}-${optionItem.id}`}
-                                option={optionItem}
-                                isSelected={isSelected}
-                                displayLabel={optionLabel}
-                                onPress={() => selectReward(weekKey, optionItem)}
-                              />
-                            );
-                          })}
-                        </ScrollView>
-                      </View>
-                    );
-                  }
-
-                  return (
-                    <View key={week.key} style={styles.weekSection}>
-                      <View style={styles.weekHeader}>
-                        <Text style={styles.weekLabel}>{week.label}</Text>
-                        <View style={styles.pointsRow}>
-                          <Heart size={14} color={COLORS.coral} fill={COLORS.coral} />
-                          <Text style={styles.pointsText}>
-                            {week.points}
-                            <Text style={styles.pointsUnit}> pts</Text>
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.milestoneBlock}>
-                        <Text style={styles.milestoneAction}>{week.milestoneAction}</Text>
-                        <Text style={styles.milestoneValue}>
-                          {week.points}
-                          <Text style={styles.milestoneValueUnit}> pts</Text>
-                        </Text>
-                        <Text style={styles.milestoneSub}>{week.milestoneSub}</Text>
-                      </View>
-
-                      {isSet && option ? (
-                        <View style={styles.reviewCard}>
-                          <View style={[styles.reviewIconWell, { backgroundColor: option.iconBg }]}>
-                            <option.icon color={option.iconColor} size={22} strokeWidth={2} />
-                          </View>
-                          <View style={styles.reviewTextWrap}>
-                            <Text style={styles.reviewRewardLabel}>{label}</Text>
-                            <Text style={styles.reviewRewardHint}>Locked in</Text>
-                          </View>
-                          <TouchableOpacity
-                            onPress={() => setStep('pick')}
-                            style={styles.editBtn}
-                            activeOpacity={0.8}
-                          >
-                            <Text style={styles.editBtnText}>Edit</Text>
-                          </TouchableOpacity>
-                        </View>
-                      ) : (
-                        <TouchableOpacity
-                          onPress={() => setStep('pick')}
-                          style={styles.reviewEmptyCard}
-                          activeOpacity={0.85}
-                        >
-                          <Text style={styles.reviewEmptyTitle}>No reward set</Text>
-                          <Text style={styles.reviewEmptyHint}>Tap to add one</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-            </ScrollView>
-          </Animated.View>
-        </KeyboardAvoidingView>
-
-        <View style={styles.footer}>
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={handlePrimaryAction}
-            style={styles.mainButton}
-            disabled={step === 'pick' && !hasAnySelection}
-          >
-            <LinearGradient
-              colors={
-                step === 'review' || hasAnySelection
-                  ? [COLORS.coral, COLORS.coralDark]
-                  : ['#E5E7EB', '#D1D5DB']
-              }
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.gradientButton}
-            >
-              <Text style={styles.buttonText}>
-                {step === 'pick' ? 'Continue' : 'Finish setup'}
-              </Text>
-              <ArrowRight color={COLORS.white} size={20} strokeWidth={3} />
-            </LinearGradient>
-          </TouchableOpacity>
-
-          {step === 'pick' && (
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => onContinue({ week1: null, week2: null, week3: null })}
-              style={styles.skipBtn}
-            >
-              <Text style={styles.skipText}>I'll decide later</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </SafeAreaView>
-
-      <Modal
-        visible={customModalWeek !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setCustomModalWeek(null)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setCustomModalWeek(null)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Name your reward</Text>
-            <Text style={styles.modalSubtitle}>
-              Something personal your partner will love.
-            </Text>
-            <TextInput
-              value={customDraft}
-              onChangeText={setCustomDraft}
-              placeholder="e.g. Massage, Brunch, New shoes..."
-              placeholderTextColor="#9CA3AF"
-              style={styles.modalInput}
-              autoFocus
-              maxLength={40}
-              returnKeyType="done"
-              onSubmitEditing={confirmCustomReward}
-            />
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={confirmCustomReward}
-              style={styles.modalBtn}
-            >
-              <LinearGradient
-                colors={[COLORS.coral, COLORS.coralDark]}
-                style={styles.modalBtnGradient}
+        <View style={[styles.top, { paddingTop: insets.top + 24 }]}>
+          <View style={styles.header}>
+            {onBack && (
+              <Pressable
+                onPress={onBack}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Back"
+                style={({ pressed }) => [styles.back, pressed && styles.pressed]}
               >
-                <Text style={styles.modalBtnText}>Save reward</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+                <ChevronLeft color={C.ink} size={32} strokeWidth={2.5} />
+              </Pressable>
+            )}
+            <View style={styles.brand}>
+              <Image source={require("../../assets/logo.png")} tintColor={C.coral} contentFit="contain" style={styles.brandMark} accessible={false} />
+              <Text style={styles.brandName}>RunTogether</Text>
+            </View>
+          </View>
+
+          <View style={styles.heroClip}>
+          <Animated.View entering={rise(40)} style={[styles.hero, { height: heroHeight, marginTop: compact ? 8 : 16 }]}>
+            <View pointerEvents="none" style={[styles.heroBackdrop, { width: heroWidth * 0.9, height: heroHeight * 0.92, borderTopLeftRadius: heroWidth * 0.45, borderTopRightRadius: heroWidth * 0.45 }]} />
+            <Animated.View style={heroStyle}>
+              <Image
+                source={require("../../assets/rewards/prize-celebrate-white-eyes.webp")}
+                style={{ width: heroWidth, height: heroHeight }}
+                contentFit="contain"
+                accessibilityLabel="Our teal and coral avatars cheering beside a gold trophy"
+              />
+            </Animated.View>
+            <LinearGradient
+              pointerEvents="none"
+              colors={["rgba(255,252,252,0)", C.bg]}
+              style={[styles.heroFade, { height: heroHeight * 0.38 }]}
+            />
+          </Animated.View>
+          </View>
+
+          <ScreenTitle lead="This week's " accent="prize" sparkles delay={140} style={styles.title} />
+        </View>
+
+          <View onLayout={(e) => { optionsTop.set(e.nativeEvent.layout.y); }} style={[styles.options, compact && styles.optionsCompact]} accessibilityRole="radiogroup" accessibilityLabel="Choose this week's prize">
+            {OPTIONS.map((option, index) => (
+              <React.Fragment key={option.id}>
+                <ScrollReveal scrollY={scrollY} viewport={viewport} contentTop={optionsTop}>
+                <Animated.View entering={rise(220 + index * 60)}>
+                  <PrizeCard
+                    option={option}
+                    selected={selected === option.id}
+                    compact={compact}
+                    detail={
+                      option.id === "money"
+                        ? moneyLabel || undefined
+                        : option.id === "custom"
+                          ? custom.trim() || undefined
+                          : undefined
+                    }
+                    onPress={() => select(option.id)}
+                  />
+                </Animated.View>
+                </ScrollReveal>
+                {selected === option.id && (option.id === "money" || option.id === "custom") && (
+                  <Animated.View
+                    entering={rise(0)}
+                    onLayout={(e) => {
+                      editorTop.current = e.nativeEvent.layout.y;
+                      revealEditor();
+                    }}
+                    style={styles.editor}
+                  >
+                    <Text nativeID="prize-input-label" style={styles.inputLabel}>
+                      {option.id === "money" ? "How much is on the line?" : "What does the winner get?"}
+                    </Text>
+                    <View style={styles.inputWrap}>
+                      {option.id === "money"
+                        ? <Text style={styles.currency}>$</Text>
+                        : <Pencil size={18} color={C.coral} />}
+                      <TextInput
+                        key={option.id}
+                        accessibilityLabel={option.id === "money" ? "Money reward amount in dollars" : "Custom prize name"}
+                        value={option.id === "money" ? money : custom}
+                        onChangeText={
+                          option.id === "money"
+                            ? (text) => setMoney(text.replace(/,/g, ".").replace(/[^0-9.]/g, ""))
+                            : setCustom
+                        }
+                        placeholder={option.id === "money" ? "Enter amount" : "e.g. Breakfast in bed"}
+                        placeholderTextColor={C.muted}
+                        keyboardType={option.id === "money" ? "decimal-pad" : "default"}
+                        maxLength={option.id === "money" ? 8 : 40}
+                        returnKeyType="done"
+                        onSubmitEditing={Keyboard.dismiss}
+                        onFocus={() => {
+                          inputFocused.current = true;
+                          revealEditor();
+                        }}
+                        onBlur={() => { inputFocused.current = false; }}
+                        style={styles.input}
+                      />
+                    </View>
+                    <Text style={styles.inputHint}>
+                      {option.id === "money"
+                        ? money && !validMoney
+                          ? "Enter an amount between $0.01 and $99,999, with up to 2 decimal places."
+                          : "You two settle up. Bragging rights included."
+                        : `${custom.trim().length}/40 characters`}
+                    </Text>
+                  </Animated.View>
+                )}
+              </React.Fragment>
+            ))}
+          </View>
+        </Animated.ScrollView>
+        <LinearGradient pointerEvents="none" colors={[C.bg, "rgba(255,252,252,0)"]} style={[styles.listFade, styles.listFadeTop]} />
+        <LinearGradient pointerEvents="none" colors={["rgba(255,252,252,0)", C.bg]} style={[styles.listFade, styles.listFadeBottom]} />
+        </View>
+
+        <Animated.View entering={rise(420)} style={[styles.footer, { paddingBottom: keyboardVisible ? 6 : Math.max(insets.bottom - 14, 6) }]}>
+          <PrimaryButton label="Continue" onPress={finish} disabled={!valid} style={styles.cta} />
+          <Pressable
+            onPress={() => onContinue({ week1: null, week2: null, week3: null })}
+            accessibilityRole="button"
+            hitSlop={4}
+            style={({ pressed }) => [styles.skip, { marginBottom: !keyboardVisible && __DEV__ ? 30 : 0 }, pressed && styles.pressed]}
+          >
+            <Text style={styles.skipText}>I&apos;ll decide later</Text>
           </Pressable>
-        </Pressable>
-      </Modal>
+        </Animated.View>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.white },
+  root: { flex: 1, backgroundColor: C.bg, overflow: "hidden" },
   flex: { flex: 1 },
-
-  topBar: {
-    paddingHorizontal: 16,
-    paddingTop: 4,
-  },
-  backBtn: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-  },
-
-  scrollContent: {
-    paddingHorizontal: H_PADDING,
-    paddingTop: 12,
-    paddingBottom: 24,
-  },
-
-  heroBlock: {
-    marginBottom: 20,
-  },
-  heroRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  heroTextCol: {
-    flex: 1,
-    paddingRight: 4,
-  },
-  heroScene: {
-    width: 112,
-    height: 118,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-  heroSceneCompact: {
-    width: 96,
-    height: 100,
-    marginTop: 0,
-  },
-  heroGlow: {
-    position: 'absolute',
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: 'rgba(255, 107, 107, 0.12)',
-  },
-  heroGlowCompact: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-  },
-  heroImage: {
-    width: 108,
-    height: 96,
-  },
-  heroImageCompact: {
-    width: 88,
-    height: 80,
-  },
-  heroHeartBadge: {
-    position: 'absolute',
-    bottom: 10,
-    left: 18,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: COLORS.coral,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2.5,
-    borderColor: COLORS.white,
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  heroHeartBadgeCompact: {
-    bottom: 6,
-    left: 14,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-  },
-
-  title: {
-    fontSize: 34,
-    fontWeight: '900',
-    color: COLORS.black,
-    lineHeight: 40,
-    letterSpacing: -1.2,
-  },
-  titleBlock: {
-    marginBottom: 10,
-  },
-  titleAccent: {
-    color: COLORS.coral,
-  },
-  subtitle: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: COLORS.muted,
-    lineHeight: 22,
-    marginBottom: 0,
-    maxWidth: 320,
-  },
-  pickSubtitle: {
-    maxWidth: '100%',
-  },
-  benefitsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginBottom: 32,
-    marginTop: 12,
-  },
-  benefitItem: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 8,
-  },
-  benefitIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
-    backgroundColor: COLORS.coralLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  benefitText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.muted,
-    textAlign: 'center',
-    lineHeight: 14,
-  },
-
-  weeksList: {
-    gap: 36,
-  },
-  weekSection: {
-    gap: 18,
-  },
-  weekHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  weekLabel: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: COLORS.black,
-    letterSpacing: -0.5,
-  },
-  pointsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  pointsText: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: COLORS.black,
-    letterSpacing: -0.4,
-  },
-  pointsUnit: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.muted,
-    textTransform: 'uppercase',
-  },
-
-  optionsRow: {
-    gap: OPTION_GAP,
-    paddingRight: H_PADDING,
-    paddingVertical: 2,
-  },
-  optionCard: {
-    width: OPTION_WIDTH,
-    minHeight: 124,
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    paddingTop: 16,
-    paddingBottom: 14,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    borderWidth: 1,
-    borderColor: '#ECEEF2',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    elevation: 2,
-  },
-  optionCardCustom: {
-    borderStyle: 'dashed',
-    borderColor: '#D8DEE9',
-    backgroundColor: '#FCFCFD',
-  },
-  optionCardSelected: {
-    backgroundColor: '#FFFAFA',
-    borderColor: COLORS.coral,
-    borderWidth: 1.5,
-    shadowColor: COLORS.coral,
-    shadowOpacity: 0.14,
-    shadowRadius: 14,
-    elevation: 4,
-  },
-  iconWell: {
-    width: 56,
-    height: 56,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  optionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-    textAlign: 'center',
-    letterSpacing: -0.2,
-    marginBottom: 10,
-  },
-  optionLabelSelected: {
-    color: COLORS.black,
-    fontWeight: '800',
-  },
-  selectRing: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: '#D1D5DB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.white,
-  },
-  selectRingActive: {
-    backgroundColor: COLORS.coral,
-    borderColor: COLORS.coral,
-  },
-
-  reviewTitleAction: {
-    fontFamily: Fonts.serif,
-    fontSize: 34,
-    lineHeight: 38,
-    color: COLORS.coral,
-    fontStyle: 'italic',
-    letterSpacing: -0.8,
-    marginTop: -4,
-  },
-  milestoneBlock: {
-    gap: 0,
-    paddingVertical: 4,
-  },
-  milestoneAction: {
-    fontFamily: Fonts.serif,
-    fontSize: 21,
-    lineHeight: 27,
-    color: COLORS.muted,
-    fontStyle: 'italic',
-    letterSpacing: -0.4,
-  },
-  milestoneValue: {
-    fontFamily: Fonts.serif,
-    fontSize: 32,
-    lineHeight: 36,
-    fontWeight: '700',
-    color: COLORS.coral,
-    letterSpacing: -1,
-    marginTop: 2,
-    fontVariant: ['tabular-nums'],
-  },
-  milestoneValueUnit: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.muted,
-    letterSpacing: -0.2,
-  },
-  milestoneSub: {
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
-    color: COLORS.muted,
-    marginTop: 4,
-  },
-  reviewCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#ECEEF2',
-    gap: 12,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  reviewIconWell: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  reviewTextWrap: {
-    flex: 1,
-  },
-  reviewRewardLabel: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: COLORS.black,
-    letterSpacing: -0.3,
-  },
-  reviewRewardHint: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#10B981',
-    marginTop: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  editBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: COLORS.coralLight,
-  },
-  editBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.coral,
-  },
-  reviewEmptyCard: {
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-    borderStyle: 'dashed',
-    backgroundColor: '#FAFAFA',
-  },
-  reviewEmptyTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.muted,
-  },
-  reviewEmptyHint: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.coral,
-    marginTop: 4,
-  },
-
-  footer: {
-    paddingHorizontal: H_PADDING,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 12 : 20,
-    backgroundColor: COLORS.white,
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-  },
-  mainButton: {
-    height: 64,
-    borderRadius: 22,
-    overflow: 'hidden',
-    shadowColor: COLORS.coral,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  gradientButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  buttonText: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  skipBtn: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  skipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.muted,
-  },
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-    justifyContent: 'center',
-    paddingHorizontal: 28,
-  },
-  modalCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    padding: 24,
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: COLORS.black,
-    letterSpacing: -0.5,
-    marginBottom: 6,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    color: COLORS.muted,
-    lineHeight: 20,
-    marginBottom: 16,
-  },
-  modalInput: {
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.black,
-    backgroundColor: '#FAFAFA',
-    marginBottom: 16,
-  },
-  modalBtn: {
-    height: 52,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  modalBtnGradient: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalBtnText: {
-    color: COLORS.white,
-    fontSize: 15,
-    fontWeight: '800',
-  },
+  topBlush: { position: "absolute", top: -255, left: -130, borderRadius: 999, backgroundColor: "#FFF0EF" },
+  bottomMint: { position: "absolute", bottom: -320, right: -190, borderRadius: 999, backgroundColor: "#E4F5F1" },
+  top: {},
+  listArea: { flex: 1 },
+  content: { paddingHorizontal: 24, paddingBottom: 24 },
+  listFade: { position: "absolute", left: 0, right: 0, height: 18 },
+  listFadeTop: { top: 0 },
+  listFadeBottom: { bottom: 0 },
+  heroClip: { overflow: "hidden", marginHorizontal: -24, paddingHorizontal: 24, justifyContent: "flex-end" },
+  heroFade: { position: "absolute", left: -24, right: -24, bottom: 0 },
+  header: { height: 48, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  back: { position: "absolute", left: -8, width: 48, height: 48, alignItems: "center", justifyContent: "center", zIndex: 1 },
+  pressed: { opacity: 0.5 },
+  brand: { flexDirection: "row", alignItems: "center", gap: 9 },
+  brandMark: { width: 29, height: 29 },
+  brandName: { color: C.ink, fontSize: 20, fontWeight: "900", letterSpacing: -0.8 },
+  hero: { alignItems: "center", justifyContent: "flex-end" },
+  heroBackdrop: { position: "absolute", bottom: 0, backgroundColor: "#FFF0EF", opacity: 0.7, borderCurve: "continuous" },
+  title: { marginTop: 12 },
+  options: { paddingTop: 16, gap: 12 },
+  optionsCompact: { paddingTop: 12, gap: 10 },
+  card: { minHeight: 80, borderRadius: 24, borderCurve: "continuous", borderWidth: 1.5, borderColor: C.border, backgroundColor: SURFACE, flexDirection: "row", alignItems: "center", paddingLeft: 14, paddingRight: 18, paddingVertical: 8, gap: 16, boxShadow: "0 6px 18px rgba(8, 36, 55, 0.05)" },
+  cardCompact: { minHeight: 70, paddingVertical: 6 },
+  iconWrap: { width: 76, height: 62, alignItems: "center", justifyContent: "center" },
+  iconWrapCompact: { width: 64, height: 54 },
+  icon: { width: "100%", height: "100%" },
+  cardBody: { flex: 1, gap: 3 },
+  cardTitle: { color: C.ink, fontSize: 19, fontWeight: "800", letterSpacing: -0.4 },
+  cardTitleCompact: { fontSize: 17 },
+  cardDetail: { color: MUTED_TEXT, fontSize: 14, fontWeight: "600", fontVariant: ["tabular-nums"] },
+  coral: { color: C.coral },
+  radio: { width: 28, height: 28 },
+  radioRing: { ...StyleSheet.absoluteFillObject, borderRadius: 14, borderWidth: 2, borderColor: RING },
+  radioChecked: { ...StyleSheet.absoluteFillObject, borderRadius: 14, backgroundColor: C.coral, alignItems: "center", justifyContent: "center" },
+  editor: { borderRadius: 24, borderCurve: "continuous", padding: 16, gap: 10, backgroundColor: SURFACE_SELECTED },
+  inputLabel: { color: C.ink, fontSize: 15, fontWeight: "800", letterSpacing: -0.2 },
+  inputWrap: { flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1.5, borderColor: C.border, borderRadius: 16, borderCurve: "continuous", backgroundColor: C.white, paddingHorizontal: 14 },
+  currency: { color: C.coral, fontSize: 22, fontWeight: "800" },
+  input: { flex: 1, minHeight: 52, color: C.ink, fontSize: 17, fontWeight: "600", paddingVertical: 12, fontVariant: ["tabular-nums"] },
+  inputHint: { color: MUTED_TEXT, fontSize: 12, lineHeight: 18, fontWeight: "600" },
+  footer: { paddingHorizontal: 24, paddingTop: 8 },
+  cta: { marginBottom: 0 },
+  skip: { minHeight: 40, alignItems: "center", justifyContent: "center" },
+  skipText: { color: MUTED_TEXT, fontSize: 14, fontWeight: "700" },
 });

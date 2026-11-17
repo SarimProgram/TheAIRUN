@@ -1,0 +1,25 @@
+Use case: stylized-concept.
+Asset type: production mobile onboarding icon atlas for RunTogether.
+Create ONE square sprite sheet containing exactly 16 distinct polished 3D icons in a precise 4-column x 4-row equal-cell grid. Image 1 is a STYLE REFERENCE ONLY: match its tactile rounded sculpted forms, coral and deep teal palette, cream materials, warm upper-left studio lighting, restrained gloss and gentle shadows. Every icon isolated on genuine transparent alpha, no tile backgrounds, no borders or grid lines. Each icon centered inside its own cell with at least 14% empty margin on all sides; nothing crosses cell boundaries. Equal optical weight, legible at 64px, consistent camera, no people.
+Read order LEFT TO RIGHT then TOP TO BOTTOM:
+ROW 1 running goal icons:
+1 coral race bib with exact bold dark teal text "5K", tiny teal sneaker accent;
+2 teal race bib with exact bold cream text "10K", tiny coral sneaker accent;
+3 cream race bib with exact bold coral text "21K", tiny teal medal accent;
+4 gold personal-best stopwatch with a coral star.
+ROW 2 running experience and starting pace:
+5 cream-and-coral novice running sneaker with a small green sprout;
+6 teal running sneaker with three ascending coral training blocks;
+7 gold winners trophy with coral handles and a teal base;
+8 a small coral first-running sneaker beside a softly rounded teal starting flag.
+ROW 3 starting pace and race timeline, nutrition:
+9 coral-and-cream stopwatch showing a simple dark teal clock face, no numbers;
+10 cream calendar with coral top binding and a tiny teal race flag, no words;
+11 teal flexible calendar with a coral circular arrow, no words;
+12 coral bowl of colorful balanced food with a teal spoon.
+ROW 4 nutrition and running priorities:
+13 cream bathroom scale with teal dial and a loosely draped coral measuring tape, no words;
+14 teal athletic sneaker with coral lightning bolt for faster running;
+15 curved teal trail with coral destination pin and a small cream sneaker for longer distance;
+16 balanced pair of coral and teal running shoes aligned above two small matching footprints for smooth running form.
+Only text allowed is the three race-bib labels specified. No other lettering, watermarks, labels, captions, scenery, extra icons or decorations. Keep transparent gutters clean. Output high resolution to allow clean per-cell cropping.

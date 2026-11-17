@@ -169,6 +169,9 @@ function resolveInterventionDisplayText(intervention: ParsedInterventionMessage)
 export function stripInterventionMarkup(content: string): string {
   const trimmed = content.trim();
   if (!trimmed) return '';
+  if (/^\[STEPS:tug:[a-z0-9-]{8,80}\]/.test(trimmed)) {
+    return trimmed.replace(/^\[STEPS:tug:[a-z0-9-]{8,80}\]\s*/, '');
+  }
 
   if (trimmed.startsWith(CUSTOM_REMINDER_PREFIX)) {
     const payload = parseCustomReminderPayload(trimmed);
@@ -178,7 +181,7 @@ export function stripInterventionMarkup(content: string): string {
   }
 
   const tagged = trimmed.replace(
-    /^\[(?:STEPS|KCAL|WATER)\s*:\s*(?:hearts|angry|cat|photo\s*:\s*[\w-]+)\]\s*/i,
+    /^\[(?:STEPS|KCAL|WATER)\s*:\s*(?:hearts|angry|cat|bottle(?:\s*:\s*\d+)?|photo\s*:\s*[\w-]+)\]\s*/i,
     '',
   );
   if (tagged !== trimmed) {

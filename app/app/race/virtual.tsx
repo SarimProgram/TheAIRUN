@@ -1,0 +1,573 @@
+import React, { useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  useWindowDimensions,
+  StatusBar,
+  SafeAreaView,
+  Alert,
+  ActivityIndicator,
+  TouchableOpacity,
+} from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+} from 'react-native-reanimated';
+import { Play, Pause, Trophy, X } from 'lucide-react-native';
+import { useIsFocused } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRaceSocketContext } from '@/contexts/RaceSocketContext';
+import { useRaceTracker } from '@/hooks/useRaceTracker';
+import PreRaceDashboard from '../../components/race/PreRaceDashboard';
+import RaceMiniMap from '../../components/race/RaceMiniMap';
+import RaceCourse from '../../components/race/RaceCourse';
+import RaceBottomSheet from '../../components/race/RaceBottomSheet';
+import { useAuth } from '@/src/auth/authContext';
+
+const PERFORMANCE_DOCK_HEIGHT = 180;
+
+// --- THEME: WARM ENERGY + SOFT ROMANCE ---
+const THEME = {
+  bg: '#FFFFFF',
+  surface: '#FFFFFF',
+  primary: '#FF6B81',
+  secondary: '#2EC4B6',
+  textMain: '#2D3436',
+  textLight: '#8395A7',
+  road: '#E3E8EC',
+  kerb1: '#FF9F43',
+  kerb2: '#FFFFFF',
+  shadow: '#FF6B81',
+  glass: 'rgba(255, 255, 255, 0.95)',
+};
+
+export default function VirtualRaceScreen() {
+  const { width, height } = useWindowDimensions();
+  const { user } = useAuth();
+  const {
+    isConnected,
+    raceState,
+    inviteFrom,
+    raceDistance,
+    countdown,
+    partnerPosition,
+    winner,
+    raceStartTime,
+    sendInvite,
+    acceptInvite,
+    declineInvite,
+    requestPendingInvite,
+    sendPosition,
+    finishRace,
+    cancelRace,
+    resetRace,
+  } = useRaceSocketContext();
+
+  const {
+    currentPosition,
+    distanceM,
+    speedMps,
+    startTracking,
+    stopTracking,
+    resetTracker,
+  } = useRaceTracker();
+
+  const isFocused = useIsFocused();
+  const insets = useSafeAreaInsets();
+  const [previewDistance, setPreviewDistance] = useState(1000);
+  const courseDistance = raceState === 'idle' ? previewDistance : raceDistance;
+  const [following, setFollowing] = useState(true);
+  const [layoutHeight, setLayoutHeight] = useState(height);
+  const [sheetVisibleHeight, setSheetVisibleHeight] = useState(252);
+
+  // Re-check persisted invitations whenever this tab is opened.
+  useEffect(() => {
+    if (isFocused && isConnected) requestPendingInvite();
+  }, [isConnected, isFocused, requestPendingInvite]);
+
+  // Animation shared values
+  const myProgress = useSharedValue(0);
+  const theirProgress = useSharedValue(0);
+  // Start/stop GPS tracking when race state changes
+  useEffect(() => {
+    if (raceState === 'racing') startTracking();
+    else if (raceState === 'idle' || raceState === 'finished') stopTracking();
+  }, [raceState, startTracking, stopTracking]);
+
+  // Update progress animations
+  useEffect(() => {
+    const metres = Math.max(distanceM, currentPosition?.distanceCovered ?? 0);
+    myProgress.value = withTiming(raceDistance > 0 ? Math.min(Math.max(metres / raceDistance, 0), 1) : 0, { duration: 300 });
+  }, [distanceM, currentPosition?.distanceCovered, raceDistance, myProgress]);
+
+  useEffect(() => {
+    const progressValue = partnerPosition && raceDistance > 0
+      ? Math.min(Math.max(partnerPosition.distanceCovered / raceDistance, 0), 1) : 0;
+    theirProgress.value = withTiming(progressValue, { duration: 300 });
+  }, [partnerPosition, raceDistance, theirProgress]);
+
+  useEffect(() => { setFollowing(true); }, [raceState, courseDistance]);
+
+  // Send position to partner
+  useEffect(() => {
+    if (currentPosition && raceState === 'racing') {
+      const liveDistanceM = Math.max(distanceM, currentPosition.distanceCovered);
+
+      sendPosition({
+        latitude: currentPosition.latitude,
+        longitude: currentPosition.longitude,
+        distanceCovered: liveDistanceM,
+        speed: currentPosition.speed,
+      });
+
+      if (liveDistanceM >= raceDistance && raceStartTime) {
+        const duration = Date.now() - raceStartTime;
+        finishRace({ finalDistance: liveDistanceM, duration });
+      }
+    }
+  }, [currentPosition, distanceM, raceState, raceDistance, raceStartTime, sendPosition, finishRace]);
+
+  const handleCancelRace = () => {
+    Alert.alert('Cancel Race', 'Are you sure you want to cancel the race?', [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Yes',
+        onPress: () => {
+          cancelRace();
+          resetTracker();
+        },
+      },
+    ]);
+  };
+
+  const handlePlayAgain = () => {
+    resetTracker();
+    resetRace();
+  };
+
+  const handleCloseFinishedRace = () => {
+    resetTracker();
+    resetRace();
+  };
+
+  const liveDistanceM = Math.max(distanceM, currentPosition?.distanceCovered ?? 0);
+  const myKm = (liveDistanceM / 1000).toFixed(2);
+  const partnerDist = partnerPosition?.distanceCovered ?? 0;
+  const gap = liveDistanceM - partnerDist;
+  const ahead = gap >= 0;
+  // Animated styles (must be top level, not conditional)
+  const myProgressStyle = useAnimatedStyle(() => ({ width: `${myProgress.value * 100}%` }));
+  const theirProgressStyle = useAnimatedStyle(() => ({ width: `${theirProgress.value * 100}%` }));
+
+
+  return (
+    <View style={styles.container} onLayout={event => setLayoutHeight(event.nativeEvent.layout.height)}>
+      <StatusBar barStyle="dark-content" />
+
+      {/* --- Track Layer --- */}
+      <View style={StyleSheet.absoluteFill}>
+        <RaceCourse width={width} viewportHeight={Math.max(1, layoutHeight)}
+          bottomInset={sheetVisibleHeight + insets.bottom} raceDistance={courseDistance}
+          myProgress={myProgress} theirProgress={theirProgress} myDistance={liveDistanceM}
+          partnerDistance={partnerDist} gender={user?.gender} running={raceState === 'racing'}
+          following={following} onBrowse={() => setFollowing(false)} />
+      </View>
+
+      {raceState === 'racing' && (
+        <RaceMiniMap
+          currentPosition={currentPosition}
+          myDistanceM={liveDistanceM}
+          partnerDistanceM={partnerDist}
+        />
+      )}
+
+      {/* --- UI Layer --- */}
+      <SafeAreaView style={styles.uiLayer} pointerEvents="box-none">
+        {!following && (
+          <TouchableOpacity style={[styles.cameraToggleBtn, { position: 'absolute', top: insets.top + 12, left: 16 }]}
+            onPress={() => setFollowing(true)} accessibilityRole="button" accessibilityLabel="Follow my runner">
+            <Text style={styles.cameraToggleText}>Follow my runner</Text>
+          </TouchableOpacity>
+        )}
+
+        <View style={{ flex: 1 }} pointerEvents="none" />
+
+        {/* Countdown Overlay */}
+        {raceState === 'countdown' && countdown !== null && (
+          <View style={styles.countdownOverlay}>
+            <Text style={styles.countdownText}>{countdown === 0 ? 'GO!' : countdown}</Text>
+          </View>
+        )}
+
+        {/* Bottom Dashboard */}
+        {raceState === 'idle' ? (
+          <RaceBottomSheet bottomInset={insets.bottom} onVisibleHeightChange={setSheetVisibleHeight}>
+          <PreRaceDashboard showHandle={false} onDistanceChange={setPreviewDistance}
+            isConnected={isConnected}
+            onConfirmRunNow={(km) => {
+              if (!isConnected) {
+                Alert.alert('Not Connected', 'Wait for connection.');
+                return;
+              }
+              sendInvite(km * 1000);
+            }}
+            onConfirmSchedule={(time, km) => {}}
+          />
+          </RaceBottomSheet>
+        ) : (
+          <View style={{ flex: 1, width: '100%' }} pointerEvents="box-none">
+            {/* Racing HUD (Performance Dock) */}
+            {raceState === 'racing' && (
+              <RaceBottomSheet bottomInset={insets.bottom} onVisibleHeightChange={setSheetVisibleHeight}>
+              <View style={styles.performanceDock}>
+                {/* Edge Progress Bar */}
+                <View style={styles.dockProgressContainer}>
+                  <Animated.View style={[styles.dockProgressFill, { backgroundColor: THEME.secondary, opacity: 0.3, height: 4 }, theirProgressStyle] } />
+                  <Animated.View style={[styles.dockProgressFill, { backgroundColor: THEME.primary, height: 4 }, myProgressStyle] } />
+                </View>
+
+                <View style={styles.dockContent}>
+                  <View style={styles.dockStatCol}>
+                    <Text style={styles.dockLabel}>SPEED</Text>
+                    <Text style={styles.dockValueSmall}>{(speedMps * 3.6).toFixed(1)} <Text style={styles.dockUnit}>km/h</Text></Text>
+                  </View>
+
+                  <View style={styles.dockMainCol}>
+                    <Text style={styles.dockLabelCenter}>DISTANCE</Text>
+                    <View style={styles.dockValueRow}>
+                      <Text style={styles.dockValueLarge}>{myKm}</Text>
+                      <Text style={[styles.dockUnit, { fontSize: 18, marginBottom: 8 }]}>KM</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.dockStatCol}>
+                    <Text style={[styles.dockLabel, { textAlign: 'right' }]}>GAP</Text>
+                    <Text style={[styles.dockValueSmall, { textAlign: 'right', color: ahead ? THEME.secondary : THEME.primary }]}>
+                      {ahead ? '+' : '-'}{Math.abs(gap).toFixed(0)}m
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity style={styles.dockStopBtn} onPress={handleCancelRace}>
+                  <View style={styles.stopIconInner}>
+                    <Pause size={20} color={THEME.primary} fill={THEME.primary} />
+                  </View>
+                  <Text style={styles.stopBtnText}>STOP</Text>
+                </TouchableOpacity>
+              </View>
+              </RaceBottomSheet>
+            )}
+
+            {/* Inviting State (Clean Dock) */}
+            {raceState === 'inviting' && (
+              <View style={[styles.performanceDock, styles.invitationDock, { height: 120, justifyContent: 'center' }]}>
+                <View style={styles.invitingContent}>
+                  <View style={styles.invitingStatusBox}>
+                    <ActivityIndicator size="small" color={THEME.primary} />
+                    <Text style={styles.invitingText}>WAITING FOR PARTNER ACCEPTANCE</Text>
+                  </View>
+                  <TouchableOpacity style={styles.cancelDockBtn} onPress={cancelRace}>
+                    <Text style={styles.cancelDockText}>CANCEL</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {raceState === 'invited' && inviteFrom && (
+              <View style={[styles.performanceDock, styles.invitationDock, { height: 170, justifyContent: 'center' }]}>
+                <View style={styles.invitingContent}>
+                  <View style={styles.invitingStatusBox}>
+                    <Trophy size={18} color={THEME.primary} />
+                    <Text style={styles.invitingText}>
+                      {inviteFrom.fromName.toUpperCase()} INVITED YOU TO RACE {((inviteFrom.distance ?? raceDistance) / 1000).toFixed(1)}KM
+                    </Text>
+                  </View>
+                  <View style={styles.inviteActionRow}>
+                    <TouchableOpacity style={styles.inviteDeclineBtn} onPress={declineInvite} activeOpacity={0.85}>
+                      <Text style={styles.inviteDeclineText}>DECLINE</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.inviteAcceptBtn} onPress={acceptInvite} activeOpacity={0.85}>
+                      <Text style={styles.inviteAcceptText}>ACCEPT</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {/* Celebration State (Full Overlay) */}
+            {raceState === 'finished' && winner && (
+              <View style={styles.finishOverlay}>
+                <View style={[styles.finishBackdrop, { paddingBottom: Math.max(insets.bottom, 16) + 24 }]}>
+                  <TouchableOpacity
+                    style={styles.finishCloseBtn}
+                    onPress={handleCloseFinishedRace}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Close race result"
+                  >
+                    <X size={21} color={THEME.textMain} />
+                  </TouchableOpacity>
+
+                  <View style={styles.trophyGlow}>
+                    <Trophy size={30} color="#FFF" strokeWidth={2.5} />
+                  </View>
+                  
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={styles.resultLabel}>RACE COMPLETE</Text>
+                    <Text style={styles.winnerMainName} numberOfLines={2} adjustsFontSizeToFit>
+                      {winner.winnerName} wins
+                    </Text>
+                    <Text style={styles.subtitleLabel}>A strong finish from both of you.</Text>
+                  </View>
+
+                  <View style={styles.resultDetailsRow}>
+                    <View style={styles.resultStatBlock}>
+                      <Text style={styles.resultStatValue}>{formatRaceDuration(winner.duration)}</Text>
+                      <Text style={styles.resultStatLabel}>FINISH TIME</Text>
+                    </View>
+                    <View style={styles.resultDivider} />
+                    <View style={styles.resultStatBlock}>
+                      <Text style={styles.resultStatValue}>{(((winner.finalDistance ?? raceDistance) as number) / 1000).toFixed(2)} km</Text>
+                      <Text style={styles.resultStatLabel}>DISTANCE</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.resultActionRow}>
+                    <TouchableOpacity
+                      style={styles.rematchBtn}
+                      onPress={handlePlayAgain}
+                      activeOpacity={0.86}
+                      accessibilityRole="button"
+                      accessibilityLabel="Start a rematch"
+                    >
+                      <Play size={19} color="#FFF" fill="#FFF" />
+                      <Text style={styles.rematchText}>Race again</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.exitDockBtn}
+                      onPress={handleCloseFinishedRace}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Finish and return to the race hub"
+                    >
+                      <Text style={styles.exitDockText}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+      </SafeAreaView>
+    </View>
+  );
+}
+
+function formatRaceDuration(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return minutes > 0 ? `${minutes}:${seconds.toString().padStart(2, '0')}` : `${seconds}s`;
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#D6E9BD' },
+  trackLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', zIndex: 1 },
+  sideSplitScene: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    zIndex: 1,
+  },
+  sideSplitConsole: {
+    flex: 1,
+    backgroundColor: THEME.glass,
+    borderRadius: 36,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.8)',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.14,
+    shadowRadius: 28,
+    elevation: 12,
+  },
+  consoleHeaderRow: {
+    height: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.03)',
+    borderBottomWidth: 1,
+    borderColor: 'rgba(0,0,0,0.04)',
+  },
+  consoleHeaderCol: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  consoleDividerSmall: {
+    width: 1,
+    height: 20,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+  },
+  consoleEyebrow: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 2,
+    color: THEME.textLight,
+  },
+  consoleMainBody: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  sideSplitPane: { flex: 1 },
+  sideSplitTrackPane: {
+    flex: 1,
+    backgroundColor: '#F6F8FA',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  verticalDivider: {
+    width: 1,
+    height: '100%',
+    backgroundColor: 'rgba(0,0,0,0.04)',
+  },
+  trackTouchSurface: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
+  uiLayer: { flex: 1, zIndex: 10, justifyContent: 'space-between' },
+  cameraControlBar: { position: 'absolute', top: 18, left: 16, right: 196, flexDirection: 'row', alignItems: 'center', gap: 10, zIndex: 60 },
+  cameraToggleBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 1, borderColor: 'rgba(0,0,0,0.06)' },
+  cameraToggleBtnActive: { backgroundColor: THEME.primary, borderColor: THEME.primary },
+  cameraToggleText: { fontSize: 11, fontWeight: '900', color: THEME.textMain, letterSpacing: 0.8 },
+  cameraToggleTextActive: { color: '#FFF' },
+  cameraZoomCluster: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cameraZoomBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 1, borderColor: 'rgba(0,0,0,0.06)', alignItems: 'center', justifyContent: 'center' },
+  cameraZoomBtnText: { fontSize: 24, fontWeight: '700', color: THEME.textMain, marginTop: -2 },
+
+
+
+  invitationDock: { position: 'absolute', bottom: 0, left: 0, right: 0 },
+  performanceDock: { height: PERFORMANCE_DOCK_HEIGHT, backgroundColor: 'rgba(255, 255, 255, 0.92)', borderTopLeftRadius: 32, borderTopRightRadius: 32, shadowColor: '#000', shadowOffset: { width: 0, height: -12 }, shadowOpacity: 0.14, shadowRadius: 24, overflow: 'hidden', paddingBottom: 14, borderTopWidth: 1, borderColor: 'rgba(255,255,255,0.8)' },
+  dockProgressContainer: { height: 4, width: '100%', backgroundColor: 'rgba(0,0,0,0.05)', position: 'absolute', top: 0 },
+  dockProgressFill: { position: 'absolute', left: 0, top: 0, borderRadius: 2 },
+  dockContent: { flex: 1, flexDirection: 'row', paddingHorizontal: 22, paddingTop: 22, paddingBottom: 48, alignItems: 'center' },
+  dockStatCol: { flex: 1, justifyContent: 'center' },
+  dockMainCol: { flex: 1.2, alignItems: 'center', justifyContent: 'center' },
+  dockLabel: { fontSize: 10, fontWeight: '900', color: THEME.textLight, letterSpacing: 1.6, marginBottom: 6 },
+  dockLabelCenter: { fontSize: 10, fontWeight: '900', color: THEME.primary, letterSpacing: 2.2, marginBottom: 6 },
+  dockValueRow: { flexDirection: 'row', alignItems: 'baseline' },
+  dockValueLarge: { fontSize: 52, fontWeight: '900', color: THEME.textMain, letterSpacing: -2, lineHeight: 56 },
+  dockValueSmall: { fontSize: 22, fontWeight: '900', color: THEME.textMain, lineHeight: 26 },
+  dockUnit: { fontSize: 12, fontWeight: '800', color: THEME.textLight, marginLeft: 4 },
+  
+  dockStopBtn: { position: 'absolute', bottom: 14, alignSelf: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 22, flexDirection: 'row', alignItems: 'center', gap: 8, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
+  stopIconInner: { width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255, 107, 129, 0.1)', justifyContent: 'center', alignItems: 'center' },
+  stopBtnText: { fontSize: 12, fontWeight: '900', color: THEME.textMain, letterSpacing: 1 },
+
+  invitingContent: { alignItems: 'center', gap: 12, width: '100%', paddingHorizontal: 16 },
+  invitingStatusBox: {
+    width: '100%',
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  invitingText: { fontSize: 12, fontWeight: '900', color: THEME.textMain, letterSpacing: 0.8, textAlign: 'center' },
+  cancelDockBtn: { paddingVertical: 10, paddingHorizontal: 20 },
+  cancelDockText: { fontSize: 12, fontWeight: '800', color: THEME.primary, letterSpacing: 1 },
+  inviteActionRow: { width: '100%', flexDirection: 'row', gap: 12, marginTop: 4 },
+  inviteDeclineBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteDeclineText: { fontSize: 13, fontWeight: '900', color: THEME.textMain, letterSpacing: 0.8 },
+  inviteAcceptBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: THEME.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteAcceptText: { fontSize: 13, fontWeight: '900', color: '#FFF', letterSpacing: 0.8 },
+
+  finishOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2000,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(45, 52, 54, 0.48)',
+  },
+  finishBackdrop: {
+    width: '100%',
+    alignItems: 'center',
+    backgroundColor: THEME.surface,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    borderCurve: 'continuous',
+    paddingTop: 52,
+    paddingHorizontal: 24,
+    boxShadow: '0 -12px 32px rgba(45, 52, 54, 0.12)',
+  },
+  finishCloseBtn: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F2F4F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 5,
+  },
+  trophyGlow: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    marginBottom: 18,
+    backgroundColor: THEME.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  resultLabel: { fontSize: 12, fontWeight: '800', color: THEME.primary, letterSpacing: 1.6, marginBottom: 8 },
+  winnerMainName: { maxWidth: '86%', fontSize: 36, lineHeight: 42, fontWeight: '900', color: THEME.textMain, textAlign: 'center', letterSpacing: -1.2 },
+  subtitleLabel: { marginTop: 8, fontSize: 15, lineHeight: 21, fontWeight: '500', color: THEME.textLight, textAlign: 'center' },
+  
+  resultDetailsRow: {
+    width: '100%',
+    minHeight: 92,
+    marginTop: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F6F8FA',
+    borderRadius: 20,
+    borderCurve: 'continuous',
+    paddingHorizontal: 8,
+  },
+  resultStatBlock: { flex: 1, alignItems: 'center', gap: 6 },
+  resultStatLabel: { fontSize: 10, fontWeight: '800', color: THEME.textLight, letterSpacing: 1.1 },
+  resultStatValue: { fontSize: 22, fontWeight: '900', color: THEME.textMain, fontVariant: ['tabular-nums'] },
+  resultDivider: { width: 1, height: 40, backgroundColor: '#DCE2E7' },
+
+  resultActionRow: { width: '100%', gap: 4, marginTop: 20 },
+  rematchBtn: { width: '100%', height: 56, borderRadius: 28, borderCurve: 'continuous', backgroundColor: THEME.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  rematchText: { fontSize: 17, fontWeight: '800', color: '#FFF' },
+  exitDockBtn: { alignSelf: 'center', minWidth: 88, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  exitDockText: { fontSize: 16, fontWeight: '700', color: THEME.textLight },
+
+  countdownOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,107,129,0.95)', zIndex: 100 },
+  countdownText: { fontSize: 180, fontWeight: '900', color: '#FFF' },
+
+});

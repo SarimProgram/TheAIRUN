@@ -59,16 +59,17 @@ test("week 1 raw loss is lower than later weeks when calories are higher", () =>
     assert.ok(weekOneLoss < 0.8);
 });
 
-test("computed curve reaches the goal weight on the final loss week", () => {
+test("computed curve does not force a goal the base deficits cannot support", () => {
     const weights = computeExpectedWeightsFromWeeklyPlan({
         ...sarimProfile,
         weeks: sarimWeeks,
     });
 
     assert.equal(weights.length, 17);
-    assert.equal(weights[0], 94.3);
-    assert.equal(weights[16], 78);
-    assert.equal(weights[15], 79.1);
+    assert.equal(weights[0], 94.8);
+    assert.ok(weights[16] > sarimProfile.targetWeightKg);
+    assert.ok(weights[16] < weights[0]);
+    assert.ok(weights[15] - weights[16] < 1.5);
 });
 
 test("weekly loss increases as food calories tighten", () => {
@@ -88,4 +89,20 @@ test("activity calories rise with steps and walk volume", () => {
     const high = estimateWeeklyActivityKcal(95, 9000, 15);
 
     assert.ok(high > low);
+});
+
+test('credited activity and training intensity do not create a second forecast deficit', () => {
+    const light = computeExpectedWeightsFromWeeklyPlan({ ...sarimProfile, intensityLevel: 'STEADY', weeks: sarimWeeks });
+    const active = computeExpectedWeightsFromWeeklyPlan({
+        ...sarimProfile, intensityLevel: 'PRO',
+        weeks: sarimWeeks.map((week) => ({ ...week, stepsPerDay: 20000, runKmPerWeek: 80 })),
+    });
+    assert.deepEqual(active, light);
+});
+
+test('maintenance keeps projected weight without snapping to an unmet goal', () => {
+    const weights = computeExpectedWeightsFromWeeklyPlan({ ...sarimProfile, targetDeadlineWeeks: 2, weeks: sarimWeeks });
+    assert.ok(weights[1] > sarimProfile.targetWeightKg);
+    assert.equal(weights[2], weights[1]);
+    assert.equal(weights[16], weights[1]);
 });

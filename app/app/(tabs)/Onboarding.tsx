@@ -20,6 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getAccessToken } from '../../lib/authToken';
 import { API_BASE_URL } from '../../config/api';
+import { getTrainingSchedule } from '../../utils/trainingSchedule';
 import { useTabBar } from '@/contexts/TabBarContext';
 import { useAuth } from '@/src/auth/authContext';
 import { useEntitlement } from '@/src/billing';
@@ -39,7 +40,6 @@ import Phase0ManualAuth from '../../components/onboarding/Phase0ManualAuth';
 import Phase0ManualLogin from '../../components/onboarding/Phase0ManualLogin';
 import Phase1HealthConsent from '../../components/onboarding/Phase1HealthConsent';
 import Phase2Goals from '../../components/onboarding/Phase2Goals';
-import Phase3Profile from '../../components/onboarding/Phase3Profile';
 import Phase3ProofChart from '../../components/onboarding/Phase3ProofChart';
 import Phase4PartnerCode, { type PartnerLookupInvite } from '../../components/onboarding/Phase4PartnerCode';
 import Phase4Complete from '../../components/onboarding/Phase4Complete';
@@ -48,11 +48,7 @@ import WeightHeightSelection from '../../components/onboarding/6_Weight&Height';
 import TargetWeight from '../../components/onboarding/7_TargetWeight';
 import WeightHabitPlan from '../../components/onboarding/7b_WeightHabitPlan';
 import JourneyTypeSelection from '../../components/onboarding/8_StartingPoint';
-import AvailableDays from '../../components/onboarding/10_AvailableDays';
-import PreferredTime from '../../components/onboarding/11_PreferredTime';
-import MarketplaceHowItWorks from '../../components/onboarding/12_PromoHowto';
 import Phase16Dummy from '../../components/onboarding/Phase16Dummy';
-import Phase17Dummy from '../../components/onboarding/Phase17Dummy';
 import Phase18PlanSetup from '../../components/onboarding/Phase18PlanSetup';
 import Phase19PlanTimeline from '../../components/onboarding/Phase19PlanTimeline';
 import WeightBranch from '../../components/onboarding/Weight_Branch';
@@ -85,9 +81,8 @@ const DEV_NAV_STEPS: DevNavStep[] = [
     { type: 'phase', id: 22 },
     { type: 'phase', id: 24 },
     { type: 'phase', id: 3 },
-    { type: 'phase', id: 4 },
-    { type: 'phase', id: 23 },
     { type: 'phase', id: 25 },
+    { type: 'phase', id: 23 },
     { type: 'phase', id: 5 },
     { type: 'phase', id: 6 },
     { type: 'phase', id: 7 },
@@ -98,20 +93,19 @@ const DEV_NAV_STEPS: DevNavStep[] = [
     { type: 'phase', id: 20 },
     { type: 'phase', id: 21 },
     { type: 'phase', id: 9 },
-    { type: 'phase', id: 12 },
-    { type: 'phase', id: 14 },
-    { type: 'phase', id: 15 },
     { type: 'phase', id: 17 },
-    { type: 'phase', id: 18 },
     { type: 'plan', view: 'setup' },
     { type: 'plan', view: 'summary' },
     { type: 'phase', id: 10 },
 ];
 
-const DEV_LAST_PHASE = DEV_NAV_STEPS[DEV_NAV_STEPS.length - 1].type === 'phase'
-    ? DEV_NAV_STEPS[DEV_NAV_STEPS.length - 1].id
-    : 10;
-const HERO_BACKGROUND_PHASES = new Set([3, 4]);
+function resolveRestoredPhase(phase: number, goal?: string | null) {
+    if (phase === 26 && goal === 'running') return 2;
+    if ([12, 14, 15, 16, 18].includes(phase)) return 17;
+    return phase === 4 ? 5 : Math.min(phase, 26);
+}
+
+const HERO_BACKGROUND_PHASES = new Set([4]);
 const HERO_BACKGROUND_COLOR = '#FF3B3B';
 const DEV_PHASE_FILE_NAMES: Record<number, string> = {
     0: 'Phase0Welcome.tsx',
@@ -127,11 +121,7 @@ const DEV_PHASE_FILE_NAMES: Record<number, string> = {
     9: '8_StartingPoint.tsx',
     10: 'Phase19PlanTimeline.tsx',
     11: 'Phase18PlanSetup.tsx',
-    12: '10_AvailableDays.tsx',
-    14: '11_PreferredTime.tsx',
-    15: '12_PromoHowto.tsx',
     17: 'Phase16Dummy.tsx',
-    18: 'Phase17Dummy.tsx',
     19: 'Weight_Branch.tsx',
     20: 'Running_Branch.tsx',
     21: 'Phase20RunningHabits.tsx',
@@ -140,10 +130,10 @@ const DEV_PHASE_FILE_NAMES: Record<number, string> = {
     24: 'Phase0ManualLogin.tsx',
     25: 'Phase3ProofChart.tsx',
 };
-const TRAINING_TIME_PREFERENCE_KEY = 'plans_training_time_preference_v1';
 const APPLE_DISPLAY_NAME_KEY = 'apple_display_name_v1';
 
 const ONBOARDING_PROGRESS: Partial<Record<number, number>> = {
+    3: 0.02,
     25: 0.04,
     5: 0.06,
     6: 0.12,
@@ -154,11 +144,7 @@ const ONBOARDING_PROGRESS: Partial<Record<number, number>> = {
     19: 0.32,
     20: 0.40,
     9: 0.48,
-    12: 0.56,
-    14: 0.72,
-    15: 0.78,
     17: 0.86,
-    18: 0.91,
     11: 0.97,
     10: 1,
 };
@@ -249,7 +235,6 @@ export default function OnboardingGreeting() {
     const onboardingCompletedRef = useRef(false);
     const postAuthDestinationRef = useRef<number | null>(null);
     const preAuthPhaseRef = useRef(0);
-    const proofChartBackPhaseRef = useRef(3);
     const partnerCodeBackPhaseRef = useRef(0);
     const pendingPartnerAcceptInviteIdRef = useRef<string | null>(null);
     const [authIntent, setAuthIntent] = useState<'default' | 'partner' | 'partner_accept'>('default');
@@ -403,8 +388,7 @@ export default function OnboardingGreeting() {
                 setPartnerEngaged(
                     !!checkpoint.joinedWithCode || !!restoredPlanData.partnerEngaged,
                 );
-                const restoredPhaseRaw = Math.min(checkpoint.currentPhase, DEV_LAST_PHASE);
-                const restoredPhase = restoredPhaseRaw === 16 ? 17 : restoredPhaseRaw;
+                const restoredPhase = resolveRestoredPhase(checkpoint.currentPhase, checkpoint.userGoal);
                 const restoredHasPlan = Array.isArray(checkpoint.generatedWeeklyPlan)
                     && checkpoint.generatedWeeklyPlan.length > 0;
                 setPhaseInstant(restoredPhase);
@@ -722,12 +706,13 @@ export default function OnboardingGreeting() {
         redirectToAuth(destinationPhase);
     }, [redirectToAuth]);
 
-    const handleRequireAuthForPartnerInvite = useCallback((email: string) => {
+    const handleRequireAuthForPartnerInvite = useCallback((email: string, channel?: string) => {
         shouldPersistCheckpointRef.current = true;
         setPlanData((prev: any) => ({
             ...prev,
             pendingPartnerInviteEmail: email,
             pendingPartnerInviteSend: true,
+            pendingPartnerInviteChannel: channel,
         }));
         redirectToAuth(9, { intent: 'partner' });
     }, [redirectToAuth]);
@@ -737,6 +722,7 @@ export default function OnboardingGreeting() {
             const next = { ...prev };
             delete next.pendingPartnerInviteEmail;
             delete next.pendingPartnerInviteSend;
+            delete next.pendingPartnerInviteChannel;
             return next;
         });
     }, []);
@@ -771,7 +757,9 @@ export default function OnboardingGreeting() {
         });
         if (!res.ok) {
             const data = await res.json().catch(() => ({}));
-            throw new Error(data?.error || 'Unable to connect with your partner.');
+            throw Object.assign(new Error(data?.error || 'Unable to connect with your partner.'), {
+                code: data?.code,
+            });
         }
         await refreshAccess().catch(() => {});
     }, [authFetch, refreshAccess]);
@@ -850,12 +838,18 @@ export default function OnboardingGreeting() {
         beginPartnerAcceptLogin();
     }, [beginPartnerAcceptLogin, currentPhase, storePartnerAcceptFromInvite]);
 
-    const continueAfterAuth = useCallback(async (prefilledName?: string) => {
+    const continueAfterAuth = useCallback(async (prefilledName?: string, newAccount = false) => {
         if (planData.pendingPartnerAcceptInviteId || pendingPartnerAcceptInviteIdRef.current) {
             try {
                 await completePartnerAcceptFlow(prefilledName || user?.displayName || undefined);
                 return;
             } catch (err: any) {
+                // A restored invite must not prevent an already-connected account from logging in.
+                if (err?.code === 'PARTNER_ALREADY_CONNECTED') {
+                    await refreshAccess().catch(() => {});
+                    await finishPartnerAcceptOnboarding(prefilledName || user?.displayName || undefined);
+                    return;
+                }
                 Alert.alert('Unable to Connect', err?.message || 'Please try again.');
                 transitionToPhase(23);
                 return;
@@ -876,14 +870,14 @@ export default function OnboardingGreeting() {
         if (checkpoint && !checkpoint.completed) {
             shouldPersistCheckpointRef.current = true;
             transitionToPhase(
-                checkpoint.currentPhase > 1
-                    ? Math.min(checkpoint.currentPhase, DEV_LAST_PHASE)
+                checkpoint.currentPhase > 1 && ![22, 24].includes(checkpoint.currentPhase)
+                    ? resolveRestoredPhase(checkpoint.currentPhase, checkpoint.userGoal)
                     : 3
             );
             return;
         }
 
-        const shouldSkipOnboarding = await hasExistingPlan();
+        const shouldSkipOnboarding = !newAccount && await hasExistingPlan();
 
         if (shouldSkipOnboarding) {
             onboardingCompletedRef.current = true;
@@ -897,8 +891,10 @@ export default function OnboardingGreeting() {
         transitionToPhase(3);
     }, [
         completePartnerAcceptFlow,
+        finishPartnerAcceptOnboarding,
         hasExistingPlan,
         planData.pendingPartnerAcceptInviteId,
+        refreshAccess,
         router,
         transitionToPhase,
         user?.displayName,
@@ -1108,12 +1104,12 @@ export default function OnboardingGreeting() {
         });
     }, [isAuthenticated, saveOnboardingCheckpoint]);
 
-    const finishPenaltyStep = useCallback(async (penalty: string | null) => {
+    const advanceAfterRewards = useCallback(async () => {
         if (savingOnboardingCheckpoint) return;
 
         const nextPlanData = {
             ...planData,
-            phase17Penalty: penalty,
+            phase17Penalty: null,
         };
 
         setPlanData(nextPlanData);
@@ -1152,38 +1148,6 @@ export default function OnboardingGreeting() {
         transitionToPhase,
     ]);
 
-    const advanceAfterRewards = useCallback(async () => {
-        const shouldShowPenaltyStep = joinedWithCode || partnerEngaged;
-        if (!shouldShowPenaltyStep) {
-            await finishPenaltyStep(null);
-            return;
-        }
-
-        if (joinedWithCode && isAuthenticated) {
-            try {
-                const res = await authFetch(`${API_BASE_URL}/wager/overview`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data?.currentWager) {
-                        await finishPenaltyStep(null);
-                        return;
-                    }
-                }
-            } catch (error) {
-                console.warn('Failed to check partner wager during onboarding:', error);
-            }
-        }
-
-        transitionToPhase(18);
-    }, [
-        authFetch,
-        finishPenaltyStep,
-        isAuthenticated,
-        joinedWithCode,
-        partnerEngaged,
-        transitionToPhase,
-    ]);
-
     const handlePhase2Identity = async (name: string, gender: string) => {
         const normalizedGender = normalizeGenderEnum(gender);
         setUserName(name);
@@ -1210,11 +1174,7 @@ export default function OnboardingGreeting() {
             }
         }
 
-        if (joinedWithCode) {
-            proofChartBackPhaseRef.current = 3;
-        }
-
-        transitionToPhase(joinedWithCode ? 25 : 4);
+        transitionToPhase(25);
     };
 
     const renderSplash = () => (
@@ -1282,7 +1242,7 @@ export default function OnboardingGreeting() {
                         ? `Create your account to connect with ${planData.pendingPartnerAcceptInviterName ?? 'your partner'}.`
                         : undefined
                 }
-                onLoginPress={() => beginPartnerAcceptLogin()}
+                onLoginPress={() => transitionToPhase(24)}
                 onApplePress={handleAppleAuth}
                 socialLoading={socialLoading}
                 userName={userName}
@@ -1290,7 +1250,7 @@ export default function OnboardingGreeting() {
                     await register(name, email, password);
                     setUserName(name.trim());
                 }}
-                onSuccess={continueAfterAuth}
+                onSuccess={() => continueAfterAuth(undefined, true)}
             />;
             case 24: return <Phase0ManualLogin
                 onBack={() => {
@@ -1306,7 +1266,7 @@ export default function OnboardingGreeting() {
                         ? `Log in to connect with ${planData.pendingPartnerAcceptInviterName ?? 'your partner'}.`
                         : undefined
                 }
-                onRegisterPress={() => beginPartnerAcceptRegistration()}
+                onRegisterPress={() => transitionToPhase(22)}
                 onLogin={login}
                 onSuccess={continueAfterAuth}
                 onApplePress={handleAppleAuth}
@@ -1320,36 +1280,15 @@ export default function OnboardingGreeting() {
                     } else if (userGoal === 'weightloss') {
                         transitionToPhase(19);
                     } else {
-                        transitionToPhase(joinedWithCode ? 12 : 9);
+                        transitionToPhase(joinedWithCode ? 17 : 9);
                     }
                 }}
-                onBack={() => transitionToPhase(26, 'back')}
+                onBack={() => transitionToPhase(userGoal === 'running' ? 7 : 26, 'back')}
             />;
             case 3: return <Phase2Goals
                 onNext={handlePhase2Identity}
                 onBack={() => transitionToPhase(0, 'back')}
                 prefilledName={userName}
-            />;
-            case 4: return <Phase3Profile
-                userName={userName}
-                onBack={() => transitionToPhase(3, 'back')}
-                onHaveCode={() => {
-                    setJoinedWithCode(true);
-                    setPartnerEngaged(true);
-                    partnerCodeBackPhaseRef.current = 4;
-                    transitionToPhase(23);
-                }}
-                onFirstTime={() => {
-                    setJoinedWithCode(false);
-                    proofChartBackPhaseRef.current = 4;
-                    transitionToPhase(25);
-                }}
-                onJoinedPartner={() => {
-                    setJoinedWithCode(true);
-                    setPartnerEngaged(true);
-                    proofChartBackPhaseRef.current = 4;
-                    transitionToPhase(25);
-                }}
             />;
             case 5: return <Phase5Dummy
                 gender={userGender}
@@ -1376,9 +1315,9 @@ export default function OnboardingGreeting() {
                     if (userGoal === 'weightloss' || userGoal === 'both') {
                         transitionToPhase(8);
                     } else if (userGoal === 'running') {
-                        transitionToPhase(26);
+                        transitionToPhase(2);
                     } else {
-                        transitionToPhase(joinedWithCode ? 12 : 9);
+                        transitionToPhase(joinedWithCode ? 17 : 9);
                     }
                 }}
                 onBack={goToPrevPhase}
@@ -1412,6 +1351,7 @@ export default function OnboardingGreeting() {
                 inviterName={userName}
                 initialPartnerEmail={planData.pendingPartnerInviteEmail ?? ''}
                 shouldSendInviteAfterAuth={!!planData.pendingPartnerInviteSend}
+                initialShareChannel={planData.pendingPartnerInviteChannel}
                 onRequireAuthForInvite={handleRequireAuthForPartnerInvite}
                 onInviteSent={clearPendingPartnerInvite}
                 onContinue={(mode) => {
@@ -1419,7 +1359,7 @@ export default function OnboardingGreeting() {
                     setPartnerEngaged(engaged);
                     setPlanData((prev: any) => ({ ...prev, partnerEngaged: engaged }));
                     clearPendingPartnerInvite();
-                    transitionToPhase(12);
+                    transitionToPhase(17);
                 }}
                 onBack={() => {
                     // Back needs to go to the previous branch based on goal
@@ -1434,48 +1374,14 @@ export default function OnboardingGreeting() {
                     }
                 }}
             />;
-            case 12: return <AvailableDays
-                initialSelectedDays={availableDays}
-                onContinue={(days: number[]) => {
-                    setAvailableDays(days);
-                    setPlanData((prev: any) => ({ ...prev, availableDays: days }));
-                    transitionToPhase(14);
-                }}
-                onBack={() => {
-                    if (!joinedWithCode) {
-                        transitionToPhase(9, 'back');
-                        return;
-                    }
-
-                    if (userGoal === 'weightloss') {
-                        transitionToPhase(19, 'back');
-                    } else if (userGoal === 'running' || userGoal === 'both') {
-                        transitionToPhase(20, 'back');
-                    } else {
-                        transitionToPhase(7, 'back');
-                    }
-                }}
-            />;
-            case 14: return <PreferredTime
-                initialValue={(planData.trainingTimePreference as 'morning' | 'afternoon' | 'evening') || 'morning'}
-                onContinue={async (preferredTime: 'morning' | 'afternoon' | 'evening') => {
-                    setPlanData((prev: any) => ({
-                        ...prev,
-                        trainingTimePreference: preferredTime,
-                    }));
-                    try {
-                        await AsyncStorage.setItem(TRAINING_TIME_PREFERENCE_KEY, preferredTime);
-                    } catch (err) {
-                        console.error('Failed to persist training time preference:', err);
-                    }
-                    goToNextPhase();
-                }}
-                onBack={() => transitionToPhase(12, 'back')}
-            />;
-            case 15: return <MarketplaceHowItWorks onContinue={() => transitionToPhase(17)} />;
             case 17: return <Phase16Dummy
                 joinedWithCode={joinedWithCode}
-                onBack={() => transitionToPhase(15, 'back')}
+                onBack={() => {
+                    if (!joinedWithCode) transitionToPhase(9, 'back');
+                    else if (userGoal === 'weightloss') transitionToPhase(19, 'back');
+                    else if (userGoal === 'running' || userGoal === 'both') transitionToPhase(20, 'back');
+                    else transitionToPhase(7, 'back');
+                }}
                 onContinue={(data: { week1: string | null; week2: string | null; week3: string | null }) => {
                     setPlanData((prev: any) => ({
                         ...prev,
@@ -1483,11 +1389,6 @@ export default function OnboardingGreeting() {
                     }));
                     void advanceAfterRewards();
                 }}
-            />;
-            case 18: return <Phase17Dummy
-                joinedWithCode={joinedWithCode}
-                onBack={() => transitionToPhase(17, 'back')}
-                onContinue={finishPenaltyStep}
             />;
             case 10: return <Phase19PlanTimeline
                 userName={userName}
@@ -1498,7 +1399,7 @@ export default function OnboardingGreeting() {
                 weightUnit={userWeightUnit}
                 mainGoal={userGoal}
                 onBack={() => transitionToPhase(11, 'back')}
-                onContinue={async ({ skipPaywall } = {}) => {
+                onContinue={async ({ skipPaywall, deferPaywall } = {}) => {
                     onboardingCompletedRef.current = true;
                     await markOnboardingComplete();
 
@@ -1512,12 +1413,12 @@ export default function OnboardingGreeting() {
                         // Fall back to the latest entitlement snapshot.
                     }
 
-                    if (skipPaywall || billingHasAccess) {
-                        router.replace('/welcome');
+                    if (skipPaywall || billingHasAccess || deferPaywall) {
+                        router.replace('/customize-plan?entry=1');
                         return;
                     }
 
-                    router.push('/paywall');
+                    router.replace('/paywall');
                 }}
             />;
             case 11: {
@@ -1535,6 +1436,8 @@ export default function OnboardingGreeting() {
                 onGeneratePlan={generateOnboardingWeeklyPlan}
                 onGenerated={(weeklyPlan) => {
                     setGeneratedWeeklyPlan(weeklyPlan);
+                    const schedule = getTrainingSchedule(weeklyPlan[0]?.['Week Dailys']);
+                    if (schedule) setAvailableDays(schedule.sessions.map(session => session.dayOfWeek));
                     setPlanDevView(null);
                     transitionToPhase(10);
                 }}
@@ -1568,11 +1471,13 @@ export default function OnboardingGreeting() {
                             ? data.targetDate.toISOString()
                             : null,
                         trainingStyle: data.trainingStyle,
+                        workoutDaysPerWeek: data.workoutDaysPerWeek,
+                        workoutPreference: data.workoutPreference,
                         hasRaceGoal: data.raceTraining === 'yes',
                     }));
 
                     if (userGoal === 'both') transitionToPhase(20);
-                    else transitionToPhase(joinedWithCode ? 12 : 9);
+                    else transitionToPhase(joinedWithCode ? 17 : 9);
                 }}
             />;
             case 20: return <RunningBranch
@@ -1593,7 +1498,7 @@ export default function OnboardingGreeting() {
                     baselinePaceSecPerKm: data.baselinePaceSecPerKm ?? null,
                     runningBranchDraft: data,
                 }));
-                transitionToPhase(joinedWithCode ? 12 : 9);
+                transitionToPhase(joinedWithCode ? 17 : 9);
             }} />;
             case 21: return <Phase20RunningHabits onComplete={goToNextPhase} />;
             case 23: return <Phase4PartnerCode
@@ -1603,7 +1508,7 @@ export default function OnboardingGreeting() {
             />;
             case 25: return <Phase3ProofChart
                 userName={userName}
-                onBack={() => transitionToPhase(proofChartBackPhaseRef.current, 'back')}
+                onBack={() => transitionToPhase(3, 'back')}
                 onContinue={() => transitionToPhase(5)}
             />;
             default: return null;

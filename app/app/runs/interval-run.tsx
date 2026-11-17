@@ -37,6 +37,7 @@ import {
 import {
     buildIntervalWalkDistanceSteps,
     buildIntervalWalkQuickSteps,
+    buildRunWalkQuickSteps,
     IntervalWalkPaceTargets,
     IntervalWorkoutKind,
     IntervalWorkoutStep,
@@ -382,11 +383,15 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
         distanceKm?: string;
         weekContext?: string;
         intervalMode?: string;
+        runType?: string;
     }>();
     const { authFetch, user } = useAuth();
     const userWeightKg = typeof user?.weightKg === 'number' && user.weightKg > 0 ? user.weightKg : undefined;
     const { setTabBarVisible } = useTabBar();
-    const screenConfig = useMemo(() => getIntervalScreenConfig(workoutKind), [workoutKind]);
+    const isRunWalk = typeof params.runType === 'string' && /run\s*[–\-/ ]\s*walk|run and walk/i.test(params.runType);
+    const screenConfig = useMemo(() => ({ ...getIntervalScreenConfig(workoutKind), ...(isRunWalk ? {
+        heroEyebrow: 'RUN + WALK', fallbackRunTypeAliases: ['run–walk', 'run-walk', 'run walk', 'run/walk', 'run and walk'],
+    } : {}) }), [workoutKind, isRunWalk]);
     const requestedDistanceKm = useMemo(() => parseDistanceKmParam(params.distanceKm), [params.distanceKm]);
 
     // 1. GPS Helper
@@ -537,6 +542,8 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
                     }
                 }
 
+                if (!steps && isRunWalk) steps = buildRunWalkQuickSteps(requestedDistanceKm ?? 3);
+
                 if (!steps) {
                     let currentWeek: number | null = null;
                     try {
@@ -585,7 +592,10 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
                 }
 
                 if (Array.isArray(steps)) {
-                    const normalizedSteps = screenConfig.workoutKind === 'interval_walk'
+                    const normalizedSteps = isRunWalk ? steps.map(step => {
+                        const pace = step.target?.paceSecPerKm ?? (step.type === 'run' ? intervalRunTargets.easySecPerKm : activeWalkPaces.recoverySecPerKm);
+                        return { ...step, durationSec: Math.max(10, Math.round(step.distanceKm * pace)), target: { effort: 'Easy' as const, paceSecPerKm: pace } };
+                    }) : screenConfig.workoutKind === 'interval_walk'
                         ? applyIntervalWalkTargetsToSteps(steps, activeWalkPaces)
                         : applyIntervalRunTargetsToSteps(steps, intervalRunTargets);
                     const mapped = uiStepsToSegments(normalizedSteps, template);
@@ -606,7 +616,7 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
         return () => {
             isActive = false;
         };
-    }, [params.distanceKm, params.intervalMode, params.sessionId, authFetch, requestedDistanceKm, screenConfig, template, intervalRunTargets, paceProfile]);
+    }, [params.distanceKm, params.intervalMode, params.sessionId, authFetch, requestedDistanceKm, screenConfig, template, intervalRunTargets, paceProfile, isRunWalk]);
 
     useEffect(() => {
         if (segments.length === 0) return;
@@ -690,7 +700,7 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
             totalDistanceMeters: distanceM,
             avgPaceSecPerKm: distanceM > 10 ? elapsedSec / (distanceM / 1000) : null,
             workoutType,
-            title: template.title,
+            title: params.runType?.trim() || template.title,
             calories: estimateDistanceCalories(
                 distanceM,
                 screenConfig.workoutKind === 'interval_walk' ? 'WALK' : 'RUN',
@@ -933,7 +943,7 @@ export function IntervalWorkoutScreen({ workoutKind = 'interval_run' }: { workou
                     <View style={styles.heroContainer}>
                         <View style={styles.heroContentTop}>
                             <Text style={[styles.heroSubtitle, { color: template.primaryColor }]}>{screenConfig.heroEyebrow}</Text>
-                            <Text style={styles.heroTitle}>{template.title}</Text>
+                            <Text style={styles.heroTitle}>{params.runType?.trim() || template.title}</Text>
                             <View style={styles.aimsContainer}>
                                 {template.sessionAims.map((aim, idx) => (
                                     <View key={idx} style={styles.aimPill}>

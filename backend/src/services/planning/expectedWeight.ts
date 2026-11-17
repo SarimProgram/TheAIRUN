@@ -1,6 +1,6 @@
 import { kcalPerStep, REFERENCE_WEIGHT_KG } from "../../lib/activeCalories";
 import {
-    estimateTdeeKcal,
+    estimateBaseMaintenanceKcal,
     KCAL_PER_KG_FAT,
     MAX_SAFE_WEEKLY_LOSS_KG,
 } from "./planDuration";
@@ -57,20 +57,15 @@ export function estimateWeeklyDeficitKcal(
         intensityLevel?: string | null;
     } & WeeklyPlanActivityInput,
 ): number {
-    const tdee = estimateTdeeKcal({
+    const maintenance = estimateBaseMaintenanceKcal({
         weightKg: input.weightKg,
         heightCm: input.heightCm,
         ageYears: input.ageYears,
         gender: input.gender,
-        intensityLevel: input.intensityLevel,
     });
-    const activityKcal = estimateWeeklyActivityKcal(
-        input.weightKg,
-        input.stepsPerDay,
-        input.runKmPerWeek,
-    );
     const foodKcal = input.caloriesPerDay * 7;
-    return tdee * 7 - foodKcal + activityKcal;
+    // Logged activity increases the food allowance by the same amount, once.
+    return maintenance * 7 - foodKcal;
 }
 
 export function estimateRawWeeklyLossKg(
@@ -89,8 +84,9 @@ export function estimateRawWeeklyLossKg(
 
 /**
  * Derives end-of-week expected weights from each week's food and activity plan.
- * Uses dynamic TDEE (recalculated as weight drops), then scales weekly losses
- * proportionally so the loss phase reaches targetWeightKg without a last-week snap.
+ * Uses baseline maintenance recalculated as weight drops. Planned exercise is
+ * not an extra deficit when its calories are credited back to the food allowance.
+ * Never force a target weight that the calculated deficit does not support.
  */
 export function computeExpectedWeightsFromWeeklyPlan(
     input: ComputeExpectedWeightsInput,
@@ -115,80 +111,34 @@ export function computeExpectedWeightsFromWeeklyPlan(
         1,
         Math.min(targetDeadlineWeeks ?? numberOfWeeks, numberOfWeeks),
     );
-    const totalLossNeeded =
-        targetWeightKg !== null && targetWeightKg !== undefined
-            ? Math.max(0, roundToOneDecimal(startWeightKg - targetWeightKg))
-            : null;
-
-    const rawLosses: number[] = [];
+    const expectedWeights: number[] = [];
     let rollingWeight = startWeightKg;
 
     for (let index = 0; index < numberOfWeeks; index += 1) {
         const week = index + 1;
         const weekPlan = weeks[index] ?? weeks[weeks.length - 1];
 
-        if (week > lossWeeks || totalLossNeeded === null) {
-            rawLosses.push(0);
+        if (week > lossWeeks) {
+            expectedWeights.push(roundToOneDecimal(rollingWeight));
             continue;
         }
 
-        rawLosses.push(
-            estimateRawWeeklyLossKg({
-                weightKg: rollingWeight,
-                heightCm,
-                ageYears,
-                gender,
-                intensityLevel,
-                caloriesPerDay: weekPlan.caloriesPerDay,
-                stepsPerDay: weekPlan.stepsPerDay,
-                runKmPerWeek: weekPlan.runKmPerWeek,
-            }),
-        );
+        const lossKg = estimateRawWeeklyLossKg({
+            weightKg: rollingWeight,
+            heightCm,
+            ageYears,
+            gender,
+            intensityLevel,
+            caloriesPerDay: weekPlan.caloriesPerDay,
+            stepsPerDay: weekPlan.stepsPerDay,
+            runKmPerWeek: weekPlan.runKmPerWeek,
+        });
 
         rollingWeight = Math.max(
             targetWeightKg ?? 0,
-            roundToOneDecimal(rollingWeight - rawLosses[index]),
+            rollingWeight - lossKg,
         );
-    }
-
-    const lossPhaseRawTotal = rawLosses
-        .slice(0, lossWeeks)
-        .reduce((sum, value) => sum + value, 0);
-
-    const scaleFactor =
-        totalLossNeeded !== null && lossPhaseRawTotal > 0
-            ? totalLossNeeded / lossPhaseRawTotal
-            : 1;
-
-    const expectedWeights: number[] = [];
-    let currentWeight = startWeightKg;
-
-    for (let index = 0; index < numberOfWeeks; index += 1) {
-        const week = index + 1;
-
-        if (week > lossWeeks) {
-            expectedWeights.push(
-                roundToOneDecimal(targetWeightKg ?? currentWeight),
-            );
-            continue;
-        }
-
-        const scaledLoss = roundToOneDecimal(rawLosses[index] * scaleFactor);
-        currentWeight = roundToOneDecimal(
-            Math.max(targetWeightKg ?? 0, currentWeight - scaledLoss),
-        );
-        expectedWeights.push(currentWeight);
-    }
-
-    if (
-        totalLossNeeded !== null &&
-        lossWeeks > 0 &&
-        expectedWeights[lossWeeks - 1] !== roundToOneDecimal(targetWeightKg!)
-    ) {
-        expectedWeights[lossWeeks - 1] = roundToOneDecimal(targetWeightKg!);
-        for (let index = lossWeeks; index < numberOfWeeks; index += 1) {
-            expectedWeights[index] = roundToOneDecimal(targetWeightKg!);
-        }
+        expectedWeights.push(roundToOneDecimal(rollingWeight));
     }
 
     return expectedWeights;
